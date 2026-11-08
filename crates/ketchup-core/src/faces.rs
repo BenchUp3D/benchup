@@ -133,7 +133,7 @@ fn simple(points: &[DVec2]) -> bool {
     }
     true
 }
-fn strip_spurs(mut ring: Vec<u64>) -> Vec<u64> {
+pub(crate) fn strip_spurs(mut ring: Vec<u64>) -> Vec<u64> {
     while ring.len() >= 3 {
         let n = ring.len();
         let Some(i) = (0..n).find(|&i| ring[i] == ring[(i + 2) % n]) else {

@@ -44,6 +44,21 @@ if (process.argv.includes('--generate-fixture')) {
     const dat=tlv('F601',vertex(1,0,0,0),vertex(2,1,0,0),vertex(3,0,1,0),edge(4,1,2),edge(5,2,3),edge(6,3,1),face);
     const header=Buffer.concat([Buffer.from([255,254,255,14,0,0,255,254,255,0]),Buffer.from('{26.0.0}','utf16le')]);
     fs.writeFileSync(path.join(base,'tests/fixtures/modern-triangle.skp'),Buffer.concat([header,modules.fflate.zipSync({'model.dat':dat})]));
+
+    const precision = sdk.create();
+    const detailColor = precision.addMaterial('Detail color', [210,45,30]);
+    precision.addFace([[0,0,0],[0.01,0,0],[0,0.01,0]], {material: detailColor});
+    precision.addFace([[1,0,0],[41,0,0],[41,40,0],[1,40,0]], {
+        material: detailColor, holes: [[[11,10,0],[31,10,0],[31,30,0],[11,30,0]]],
+    });
+    // The writer insists on exact planarity. Offset one vertex in the authored
+    // bytes to reproduce the micrometre deviations found in real SketchUp files.
+    const preciseBytes = Buffer.from(precision.toBytes()), vertexBytes = Buffer.alloc(24);
+    [41,40,0].forEach((n,i)=>vertexBytes.writeDoubleLE(n,i*8));
+    const offset = preciseBytes.indexOf(vertexBytes);
+    assert(offset >= 0 && preciseBytes.indexOf(vertexBytes, offset+1) < 0);
+    preciseBytes.writeDoubleLE(0.0004, offset+16);
+    fs.writeFileSync(path.join(base,'tests/fixtures/precision-faces.skp'), preciseBytes);
 }
 
 test('actual SKP bytes preserve holes, nested placement, mirrored placement, colors, and units', () => {
@@ -75,6 +90,16 @@ test('actual SKP bytes preserve holes, nested placement, mirrored placement, col
 test('invalid and truncated files fail', () => {
     assert.throws(()=>read(new Uint8Array([1,2,3])), /header|format|invalid/i);
     assert.throws(()=>read(new Uint8Array(fs.readFileSync(fixture).subarray(0,100))));
+});
+
+test('precision fixture passes tiny faces and warped holed boundaries to shared Rust normalization', () => {
+    const m = read(new Uint8Array(fs.readFileSync(path.join(base,'tests/fixtures/precision-faces.skp'))));
+    assert.equal(Object.keys(m.vertices).length, 11);
+    assert.equal(Object.keys(m.faces).length, 2);
+    assert(Object.values(m.vertices).some(v => Math.abs(v.position[0] - 0.000254) < 1e-12));
+    assert(Object.values(m.vertices).some(v => Math.abs(v.position[2] - 0.00001016) < 1e-12));
+    assert.equal(Object.values(m.faces).filter(f => f.holes.length === 1).length, 1);
+    assert(Object.values(m.face_colors).every(c => JSON.stringify(c) === '[210,45,30]'));
 });
 
 test('recursive definitions and missing references fail', () => {

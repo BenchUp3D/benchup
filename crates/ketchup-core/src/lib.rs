@@ -12,6 +12,7 @@ pub mod document;
 pub mod edit_context;
 pub mod faces;
 mod history;
+mod import_geometry;
 pub mod guides;
 pub mod inference;
 pub mod measurements;

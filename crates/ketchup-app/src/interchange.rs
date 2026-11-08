@@ -56,6 +56,7 @@ pub fn import_skp(bytes: &[u8], name: &str) -> Result<Model, String> {
 
 fn decode_model(json: &str, name: &str) -> Result<Model, String> {
     let mut model: Model = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    model.normalize_imported_faces().map_err(str::to_owned)?;
     model.validate().map_err(str::to_owned)?;
     // The adapter always emits the outer import group last.
     if let Some((&root_id, _)) = model.objects.last_key_value() {

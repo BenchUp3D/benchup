@@ -407,7 +407,8 @@ impl Model {
                 .iter()
                 .map(|[a, b, c]| (*b - *a).cross(*c - *a).length() * 0.5)
                 .sum();
-            if triangles.is_empty() || area <= EPS {
+            // EPS is a distance in metres; surface area is in square metres.
+            if triangles.is_empty() || area <= EPS * EPS {
                 return Err(tr!("core.document.invalid_face_surface"));
             }
         }
