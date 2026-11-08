@@ -3,6 +3,137 @@ use crate::test_ui::ContextExt as _;
 use eframe::App;
 
 #[test]
+fn walk_button_places_eye_on_a_face_and_movement_keys_do_not_edit() {
+    let mut h = Harness::new();
+    properties_outline(&mut h.app.doc.model, &[
+        DVec3::new(-10., -10., 0.), DVec3::new(10., -10., 0.),
+        DVec3::new(10., 10., 0.), DVec3::new(-10., 10., 0.),
+    ]);
+    h.app.doc.camera.set_standard_view(ketchup_core::StandardView::Top);
+    h.app.fit(&h.ctx);
+    let original_camera = h.app.doc.camera.clone();
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    h.click(text_position(&output, "Walk"));
+    assert_eq!(h.app.tool, Tool::Walk);
+    assert!(h.app.walk.person.is_none());
+    h.click(h.at(DVec3::ZERO));
+    assert!(h.app.walk.person.is_some());
+    assert!((h.app.doc.camera.eye().z - h.app.general_settings.walk.eye_height).abs() < 1e-8);
+    assert_eq!(h.app.doc.camera.projection, ketchup_core::Projection::Perspective);
+    let model = serde_json::to_string(&h.app.doc.model).unwrap();
+    let start = h.app.doc.camera.eye();
+    for key in [Key::W, Key::A, Key::S, Key::D, Key::ArrowUp, Key::ArrowLeft, Key::ArrowDown, Key::ArrowRight, Key::Space] {
+        h.key(key);
+        assert_eq!(h.app.tool, Tool::Walk);
+    }
+    assert_ne!(h.app.doc.camera.eye(), start);
+    assert_eq!(serde_json::to_string(&h.app.doc.model).unwrap(), model);
+    assert!(h.app.doc.history.is_empty());
+    h.key(Key::Escape);
+    assert_eq!(h.app.tool, Tool::Select);
+    assert!(h.app.walk.person.is_none());
+    assert_eq!(h.app.doc.camera, original_camera);
+}
+
+#[test]
+fn walk_toggle_restores_original_camera_for_each_session() {
+    let mut h = Harness::new();
+    properties_outline(&mut h.app.doc.model, &[
+        DVec3::new(-10., -10., 0.), DVec3::new(10., -10., 0.),
+        DVec3::new(10., 10., 0.), DVec3::new(-10., 10., 0.),
+    ]);
+    for projection in [ketchup_core::Projection::Parallel, ketchup_core::Projection::Perspective] {
+        h.app.doc.camera.set_standard_view(ketchup_core::StandardView::Top);
+        h.app.doc.camera.projection = projection;
+        h.app.doc.camera.fov = 60_f64.to_radians();
+        h.app.fit(&h.ctx);
+        let original = h.app.doc.camera.clone();
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        h.click(text_position(&output, "Walk"));
+        h.click(h.at(DVec3::ZERO));
+        h.key(Key::W);
+        assert_ne!(h.app.doc.camera, original);
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        h.click(text_position(&output, "Walk"));
+        assert_eq!(h.app.tool, Tool::Select);
+        assert!(h.app.walk.person.is_none());
+        assert_eq!(h.app.doc.camera, original);
+        // Canceling placement also leaves the original view intact.
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        h.click(text_position(&output, "Walk"));
+        h.key(Key::Escape);
+        assert_eq!(h.app.doc.camera, original);
+    }
+}
+
+#[test]
+fn walk_alt_sits_once_per_press_and_locks_movement_and_jumping() {
+    let mut h = Harness::new();
+    properties_outline(&mut h.app.doc.model, &[
+        DVec3::new(-10., -10., 0.), DVec3::new(10., -10., 0.),
+        DVec3::new(10., 10., 0.), DVec3::new(-10., 10., 0.),
+    ]);
+    h.app.doc.camera.set_standard_view(ketchup_core::StandardView::Top);
+    h.app.fit(&h.ctx);
+    h.app.set_tool(Tool::Walk);
+    h.frame(vec![], egui::Modifiers::NONE);
+    h.click(h.at(DVec3::ZERO));
+    h.frame(vec![], egui::Modifiers::ALT);
+    assert!(h.app.walk.person.as_ref().unwrap().sitting);
+    let seated = h.app.doc.camera.eye();
+    h.frame(vec![], egui::Modifiers::ALT);
+    assert!(h.app.walk.person.as_ref().unwrap().sitting);
+    h.key(Key::W);
+    h.key(Key::Space);
+    assert_eq!(h.app.doc.camera.eye(), seated);
+    h.frame(vec![], egui::Modifiers::ALT);
+    assert!(!h.app.walk.person.as_ref().unwrap().sitting);
+    assert!((h.app.doc.camera.eye().z - h.app.general_settings.walk.eye_height).abs() < 1e-8);
+}
+
+#[test]
+fn walk_rejects_walls_pauses_for_settings_and_revalidates_dimensions() {
+    let mut h = Harness::new();
+    properties_outline(&mut h.app.doc.model, &[
+        DVec3::new(0., -4., 0.), DVec3::new(0., 4., 0.),
+        DVec3::new(0., 4., 4.), DVec3::new(0., -4., 4.),
+    ]);
+    h.app.doc.camera.set_standard_view(ketchup_core::StandardView::Right);
+    h.app.fit(&h.ctx);
+    h.app.set_tool(Tool::Walk);
+    h.frame(vec![], egui::Modifiers::NONE);
+    h.click(h.at(DVec3::new(0., 0., 2.)));
+    assert!(h.app.walk.person.is_none());
+    assert!(h.app.notice.as_ref().unwrap().0.contains("floor"));
+
+    h.app.doc.model = Model::default();
+    properties_outline(&mut h.app.doc.model, &[
+        DVec3::new(-10., -10., 0.), DVec3::new(10., -10., 0.),
+        DVec3::new(10., 10., 0.), DVec3::new(-10., 10., 0.),
+    ]);
+    h.app.doc.camera.set_standard_view(ketchup_core::StandardView::Top);
+    h.app.fit(&h.ctx);
+    h.frame(vec![], egui::Modifiers::NONE);
+    h.click(h.at(DVec3::ZERO));
+    assert!(h.app.walk.person.is_some());
+    let before = h.app.doc.camera.clone();
+    h.app.settings_open = true;
+    h.key(Key::W);
+    assert_eq!(h.app.doc.camera, before);
+    h.app.settings_open = false;
+    h.app.general_settings.walk.width = 0.7;
+    h.app.general_settings.walk.eye_height = 1.8;
+    h.frame(vec![], egui::Modifiers::NONE);
+    assert!(h.app.walk.person.is_some());
+    assert!((h.app.doc.camera.eye().z - 1.8).abs() < 1e-8);
+    h.app.fit(&h.ctx);
+    let fitted = h.app.doc.camera.clone();
+    h.frame(vec![], egui::Modifiers::NONE);
+    assert_eq!(h.app.tool, Tool::Select);
+    assert_eq!(h.app.doc.camera, fitted);
+}
+
+#[test]
 fn grain_tool_anchors_on_a_part_and_uses_the_axis_locked_preview() {
     let mut h = Harness::new();
     let model = &mut h.app.doc.model;

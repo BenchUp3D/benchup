@@ -116,6 +116,7 @@ struct ToolPreferences {
     polygon_sides: usize,
     move_copy: bool,
     create_guides: bool,
+    walk_sitting: bool,
     axis_lock: Option<Axis>,
     second_axis_lock: Option<Axis>,
 }
@@ -133,6 +134,34 @@ mod guide_preference_tests {
         fn set_string(&mut self, key: &str, value: String) { self.values.insert(key.into(), value); }
         fn remove_string(&mut self, key: &str) { self.values.remove(key); }
         fn flush(&mut self) { self.flushed = true; }
+    }
+
+    #[test]
+    fn walk_dimensions_tool_and_posture_save_without_a_model_edit() {
+        let old: InspectorPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.general.walk, walk::Settings::default());
+        assert!(!old.tools.walk_sitting);
+        let ctx = egui::Context::default();
+        let mut app = KetchupApp::with_document(Document::default(), None, true);
+        let mut storage = Storage::default();
+        app.set_tool(Tool::Walk);
+        app.walk.sitting = true;
+        app.general_settings.section = settings::Section::Navigation;
+        app.general_settings.walk = walk::Settings { eye_height: 1.8, width: 0.6, depth: 0.4 };
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        assert!(storage.flushed);
+        assert!(!app.project.modified);
+        assert!(app.dirty_since.is_none());
+        let mut restored = KetchupApp::with_document(Document::default(), None, true);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        assert_eq!(restored.tool, Tool::Walk);
+        assert!(restored.walk.sitting);
+        assert!(restored.walk.person.is_none());
+        assert_eq!(restored.general_settings.walk, app.general_settings.walk);
+        assert_eq!(restored.general_settings.section, settings::Section::Navigation);
+        restored.replace_project(Document::default(), None, &ctx);
+        assert!(restored.walk.person.is_none());
+        assert_eq!(restored.general_settings.walk, app.general_settings.walk);
     }
 
     #[test]
@@ -171,6 +200,7 @@ impl Default for ToolPreferences {
             polygon_sides: 6,
             move_copy: false,
             create_guides: true,
+            walk_sitting: false,
             axis_lock: None,
             second_axis_lock: None,
         }
@@ -187,6 +217,7 @@ impl ToolPreferences {
             polygon_sides: app.polygon_sides,
             move_copy: app.move_copy,
             create_guides: app.create_guides,
+            walk_sitting: app.walk.sitting,
             axis_lock: app.lock,
             second_axis_lock: app.second_lock,
         }
@@ -215,6 +246,7 @@ impl ToolPreferences {
         app.set_tool(self.active);
         app.move_copy = self.move_copy;
         app.create_guides = self.create_guides;
+        app.walk.sitting = self.walk_sitting;
         app.lock = self.axis_lock;
         app.second_lock = self.second_axis_lock
             .filter(|axis| self.axis_lock.is_some_and(|first| first != *axis));
@@ -546,6 +578,9 @@ impl KetchupApp {
             &mut self.doc.camera,
             &self.doc.viewport_cameras,
         );
+        if self.tool == Tool::Walk {
+            self.walk.original_camera = Some(self.doc.camera.clone());
+        }
         ctx.data_mut(|data| {
             data.insert_temp(
                 modal_sizes_id(),

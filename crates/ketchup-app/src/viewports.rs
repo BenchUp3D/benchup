@@ -494,6 +494,7 @@ impl KetchupApp {
         if self.viewports.active == id {
             return;
         }
+        self.walk.reset();
         self.viewports
             .cameras
             .insert(self.viewports.active, self.doc.camera.clone());
@@ -630,6 +631,7 @@ impl KetchupApp {
     // Read raw contacts before synthesized pointer events can reach modeling tools.
     // Capture lasts until every finger lifts, including cancellation and 2 -> 1.
     fn touch_viewport_zoom(&mut self, ctx: &egui::Context, views: &[(u64, Rect, egui::Response)]) -> bool {
+        if self.tool == Tool::Walk { return false; }
         let allowed = ctx.input(|i| i.focused)
             && !self.project.blocked() && !self.screenshot.open
             && !self.settings_open
@@ -791,6 +793,7 @@ impl KetchupApp {
                 if !touch_navigation && !ctx
                     .input(|i| i.pointer.hover_pos())
                     .is_some_and(|pos| self.compass_contains(pos))
+                    && self.tool != Tool::Walk
                 {
                     self.context_menu(response);
                 }

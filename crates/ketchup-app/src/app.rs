@@ -110,6 +110,8 @@ mod tag_menu;
 mod time_estimates;
 #[path = "viewports.rs"]
 mod viewports;
+#[path = "walk.rs"]
+mod walk;
 use context_menu::ContextAction;
 use move_tool::{CopyArray, MoveCopy};
 
@@ -321,6 +323,7 @@ pub struct KetchupApp {
     screenshot: screenshot_dialog::ScreenshotDialog,
     screenshot_gpu: Option<(eframe::wgpu::Device, eframe::wgpu::Queue)>,
     tool: Tool,
+    walk: walk::Walk,
     drawing_tool: Tool,
     measurement_tool: Tool,
     solid_tool: Tool,
@@ -494,6 +497,7 @@ impl KetchupApp {
             screenshot: screenshot_dialog::ScreenshotDialog::default(),
             screenshot_gpu: None,
             tool: Tool::Select,
+            walk: walk::Walk::default(),
             drawing_tool: Tool::Line,
             measurement_tool: Tool::Dimensions,
             solid_tool: Tool::Union,
@@ -605,6 +609,11 @@ impl KetchupApp {
         ctx.request_repaint_after(Duration::from_secs(5));
     }
     fn set_tool(&mut self, tool: Tool) {
+        let original_camera = (tool == Tool::Walk).then(|| {
+            self.walk.original_camera.clone().unwrap_or_else(|| self.doc.camera.clone())
+        });
+        self.walk.reset();
+        self.walk.original_camera = original_camera;
         self.drawing_reference = None;
         self.drawing_guide = None;
         self.drawing_axis_guides.clear();
@@ -1977,6 +1986,12 @@ impl KetchupApp {
     }
 
     fn keyboard(&mut self, ctx: &egui::Context) {
+        // Walk owns movement keys, including Space and Ctrl, before modeling
+        // shortcuts can select tools, edit geometry, or open project dialogs.
+        if self.tool == Tool::Walk {
+            self.walk_keyboard(ctx);
+            return;
+        }
         if ctx.egui_wants_keyboard_input() || self.project.blocked() || self.screenshot.open || self.settings_open || self.help || self.about || self.release_notes.open || self.object_creation.is_some() || self.object_rename.is_some() || self.text_editor.is_some() {
             self.guide_modifier_down = ctx.input(|i| i.modifiers.ctrl || i.modifiers.command || i.modifiers.mac_cmd);
             self.guide_toggle_pending = false;
@@ -2830,6 +2845,8 @@ impl KetchupApp {
                         self.solid_status()
                     } else if self.tool.is_measuring() {
                         self.measurement_status()
+                    } else if self.tool == Tool::Walk {
+                        self.walk_status()
                     } else if self.tool == Tool::Paint {
                         self.paint_instructions()
                     } else if self.grain_anchor.is_some() {
@@ -4034,6 +4051,10 @@ impl KetchupApp {
     }
 
     fn viewport_input(&mut self, ctx: &egui::Context, response: &egui::Response) {
+        if self.tool == Tool::Walk {
+            self.walk_viewport_input(ctx, response);
+            return;
+        }
         if self.fastener_handle_under_pointer(ctx,response.rect) { return; }
         #[cfg(not(target_arch = "wasm32"))]
         if self.updates.open {
@@ -4215,7 +4236,7 @@ impl KetchupApp {
                                 Tool::Erase => GestureKind::Erase {
                                     ids: self.sweep_erase(pos, pos),
                                 },
-                                Tool::Orbit => unreachable!(),
+                                Tool::Orbit | Tool::Walk => unreachable!(),
                             }
                         }
                     } else {
@@ -4506,6 +4527,12 @@ impl KetchupApp {
     }
 
     fn paint_tool_cursor(&self, ctx: &egui::Context, response: &egui::Response) {
+        if self.tool == Tool::Walk && self.walk.person.is_some() {
+            if response.hovered() {
+                ctx.set_cursor_icon(if ctx.input(|i| i.pointer.any_down()) { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+            }
+            return;
+        }
         if response.enabled() && self.joint_marker_under_pointer(ctx, response.rect) {
             ctx.set_cursor_icon(egui::CursorIcon::Default);
             return;
@@ -5837,6 +5864,8 @@ impl KetchupApp {
                                     ui.separator();
                                     self.snapping_menu(ui);
                                     self.paint_menu(ui);
+                                    ui.separator();
+                                    self.walk_button(ui);
                                     ui.allocate_ui_with_layout(
                                         ui.available_size(),
                                         egui::Layout::left_to_right(egui::Align::Center),

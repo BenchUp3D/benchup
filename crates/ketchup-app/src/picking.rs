@@ -196,6 +196,11 @@ impl PickingCache {
     ) -> Option<(u64, f64, DVec3)> {
         self.nearest_filtered(faces, entities, ray, editable, &mut 0)
     }
+    /// Navigation can place a camera on geometry outside the current group's
+    /// editing context, without changing or closing that context.
+    pub fn nearest_unscoped(&self, faces: &FaceCache, entities: &EntityCache, ray: Ray) -> Option<(u64, f64, DVec3)> {
+        self.nearest_in_scope(faces, entities, ray, false, false, &mut 0)
+    }
     /// Test a world marker against cached surfaces in the active editing level.
     pub fn visible(
         &self,

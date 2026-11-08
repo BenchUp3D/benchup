@@ -574,6 +574,14 @@ fn paint_tool(p: &egui::Painter, rect: Rect, tool: Tool, colors: ToolPalette) {
                 p.line_segment([xy(-0.85, y + 0.2), xy(0.85, y - 0.2)], stroke);
             }
         }
+        Tool::Walk => {
+            p.circle_stroke(xy(0.15, -0.78), r * 0.2, stroke);
+            for (a, b) in [((0.1, -0.45), (-0.1, 0.15)),
+                ((0.05, -0.3), (-0.55, -0.05)), ((0.05, -0.3), (0.6, -0.05)),
+                ((-0.1, 0.15), (-0.65, 0.9)), ((-0.1, 0.15), (0.55, 0.65))] {
+                p.line_segment([xy(a.0, a.1), xy(b.0, b.1)], stroke);
+            }
+        }
         Tool::Orbit => {
             p.add(egui::Shape::ellipse_stroke(
                 c,

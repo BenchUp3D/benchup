@@ -86,7 +86,7 @@
         const commandKeys = new Set(["a", "f", "n", "o", "s", "y", "z"]);
         const canvasKeys = new Set([
           " ", "a", "b", "c", "d", "e", "f", "g", "i", "l", "m",
-          "o", "p", "q", "r", "s", "t", "ArrowDown", "ArrowLeft",
+          "o", "p", "q", "r", "s", "t", "w", "ArrowDown", "ArrowLeft",
           "ArrowRight", "ArrowUp", "Backspace", "Delete", "Enter", "Tab",
         ]);
         workspace.addEventListener("keydown", (event) => {
@@ -98,9 +98,13 @@
             key = event.code.slice(3).toLowerCase();
           }
           const command = event.ctrlKey || event.metaKey;
+          // Crouch combines Ctrl with movement. Keep those combinations in
+          // the canvas while walking instead of invoking browser commands.
+          const walking = event.target === canvas && canvas.dataset.walkActive === "true";
+          const walkKey = ["w", "a", "s", "d", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Alt", "Control"].includes(key);
           // Do not cancel C/X/V: their default action delivers the native
           // clipboard events consumed (and cancelled) by eframe.
-          if ((command && commandKeys.has(key))
+          if ((walking && walkKey) || (command && commandKeys.has(key))
               || (!command && (key === "F1" || key === "Escape"))
               || (!command && event.target === canvas && canvasKeys.has(key))) {
             event.preventDefault();

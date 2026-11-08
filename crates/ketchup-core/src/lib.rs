@@ -93,6 +93,7 @@ pub enum Tool {
     Erase,
     Orbit,
     GrainDirection,
+    Walk,
 }
 
 impl Tool {
@@ -127,7 +128,7 @@ impl Tool {
     pub fn is_drawing(self) -> bool {
         Self::DRAWING.contains(&self)
     }
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 26] = [
         Self::Select,
         Self::Line,
         Self::Rectangle,
@@ -153,6 +154,7 @@ impl Tool {
         Self::Erase,
         Self::Orbit,
         Self::GrainDirection,
+        Self::Walk,
     ];
     pub const RAIL: [Self; 12] = [
         Self::Select,
@@ -195,6 +197,7 @@ impl Tool {
             Self::Erase => tr!("tools.erase"),
             Self::Orbit => tr!("tools.orbit"),
             Self::GrainDirection => tr!("tools.grain_direction"),
+            Self::Walk => "Walk",
         }
     }
     pub fn shortcut(self) -> &'static str {
@@ -220,7 +223,7 @@ impl Tool {
             Self::TapeMeasure => "T",
             Self::Protractor => "A",
             Self::Dimensions => "I",
-            Self::Text | Self::GrainDirection => "",
+            Self::Text | Self::GrainDirection | Self::Walk => "",
             Self::Erase => "E",
             Self::Orbit => "O",
         }
@@ -278,6 +281,7 @@ impl Tool {
             Self::Text => tr!("tools.click_an_object_then_click_to_place_its"),
             Self::Orbit => tr!("tools.drag_to_orbit_hold_shift_to_pan_scroll"),
             Self::GrainDirection => tr!("tools.place_the_grain_anchor"),
+            Self::Walk => "Click a floor face to start walking at eye level. Escape exits Walk.",
         }
     }
 }

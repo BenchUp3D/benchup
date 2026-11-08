@@ -192,6 +192,11 @@ impl KetchupApp {
                     ),
                     (tr!("shortcuts.zoom_to_pointer"), tr!("shortcuts.scroll")),
                     (tr!("shortcuts.toggle_sidebar"), tr!("shortcuts.tab")),
+                    ("Walk through model", "Walk button → click a floor face"),
+                    ("Move while walking", "WASD / Arrow keys"),
+                    ("Look while walking", "Drag mouse"),
+                    ("Crouch / Jump / Sit or stand", "Ctrl / Space / Alt"),
+                    ("Exit Walk", "Escape"),
                 ],
             ),
             section(

@@ -147,6 +147,7 @@ pub(super) struct GeneralSettings {
     pub pan_speed: f64,
     pub zoom_speed: f64,
     pub reverse_zoom: bool,
+    pub walk: walk::Settings,
     pub reset_axis_locks_on_action: bool,
     pub show_fps: bool,
     pub default_units: ketchup_core::UnitSettings,
@@ -163,6 +164,7 @@ impl Default for GeneralSettings {
             pan_speed: 1.,
             zoom_speed: 1.,
             reverse_zoom: false,
+            walk: walk::Settings::default(),
             reset_axis_locks_on_action: true,
             show_fps: false,
             default_units: Default::default(),
@@ -174,6 +176,7 @@ impl Default for GeneralSettings {
 
 impl GeneralSettings {
     pub(super) fn normalize(&mut self) {
+        self.walk.normalize();
         self.stock.normalize();
         if !LANGUAGES.iter().any(|&(code, _)| code == self.language.as_str()) {
             self.language = DEFAULT_LANGUAGE.into();
@@ -455,6 +458,28 @@ impl KetchupApp {
                     &mut self.general_settings.reverse_zoom,
                     tr!("settings.reverse_scroll_zoom"),
                 );
+                ui.separator();
+                ui.text_label(RichText::new("Walking person").strong());
+                ui.text_weak("Eye height is measured above the floor. Body width and depth determine obstacle clearance; allow 12 cm above the eyes for the head.");
+                let unit = self.doc.display.units.length;
+                for (key, label, value, min, max) in [
+                    ("walk_eye_height", "Eye height", &mut self.general_settings.walk.eye_height, 0.5, 2.3),
+                    ("walk_width", "Body width", &mut self.general_settings.walk.width, 0.2, 1.2),
+                    ("walk_depth", "Body depth (length)", &mut self.general_settings.walk.depth, 0.15, 1.2),
+                ] {
+                    inspector_field(ui, key, label, |ui| {
+                        let mut displayed = *value / unit.factor();
+                        let response = ui.add(egui::DragValue::new(&mut displayed)
+                            .speed(0.01 / unit.factor())
+                            .range(min / unit.factor()..=max / unit.factor())
+                            .suffix(format!(" {}", unit.symbol())));
+                        if response.changed() {
+                            *value = displayed * unit.factor();
+                        }
+                        response
+                    });
+                }
+                ui.text_weak("WASD / arrows: walk · Ctrl: crouch · Space: jump · Alt: sit / stand · Drag: look · Escape: exit");
             }
             Section::Shortcuts => {
                 ui.text_weak(tr!("settings.click_a_shortcut_then_press_a_letter_or"));
