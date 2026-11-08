@@ -32,7 +32,7 @@ fn all_pdf_exports_use_the_standard_header_and_keep_content_below_it() {
         name: "Walnut".into(),
         dimensions: [190, 1400, 24000],
     };
-    let cutting = CuttingPlan {
+    let plan = CuttingPlan {
         groups: vec![CutGroup {
             material,
             material_id: None,
@@ -43,8 +43,9 @@ fn all_pdf_exports_use_the_standard_header_and_keep_content_below_it() {
                 .collect(),
         }],
         skipped: 0,
-    }
-    .pdf(name, false, true);
+    };
+    let cutting = plan.pdf(name, false, true);
+    let labels = plan.workshop_labels_pdf(name, false).unwrap();
     let mut settings = Settings {
         format: Format::Pdf,
         ..Default::default()
@@ -63,6 +64,7 @@ fn all_pdf_exports_use_the_standard_header_and_keep_content_below_it() {
     for (filename, bytes) in [
         ("estimate.pdf", estimate),
         ("cutting-plan.pdf", cutting),
+        ("workshop-labels.pdf", labels),
         ("model-views.pdf", screenshot),
     ] {
         let text = String::from_utf8_lossy(&bytes);

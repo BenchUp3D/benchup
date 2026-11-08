@@ -1946,7 +1946,7 @@ mod preference_tests {
             );
             assert!(!restored.project.modified, "{name}");
             assert!(
-                restored.project.cutting_plan_selection.is_none(),
+                restored.project.cut_report.is_none(),
                 "restoring scope must not open a modal"
             );
             storage.flushed = false;

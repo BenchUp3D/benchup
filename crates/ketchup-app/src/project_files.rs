@@ -1,4 +1,5 @@
 //! Portable project files are separate from the local recovery/autosave document.
+use crate::cutting_plan::{CutReport, CuttingPlan};
 use ketchup_core::Document;
 use std::{path::PathBuf, sync::mpsc};
 
@@ -555,22 +556,43 @@ pub fn prepare_import(
     Ok(Outcome::Imported(Box::new(model), selected))
 }
 
+fn render_cut_report(
+    report: CutReport,
+    name: &str,
+    model: &ketchup_core::Model,
+    selected: &std::collections::BTreeSet<u64>,
+    layout_settings: crate::cutting_layout::Settings,
+) -> Result<Vec<u8>, String> {
+    if report == CutReport::CuttingPlan {
+        layout_settings.validate()?;
+    }
+    let plan = CuttingPlan::collect(model, selected)?;
+    let selection = !selected.is_empty();
+    match report {
+        CutReport::CuttingPlan => Ok(plan.pdf_with_layout(name, selection, true, layout_settings)),
+        CutReport::WorkshopLabels => plan.workshop_labels_pdf(name, selection),
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
-pub fn export_cutting_plan(
+pub fn export_cut_report(
     ctx: &eframe::egui::Context,
+    report: CutReport,
     name: String,
     model: ketchup_core::Model,
     selected: std::collections::BTreeSet<u64>,
     layout_settings: crate::cutting_layout::Settings,
 ) -> Pending {
     run(ctx, move || {
-        layout_settings.validate()?;
-        let plan = crate::cutting_plan::CuttingPlan::collect(&model, &selected)?;
-        let contents = plan.pdf_with_layout(&name, !selected.is_empty(), true, layout_settings);
+        let contents = render_cut_report(report, &name, &model, &selected, layout_settings)?;
+        let (title, suffix) = match report {
+            CutReport::CuttingPlan => ("Export woodworking cutting plan", "cutting plan"),
+            CutReport::WorkshopLabels => ("Export workshop labels", "workshop labels"),
+        };
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Export woodworking cutting plan")
+            .set_title(title)
             .add_filter("PDF document", &["pdf"])
-            .set_file_name(exchange_name(&format!("{name} - cutting plan"), "pdf"))
+            .set_file_name(exchange_name(&format!("{name} - {suffix}"), "pdf"))
             .save_file()
         else {
             return Ok(Outcome::Cancelled);
@@ -588,19 +610,18 @@ pub fn export_cutting_plan(
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn export_cutting_plan(
+pub fn export_cut_report(
     ctx: &eframe::egui::Context,
+    report: CutReport,
     name: String,
     model: ketchup_core::Model,
     selected: std::collections::BTreeSet<u64>,
     layout_settings: crate::cutting_layout::Settings,
 ) -> Pending {
     let (sender, receiver) = mpsc::channel();
-    let result = layout_settings
-        .validate()
-        .and_then(|()| crate::cutting_plan::CuttingPlan::collect(&model, &selected))
-        .and_then(|plan| {
-            open_pdf(&plan.pdf_with_layout(&name, !selected.is_empty(), true, layout_settings))
+    let result = render_cut_report(report, &name, &model, &selected, layout_settings)
+        .and_then(|contents| {
+            open_pdf(&contents)
                 .map(|_| Outcome::Exported)
                 .map_err(|e| {
                     e.as_string()

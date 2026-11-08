@@ -18,7 +18,7 @@ pub(super) enum Operation {
     Save,
     Import,
     Export,
-    CuttingPlan,
+    CutReport(CutReport),
     Screenshot,
 }
 
@@ -34,7 +34,8 @@ pub(super) struct Project {
     pub confirm: Option<Action>,
     pub after_save: Option<Action>,
     pub error: Option<String>,
-    pub cutting_plan_selection: Option<bool>,
+    pub cut_report: Option<(CutReport, bool)>,
+    // Both reports share scope so their marks can be printed for the same parts.
     pub cutting_plan_selection_preference: Option<bool>,
     pub cutting_plan_layout: crate::cutting_layout::Settings,
 }
@@ -52,7 +53,7 @@ impl Default for Project {
             confirm: None,
             after_save: None,
             error: None,
-            cutting_plan_selection: None,
+            cut_report: None,
             cutting_plan_selection_preference: None,
             cutting_plan_layout: crate::cutting_layout::Settings::default(),
         }
@@ -93,7 +94,7 @@ impl Project {
         self.pending.is_some()
             || self.confirm.is_some()
             || self.error.is_some()
-            || self.cutting_plan_selection.is_some()
+            || self.cut_report.is_some()
     }
 }
 
@@ -201,7 +202,7 @@ impl KetchupApp {
         self.project.confirm = None;
         self.project.after_save = None;
         self.project.error = None;
-        self.project.cutting_plan_selection = None;
+        self.project.cut_report = None;
         let screenshot_settings = std::mem::take(&mut self.screenshot.settings);
         self.screenshot = screenshot_dialog::ScreenshotDialog::default();
         self.screenshot.settings = screenshot_settings;
@@ -300,19 +301,15 @@ impl KetchupApp {
         }
     }
 
-    pub(super) fn prepare_cutting_plan(&mut self) {
+    pub(super) fn prepare_cut_report(&mut self, report: CutReport) {
         if !self.project.blocked() {
-            self.project.cutting_plan_selection = Some(
-                !self.selected.is_empty()
-                    && self
-                        .project
-                        .cutting_plan_selection_preference
-                        .unwrap_or(true),
-            );
+            let selection = !self.selected.is_empty()
+                && self.project.cutting_plan_selection_preference.unwrap_or(true);
+            self.project.cut_report = Some((report, selection));
         }
     }
 
-    fn export_cutting_plan(&mut self, ctx: &egui::Context, selection: bool) {
+    fn export_cut_report(&mut self, ctx: &egui::Context, report: CutReport, selection: bool) {
         let selected = if selection {
             self.selected.clone()
         } else {
@@ -323,9 +320,10 @@ impl KetchupApp {
                 Some("Select at least one part, or choose the whole project.".into());
             return;
         }
-        self.project.operation = Operation::CuttingPlan;
-        self.project.pending = Some(project_files::export_cutting_plan(
+        self.project.operation = Operation::CutReport(report);
+        self.project.pending = Some(project_files::export_cut_report(
             ctx,
+            report,
             self.doc.name.clone(),
             self.doc.model.clone(),
             selected,
@@ -441,8 +439,18 @@ impl KetchupApp {
             Ok(Outcome::Exported) => self.say(
                 ctx,
                 match (operation, cfg!(target_arch = "wasm32")) {
-                    (Operation::CuttingPlan, true) => "Cutting plan PDF opened in a new tab",
-                    (Operation::CuttingPlan, false) => "Cutting plan PDF saved and opened",
+                    (Operation::CutReport(CutReport::CuttingPlan), true) => {
+                        "Cutting plan PDF opened in a new tab"
+                    }
+                    (Operation::CutReport(CutReport::CuttingPlan), false) => {
+                        "Cutting plan PDF saved and opened"
+                    }
+                    (Operation::CutReport(CutReport::WorkshopLabels), true) => {
+                        "Workshop labels PDF opened in a new tab"
+                    }
+                    (Operation::CutReport(CutReport::WorkshopLabels), false) => {
+                        "Workshop labels PDF saved and opened"
+                    }
                     (Operation::Screenshot, true) => "Screenshot download started",
                     (Operation::Screenshot, false) => "Screenshot exported",
                     (_, true) => "Geometry download started",
@@ -460,12 +468,24 @@ impl KetchupApp {
     }
 
     pub(super) fn project_dialogs(&mut self, ctx: &egui::Context) {
-        if let Some(mut selection) = self.project.cutting_plan_selection {
+        if let Some((report, mut selection)) = self.project.cut_report {
             let selection_before = selection;
-            let response = Modal::new("woodworking_cutting_plan", 480.).show(ctx, |modal| {
+            let (id, title, description) = match report {
+                CutReport::CuttingPlan => (
+                    "woodworking_cutting_plan",
+                    "Woodworking cutting plan",
+                    "Create a PDF with quantities and finished cut sizes.",
+                ),
+                CutReport::WorkshopLabels => (
+                    "workshop_labels",
+                    "Workshop Labels",
+                    "Create one label per piece with its cutting-plan mark, name, and finished thickness, width, and length. Print at actual size on A4 paper.",
+                ),
+            };
+            let response = Modal::new(id, 480.).show(ctx, |modal| {
                 modal.header(|ui| {
-                    ui.text_heading("Woodworking cutting plan");
-                    ui.text_weak("Create a PDF with quantities and finished cut sizes.");
+                    ui.text_heading(title);
+                    ui.text_weak(description);
                 });
                 modal.body(|ui| {
                     ui.add_enabled_ui(!self.selected.is_empty(), |ui| {
@@ -473,15 +493,19 @@ impl KetchupApp {
                     });
                     ui.radio_value(&mut selection, false, "Whole project (visible only)");
                     ui.add_space(10.);
-                    ui.horizontal(|ui| {
-                        ui.text_label("Saw kerf (cut width)");
-                        ui.add(egui::DragValue::new(&mut self.project.cutting_plan_layout.kerf_mm)
-                            .speed(0.1).range(0. ..=100.).suffix(" mm"));
-                    });
-                    ui.checkbox(&mut self.project.cutting_plan_layout.allow_rotation, "Allow rotating pieces 90 degrees")
-                        .on_hover_text("Leave off when the length must follow the stock grain.");
+                    if report == CutReport::CuttingPlan {
+                        ui.horizontal(|ui| {
+                            ui.text_label("Saw kerf (cut width)");
+                            ui.add(egui::DragValue::new(&mut self.project.cutting_plan_layout.kerf_mm)
+                                .speed(0.1).range(0. ..=100.).suffix(" mm"));
+                        });
+                        ui.checkbox(&mut self.project.cutting_plan_layout.allow_rotation, "Allow rotating pieces 90 degrees")
+                            .on_hover_text("Leave off when the length must follow the stock grain.");
+                    }
                     ui.text_weak("Only visible parts with assigned stock materials are included. Assign materials in Entity Info using the stock pricing table. Nested parts inherit their assembly’s material unless assigned separately.");
-                    ui.text_weak("Layouts use assigned stock dimensions and saw kerf. Confirm grain, joinery and irregular shapes against the model; this is a practical layout, not a guaranteed minimum.");
+                    if report == CutReport::CuttingPlan {
+                        ui.text_weak("Layouts use assigned stock dimensions and saw kerf. Confirm grain, joinery and irregular shapes against the model; this is a practical layout, not a guaranteed minimum.");
+                    }
                 });
                 modal.footer(|ui| {
                     if ui.button("Cancel").clicked() { Some(false) }
@@ -489,17 +513,18 @@ impl KetchupApp {
                     else { None }
                 })
             });
-            self.project.cutting_plan_selection = Some(selection);
             if selection != selection_before {
                 self.project.cutting_plan_selection_preference = Some(selection);
             }
             if let Some(generate) = response.inner {
-                self.project.cutting_plan_selection = None;
+                self.project.cut_report = None;
                 if generate {
-                    self.export_cutting_plan(ctx, selection);
+                    self.export_cut_report(ctx, report, selection);
                 }
             } else if response.should_close() {
-                self.project.cutting_plan_selection = None;
+                self.project.cut_report = None;
+            } else {
+                self.project.cut_report = Some((report, selection));
             }
         }
         if self.project.pending.is_some() {
@@ -517,7 +542,8 @@ impl KetchupApp {
                                 Operation::Save => "Saving project…",
                                 Operation::Import => "Importing geometry…",
                                 Operation::Export => "Exporting geometry…",
-                                Operation::CuttingPlan => "Preparing cutting plan PDF…",
+                                Operation::CutReport(CutReport::CuttingPlan) => "Preparing cutting plan PDF…",
+                                Operation::CutReport(CutReport::WorkshopLabels) => "Preparing workshop labels PDF…",
                                 Operation::Screenshot => "Exporting screenshot…",
                             });
                         });

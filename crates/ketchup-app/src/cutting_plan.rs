@@ -13,6 +13,12 @@ type MaterialKey = (
     ketchup_core::StockMaterial,
 );
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CutReport {
+    CuttingPlan,
+    WorkshopLabels,
+}
+
 #[derive(Debug)]
 pub(crate) struct CutGroup {
     pub material: ketchup_core::StockMaterial,
@@ -278,14 +284,7 @@ impl CuttingPlan {
         settings: LayoutSettings,
     ) -> Vec<u8> {
         let count: usize = self.groups.iter().map(|g| g.parts.len()).sum();
-        let mut pdf = Pdf::new(
-            name,
-            if selection {
-                "Selected parts (visible only)"
-            } else {
-                ""
-            },
-        );
+        let mut pdf = Pdf::new(name, "Cutting Plan", selection);
         pdf.heading("CUT LIST", 18.);
         pdf.paragraph(
             &format!(
@@ -388,6 +387,62 @@ impl CuttingPlan {
         }
         pdf.finish()
     }
+
+    pub fn workshop_labels_pdf(&self, name: &str, selection: bool) -> Result<Vec<u8>, String> {
+        const WIDTH: f64 = 247.5;
+        const HEIGHT: f64 = 66.;
+        const ROW_GAP: f64 = 10.;
+        const COLUMN_GAP: f64 = 16.;
+
+        let mut pdf = Pdf::new(name, "Workshop Labels", selection);
+        let first_row = pdf.y - 6.;
+        let rows = ((first_row - 48. + ROW_GAP) / (HEIGHT + ROW_GAP)).floor() as usize;
+        if rows == 0 {
+            return Err("The project name is too long to fit above the workshop labels.".into());
+        }
+
+        let mut slot = 0;
+        for (index, group) in self.ordered_groups().into_iter().enumerate() {
+            let mark = piece_mark(index);
+            let [t, w, l] = group.dimensions.map(metric_length);
+            let dimensions = format!("{t} x {w} x {l}");
+            for part in &group.parts {
+                if slot == rows * 2 {
+                    pdf.new_page();
+                    slot = 0;
+                }
+                let x = 42. + (slot % 2) as f64 * (WIDTH + COLUMN_GAP);
+                let top = first_row - (slot / 2) as f64 * (HEIGHT + ROW_GAP);
+                pdf.cut_guide(x, top - HEIGHT, WIDTH, HEIGHT);
+                pdf.text(x + 10., top - 20., 17., &mark);
+
+                // Courier at 10 pt uses 6 pt per character. Keep two lines
+                // for the name and reserve the bottom line for dimensions.
+                let part = if part.is_empty() { "Unnamed part" } else { part };
+                let mut chars = part.chars();
+                let first: String = chars.by_ref().take(37).collect();
+                let mut second: String = chars.by_ref().take(37).collect();
+                if chars.next().is_some() {
+                    for _ in 0..3 {
+                        second.pop();
+                    }
+                    second.push_str("...");
+                }
+                pdf.text(x + 10., top - 34., 10., &first);
+                if !second.is_empty() {
+                    pdf.text(x + 10., top - 45., 10., &second);
+                }
+                let size = (WIDTH - 20.) / (dimensions.len() as f64 * 0.6);
+                pdf.text(x + 10., top - 58., size.min(9.5), &dimensions);
+                slot += 1;
+            }
+        }
+        Ok(pdf.finish())
+    }
+}
+
+fn piece_mark(index: usize) -> String {
+    format!("P{:03}", index + 1)
 }
 
 fn automatic_group_name(name: &str) -> bool {
@@ -434,9 +489,9 @@ fn cut_row(pdf: &mut Pdf, index: usize, group: &CutGroup, colored: bool) {
         }
         if colored {
             pdf.rectangle(42., pdf.y - 1., 7., 7., mark_color(index));
-            pdf.cell(53., 41., &format!("P{:03}", index + 1));
+            pdf.cell(53., 41., &piece_mark(index));
         } else {
-            pdf.cell(42., 52., &format!("P{:03}", index + 1));
+            pdf.cell(42., 52., &piece_mark(index));
         }
         if !continued {
             pdf.cell(286., 34., &group.parts.len().to_string());
@@ -504,8 +559,8 @@ fn draw_layout(
             let group = groups.iter().find(|(index, _)| *index == mark).unwrap().1;
             pdf.paragraph(
                 &format!(
-                    "P{:03}: {} piece{}, {} x {} - choose larger stock",
-                    mark + 1,
+                    "{}: {} piece{}, {} x {} - choose larger stock",
+                    piece_mark(mark),
                     quantity,
                     if quantity == 1 { "" } else { "s" },
                     metric_length(group.dimensions[1]),
@@ -558,7 +613,7 @@ fn draw_layout(
             let w = r.length as f64 * x_scale;
             let h = r.width as f64 * y_scale;
             pdf.rectangle(x, y, w, h, mark_color(placement.mark));
-            let label = format!("P{:03}", placement.mark + 1);
+            let label = piece_mark(placement.mark);
             let size = (w / (label.len() as f64 * 0.6 + 1.)).min(9.);
             if size >= 5. && h >= size + 4. {
                 pdf.text(
@@ -598,8 +653,8 @@ fn draw_layout(
                 pdf.y,
                 9.,
                 &format!(
-                    "P{:03} x{} - {} x {}{}",
-                    mark + 1,
+                    "{} x{} - {} x {}{}",
+                    piece_mark(mark),
                     quantity,
                     metric_length(group.dimensions[1]),
                     metric_length(group.dimensions[2]),
@@ -803,17 +858,19 @@ struct Pdf {
     page: String,
     y: f64,
     name: String,
-    scope: String,
+    title: &'static str,
+    selection: bool,
     date: String,
 }
 impl Pdf {
-    fn new(name: &str, scope: &str) -> Self {
+    fn new(name: &str, title: &'static str, selection: bool) -> Self {
         let mut pdf = Self {
             pages: Vec::new(),
             page: String::new(),
             y: 0.,
             name: name.into(),
-            scope: scope.into(),
+            title,
+            selection,
             date: crate::estimate_pdf::generation_date().unwrap_or_else(|_| "Date unavailable".into()),
         };
         pdf.new_page();
@@ -823,14 +880,23 @@ impl Pdf {
         if !self.page.is_empty() {
             self.pages.push(std::mem::take(&mut self.page));
         }
-        let header=crate::pdf_header::layout(&self.name,"Cutting Plan",&self.date,[595.,842.],crate::pdf_header::base_width);
+        let header = crate::pdf_header::layout(
+            &self.name,
+            self.title,
+            &self.date,
+            [595., 842.],
+            crate::pdf_header::base_width,
+        );
         self.page.push_str(&header.graphics);
         for text in header.text {
             use std::fmt::Write;
             let _=writeln!(self.page,"0.15 0.20 0.17 rg BT /F2 {} Tf 1 0 0 1 {:.3} {:.3} Tm ({}) Tj ET",text.size,text.x,text.y,crate::pdf_header::literal(&text.value));
         }
         self.y=header.body_top;
-        if !self.scope.is_empty(){self.text(42.,self.y,9.,&self.scope.clone());self.y-=22.;}
+        if self.selection {
+            self.text(42., self.y, 9., "Selected parts (visible only)");
+            self.y -= 22.;
+        }
     }
     fn ensure(&mut self, height: f64) {
         if self.y - height < 48. {
@@ -891,6 +957,13 @@ impl Pdf {
         let _ = writeln!(
             self.page,
             "q {r:.8} {g:.8} {b:.8} rg 0.35 G 0.4 w {x:.3} {y:.3} {width:.3} {height:.3} re B Q"
+        );
+    }
+    fn cut_guide(&mut self, x: f64, y: f64, width: f64, height: f64) {
+        use std::fmt::Write;
+        let _ = writeln!(
+            self.page,
+            "q 0.6 G 0.5 w [2 2] 0 d {x:.2} {y:.2} {width:.2} {height:.2} re S Q"
         );
     }
     fn line(&mut self, y: f64) {

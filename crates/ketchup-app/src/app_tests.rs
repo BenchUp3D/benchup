@@ -5318,15 +5318,39 @@ fn tools_menu_opens_cutting_plan_scope_dialog_directly() {
     h.click(tools);
     let output = h.frame(vec![], egui::Modifiers::NONE);
     h.click(text_position(&output, "Prepare cutting plan…"));
-    assert_eq!(h.app.project.cutting_plan_selection, Some(false));
+    assert_eq!(h.app.project.cut_report, Some((CutReport::CuttingPlan, false)));
     let output = h.frame(vec![], egui::Modifiers::NONE);
     text_position(&output, "Woodworking cutting plan");
     let output = h.click(text_position(&output, "Cancel"));
-    assert!(h.app.project.cutting_plan_selection.is_none());
+    assert!(h.app.project.cut_report.is_none());
     assert!(h.app.project.pending.is_none());
     assert!(!h.app.project.modified);
     assert!(h.app.doc.history.undo_label().is_none());
     drop(output);
+}
+
+#[test]
+fn workshop_labels_use_the_shared_cut_report_scope() {
+    let mut h = Harness::new();
+    let edge = h.app.doc.model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+    h.app.selected.insert(edge);
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    h.click(text_position(&output, "Tools"));
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    h.click(text_position(&output, "Print Workshop Labels…"));
+    assert_eq!(h.app.project.cut_report, Some((CutReport::WorkshopLabels, true)));
+
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    text_position(&output, "Workshop Labels");
+    let output = h.click(text_position(&output, "Whole project (visible only)"));
+    h.click(text_position(&output, "Cancel"));
+    assert!(h.app.project.cut_report.is_none());
+    assert!(h.app.project.pending.is_none());
+    assert!(!h.app.project.modified);
+    assert_eq!(h.app.project.cutting_plan_selection_preference, Some(false));
+
+    h.app.prepare_cut_report(CutReport::CuttingPlan);
+    assert_eq!(h.app.project.cut_report, Some((CutReport::CuttingPlan, false)));
 }
 
 #[test]

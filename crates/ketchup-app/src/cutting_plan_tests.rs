@@ -83,6 +83,22 @@ fn groups_twenty_rails_and_two_posts_with_nominal_stock_and_real_cut_lengths() {
     }
     assert!(!pdf.contains("TOTAL LENGTH"));
     assert_eq!(model, before, "Planning must never edit the document");
+
+    let labels = String::from_utf8(plan.workshop_labels_pdf("Workbench", false).unwrap()).unwrap();
+    // Posts sort before rails by name, even though the raw groups are ordered
+    // by dimensions. Every repeated piece gets a label with its group's mark.
+    let cut_list_order = ["(P001) Tj", "(Post) Tj", "(P002) Tj", "(Rail) Tj"]
+        .map(|text| pdf.find(text).unwrap());
+    assert!(cut_list_order.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(labels.matches("(P001) Tj").count(), 2);
+    assert_eq!(labels.matches("(Post) Tj").count(), 2);
+    assert_eq!(labels.matches("(89 mm x 89 mm x 210 cm) Tj").count(), 2);
+    assert_eq!(labels.matches("(P002) Tj").count(), 20);
+    assert_eq!(labels.matches("(Rail) Tj").count(), 20);
+    assert_eq!(labels.matches("(38 mm x 89 mm x 60 cm) Tj").count(), 20);
+    assert_eq!(labels.matches("re S Q").count(), 22);
+    assert_eq!(labels.matches("/Type /Page ").count(), 2);
+    assert_eq!(labels.matches("/Logo Do").count(), 2);
 }
 
 #[test]
@@ -141,6 +157,10 @@ fn nested_assembly_and_part_selection_count_each_instance_once() {
         1,
         "Selected assemblies exclude hidden children"
     );
+    let labels = String::from_utf8(plan.workshop_labels_pdf("Frame", true).unwrap()).unwrap();
+    assert!(labels.contains("Selected parts"));
+    assert_eq!(labels.matches("(P001) Tj").count(), 1);
+    assert!(labels.contains("(Frame/Rail) Tj"));
     assert!(CuttingPlan::collect(&model, &BTreeSet::from([b])).is_err());
 }
 

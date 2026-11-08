@@ -1,5 +1,6 @@
 use crate::natural_text::TextUi as _;
 use crate::{
+    cutting_plan::CutReport,
     icons,
     modal::{Modal, primary_button},
     renderer, storage,
@@ -2652,10 +2653,16 @@ impl KetchupApp {
                                 self.export_time_estimates(&ctx);
                                 ui.close();
                             }
+                            if ui.add_enabled(!self.project.blocked(), Self::menu_item_button(ui, "Print Workshop Labels…", Some("export_pdf")))
+                                .on_hover_text("Create a printable label for each piece in the selection or whole project.")
+                                .clicked() {
+                                self.prepare_cut_report(CutReport::WorkshopLabels);
+                                ui.close();
+                            }
                             if ui.add_enabled(!self.project.blocked(), Self::menu_item_button(ui, "Prepare cutting plan…", Some("dimension")))
                                 .on_hover_text("Summarize matching parts and export finished cutting dimensions for the selection or whole project.")
                                 .clicked() {
-                                self.prepare_cutting_plan();
+                                self.prepare_cut_report(CutReport::CuttingPlan);
                                 ui.close();
                             }
                             ui.separator();

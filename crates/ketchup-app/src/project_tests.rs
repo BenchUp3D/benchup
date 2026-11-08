@@ -435,18 +435,18 @@ fn cutting_plan_defaults_to_selection_and_blocks_other_file_actions_until_cancel
     let ctx = egui::Context::default();
     let mut app = KetchupApp::with_document(Document::default(), None, true);
     assert!(app.project.cutting_plan_layout.allow_rotation);
-    app.prepare_cutting_plan();
-    assert_eq!(app.project.cutting_plan_selection, Some(false));
+    app.prepare_cut_report(CutReport::CuttingPlan);
+    assert_eq!(app.project.cut_report, Some((CutReport::CuttingPlan, false)));
     assert!(app.project.blocked());
-    app.project.cutting_plan_selection = None;
+    app.project.cut_report = None;
     let edge = app.doc.model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
     app.selected.insert(edge);
-    app.prepare_cutting_plan();
-    assert_eq!(app.project.cutting_plan_selection, Some(true));
+    app.prepare_cut_report(CutReport::CuttingPlan);
+    assert_eq!(app.project.cut_report, Some((CutReport::CuttingPlan, true)));
     let before = app.doc.model.clone();
     app.request_project(projects::Action::New, &ctx);
     assert_eq!(app.doc.model, before);
-    assert_eq!(app.project.cutting_plan_selection, Some(true));
+    assert_eq!(app.project.cut_report, Some((CutReport::CuttingPlan, true)));
 }
 
 #[test]
@@ -454,19 +454,19 @@ fn cutting_plan_remembers_scope_and_falls_back_when_no_parts_are_selected() {
     let ctx = egui::Context::default();
     let mut app = KetchupApp::with_document(Document::default(), None, true);
     app.project.cutting_plan_selection_preference = Some(true);
-    app.prepare_cutting_plan();
-    assert_eq!(app.project.cutting_plan_selection, Some(false));
+    app.prepare_cut_report(CutReport::CuttingPlan);
+    assert_eq!(app.project.cut_report, Some((CutReport::CuttingPlan, false)));
     assert_eq!(app.project.cutting_plan_selection_preference, Some(true));
-    app.project.cutting_plan_selection = None;
+    app.project.cut_report = None;
     let edge = app.doc.model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
     app.selected.insert(edge);
-    app.prepare_cutting_plan();
-    assert_eq!(app.project.cutting_plan_selection, Some(true));
-    app.project.cutting_plan_selection = None;
+    app.prepare_cut_report(CutReport::CuttingPlan);
+    assert_eq!(app.project.cut_report, Some((CutReport::CuttingPlan, true)));
+    app.project.cut_report = None;
     app.project.cutting_plan_selection_preference = Some(false);
-    app.prepare_cutting_plan();
-    assert_eq!(app.project.cutting_plan_selection, Some(false));
-    app.project.cutting_plan_selection = None;
+    app.prepare_cut_report(CutReport::CuttingPlan);
+    assert_eq!(app.project.cut_report, Some((CutReport::CuttingPlan, false)));
+    app.project.cut_report = None;
     app.new_model(&ctx);
     assert_eq!(app.project.cutting_plan_selection_preference, Some(false));
 }
@@ -480,9 +480,10 @@ fn cutting_plan_export_failure_preserves_project_selection_and_history() {
     app.project.path = Some("original.ketchup".into());
     app.project.modified = true;
     let before = app.doc.model.clone();
-    app.project.operation = projects::Operation::CuttingPlan;
-    app.project.pending = Some(crate::project_files::export_cutting_plan(
+    app.project.operation = projects::Operation::CutReport(CutReport::CuttingPlan);
+    app.project.pending = Some(crate::project_files::export_cut_report(
         &ctx,
+        CutReport::CuttingPlan,
         app.doc.name.clone(),
         app.doc.model.clone(),
         app.selected.clone(),
