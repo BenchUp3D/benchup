@@ -2,7 +2,7 @@ use super::*;
 #[path = "walk_physics.rs"]
 mod physics;
 pub(super) use physics::Settings;
-use physics::{Person, World};
+use physics::{Gait, Person, World};
 
 #[derive(Default)]
 pub(super) struct Walk {
@@ -11,10 +11,14 @@ pub(super) struct Walk {
     // another model. The selected Walk tool restores to face-placement mode.
     pub sitting: bool,
     world: World,
-    geometry: Option<(u64, Vec<u64>)>,
+    geometry: Option<(u64, Option<u64>, bool, bool)>,
+    gait: Gait,
+    #[cfg(test)]
+    pub(super) world_builds: usize,
     last_time: Option<f64>,
     alt_down: bool,
-    look_drag: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    cursor_context: Option<egui::Context>,
     settings: Option<Settings>,
     camera: Option<Camera>,
     pub(super) original_camera: Option<Camera>,
@@ -22,15 +26,25 @@ pub(super) struct Walk {
 
 impl Walk {
     pub fn reset(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.release_cursor();
         self.person = None;
         self.world = World::default();
         self.geometry = None;
+        self.gait = Gait::default();
         self.last_time = None;
         self.alt_down = false;
-        self.look_drag = false;
         self.settings = None;
         self.camera = None;
         self.original_camera = None;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn release_cursor(&mut self) {
+        if let Some(ctx) = self.cursor_context.take() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(egui::CursorGrab::None));
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(true));
+        }
     }
 }
 
@@ -56,19 +70,47 @@ impl KetchupApp {
                 self.set_tool(Tool::Walk);
             }
         }
+    }
+
+    // Run after dialogs and viewport input, so capture reflects the final state
+    // of the frame. Capture itself is transient, never a saved user preference.
+    pub(super) fn sync_walk_cursor(&mut self, ctx: &egui::Context) {
+        let enabled = self.tool == Tool::Walk && !self.walk_input_blocked(ctx);
+        let placed = self.tool == Tool::Walk && self.walk.person.is_some();
+        #[cfg(not(target_arch = "wasm32"))]
+        if enabled && placed {
+            if self.walk.cursor_context.is_none() {
+                // X11 supports confinement rather than locked positioning.
+                // Raw device motion still allows unlimited turning at edges.
+                #[cfg(target_os = "linux")]
+                let grab = egui::CursorGrab::Confined;
+                #[cfg(not(target_os = "linux"))]
+                let grab = egui::CursorGrab::Locked;
+                ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(grab));
+                ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(false));
+                self.walk.cursor_context = Some(ctx.clone());
+            }
+        } else {
+            self.walk.release_cursor();
+        }
         #[cfg(target_arch = "wasm32")]
         if let Some(canvas) = web_sys::window()
             .and_then(|w| w.document())
             .and_then(|d| d.get_element_by_id("ketchup-canvas"))
         {
-            let _ = canvas.set_attribute(
-                "data-walk-active",
-                if self.tool == Tool::Walk {
-                    "true"
-                } else {
-                    "false"
-                },
-            );
+            // Attribute writes notify the browser bridge even when their
+            // values do not change. Publish only transitions, so ordinary
+            // editor frames do not repeatedly release capture or unlock keys.
+            for (key, enabled) in [
+                ("data-walk-active", self.tool == Tool::Walk),
+                ("data-walk-input-enabled", enabled),
+                ("data-walk-placed", placed),
+            ] {
+                let value = if enabled { "true" } else { "false" };
+                if canvas.get_attribute(key).as_deref() != Some(value) {
+                    let _ = canvas.set_attribute(key, value);
+                }
+            }
         }
     }
 
@@ -76,10 +118,10 @@ impl KetchupApp {
         match self.walk.person.as_ref() {
             None => Tool::Walk.instructions(),
             Some(person) if person.sitting => {
-                "Seated · Drag to look (180°) · Alt: stand · Escape: exit Walk"
+                "Seated · Move mouse to look (180°) · Alt: stand · Tab: sidebar · Escape: exit Walk"
             }
             Some(_) => {
-                "WASD / arrows: walk · Drag to look · Ctrl: crouch · Space: jump · Alt: sit · Escape: exit Walk"
+                "WASD / arrows: walk · Move mouse to look · Shift: crouch · Space: jump · Alt: sit · Tab: sidebar · Escape: exit Walk"
             }
         }
     }
@@ -108,60 +150,91 @@ impl KetchupApp {
     }
 
     pub(super) fn walk_keyboard(&mut self, ctx: &egui::Context) {
+        #[cfg(target_arch = "wasm32")]
+        if let Some(canvas) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id("ketchup-canvas"))
+        {
+            if canvas.get_attribute("data-walk-exit-requested").as_deref() == Some("true") {
+                let _ = canvas.remove_attribute("data-walk-exit-requested");
+                self.exit_walk(ctx);
+                return;
+            }
+        }
         if self.walk_input_blocked(ctx) {
             return;
         }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
             self.exit_walk(ctx);
+            return;
         }
+        self.sidebar_shortcut(ctx);
     }
 
     fn exit_walk(&mut self, ctx: &egui::Context) {
         if let Some(camera) = self.walk.original_camera.take() {
             if self.doc.camera != camera {
                 self.doc.camera = camera;
-                self.changed(ctx);
+                self.camera_changed(ctx);
             }
         }
         self.set_tool(Tool::Select);
         ctx.request_repaint();
     }
 
-    fn prepare_walk_world(&mut self) {
+    fn prepare_walk_world(&mut self, ctx: &egui::Context) {
+        let key = (
+            self.document_revision(ctx),
+            self.doc.model.edit_context,
+            self.doc.display.hidden_geometry,
+            self.doc.display.hidden_objects,
+        );
+        if self.walk.geometry == Some(key) {
+            return;
+        }
         // Use the same evaluated faces as the viewport, including holes,
         // transformed groups, and joinery. Visibility affects placement and
         // obstacles consistently; locked geometry still blocks walking.
-        let (_, faces, entities, _) = self
-            .joinery_geometry
-            .evaluated_picking(&self.doc.model, &self.doc.display);
-        let visible: Vec<_> = faces
-            .iter()
-            .filter(|(id, _)| entities.get(*id).displayed(&self.doc.display))
-            .map(|(id, _)| id)
-            .collect();
-        let key = (faces.revision(), visible);
-        if self.walk.geometry.as_ref() != Some(&key) {
-            self.walk.world = World::new(
-                key.1
-                    .iter()
-                    .flat_map(|id| faces.get(*id).triangles.iter().copied()),
-            );
-            self.walk.geometry = Some(key);
-            // Live model edits may remove the floor or place a wall through the
-            // person. Require a new valid placement rather than trapping them.
-            self.walk.person = None;
+        let (faces, entities) = if self.doc.model.connections.is_empty() {
+            self.prepare_picking();
+            (&self.face_cache, &self.entity_cache)
+        } else {
+            let (_, faces, entities, _) = self
+                .joinery_geometry
+                .evaluated_picking(&self.doc.model, &self.doc.display);
+            (faces, entities)
+        };
+        self.walk.world = World::new(
+            faces
+                .iter()
+                .filter(|(id, _)| entities.get(*id).displayed(&self.doc.display))
+                .flat_map(|(_, face)| face.triangles.iter().copied()),
+        );
+        self.walk.geometry = Some(key);
+        #[cfg(test)]
+        {
+            self.walk.world_builds += 1;
         }
+        // Live edits can remove a floor or put a wall through the character.
+        self.walk.person = None;
+        self.walk.gait = Gait::default();
     }
 
     pub(super) fn walk_place(&mut self, ctx: &egui::Context, pos: Pos2) {
-        self.prepare_walk_world();
+        self.prepare_walk_world(ctx);
         let ray = self
             .doc
             .camera
             .ray(dv(pos - self.viewport.min), dv(self.viewport.size()));
-        let (_, faces, entities, picking) = self
-            .joinery_geometry
-            .evaluated_picking(&self.doc.model, &self.doc.display);
+        let (faces, entities, picking) = if self.doc.model.connections.is_empty() {
+            self.prepare_picking();
+            (&self.face_cache, &self.entity_cache, &self.picking_cache)
+        } else {
+            let (_, faces, entities, picking) = self
+                .joinery_geometry
+                .evaluated_picking(&self.doc.model, &self.doc.display);
+            (faces, entities, &*picking)
+        };
         let hit = picking.nearest_unscoped(faces, entities, ray);
         let Some((id, _, point)) = hit else {
             self.say(ctx, "Click a floor face to place the walking person.");
@@ -200,14 +273,15 @@ impl KetchupApp {
             }
         });
         self.sync_walk_camera();
-        self.changed(ctx);
+        self.camera_changed(ctx);
     }
 
     fn sync_walk_camera(&mut self) {
         let Some(person) = &self.walk.person else {
             return;
         };
-        let eye = person.feet + DVec3::Z * person.eye_height(&self.general_settings.walk);
+        let eye = person.feet
+            + DVec3::Z * (person.eye_height(&self.general_settings.walk) + self.walk.gait.offset);
         let camera = &mut self.doc.camera;
         camera.yaw = person.yaw;
         camera.projection = ketchup_core::Projection::Perspective;
@@ -230,7 +304,6 @@ impl KetchupApp {
             .replace(now)
             .map_or(0., |last| (now - last).clamp(0., 0.1));
         if !response.enabled() || self.walk_input_blocked(ctx) {
-            self.walk.look_drag = false;
             self.walk.alt_down = ctx.input(|i| i.modifiers.alt);
             return;
         }
@@ -248,7 +321,7 @@ impl KetchupApp {
             self.set_tool(Tool::Select);
             return;
         }
-        self.prepare_walk_world();
+        self.prepare_walk_world(ctx);
         if self
             .walk
             .settings
@@ -280,22 +353,14 @@ impl KetchupApp {
             return;
         }
         let settings = self.general_settings.walk.clone();
-        let (alt, crouch, jump, direction, delta, held, pressed) = ctx.input(|i| {
+        let delta = self.walk_mouse_motion(ctx, response);
+        let (alt, crouch, jump, direction) = ctx.input(|i| {
             let axis = |positive, negative| if positive { 1. } else { 0. } - if negative { 1. } else { 0. };
             let jump = i.events.iter().any(|event| matches!(event, egui::Event::Key { key: Key::Space, pressed: true, repeat: false, .. }));
-            (i.modifiers.alt, i.modifiers.ctrl, jump,
+            (i.modifiers.alt, i.modifiers.shift, jump,
                 DVec2::new(axis(i.key_down(Key::D) || i.key_down(Key::ArrowRight), i.key_down(Key::A) || i.key_down(Key::ArrowLeft)),
-                    axis(i.key_down(Key::W) || i.key_down(Key::ArrowUp), i.key_down(Key::S) || i.key_down(Key::ArrowDown))),
-                i.pointer.delta(),
-                i.pointer.primary_down() || i.pointer.secondary_down(),
-                i.pointer.any_pressed())
+                    axis(i.key_down(Key::W) || i.key_down(Key::ArrowUp), i.key_down(Key::S) || i.key_down(Key::ArrowDown))))
         });
-        if pressed && response.contains_pointer() {
-            self.walk.look_drag = true;
-        }
-        if !held {
-            self.walk.look_drag = false;
-        }
         let before = self.doc.camera.clone();
         let person = self.walk.person.as_mut().unwrap();
         if alt && !self.walk.alt_down {
@@ -308,20 +373,60 @@ impl KetchupApp {
             self.walk.sitting = person.sitting;
         }
         self.walk.alt_down = alt;
-        if self.walk.look_drag && !pressed {
-            person.turn(-delta.x as f64 * 0.004, &self.walk.world, &settings);
-            self.doc.camera.pitch = (self.doc.camera.pitch + delta.y as f64 * 0.004)
+        if delta != Vec2::ZERO {
+            let sensitivity = 0.007 * self.general_settings.orbit_speed * settings.look_sensitivity;
+            person.turn(-delta.x as f64 * sensitivity);
+            self.doc.camera.pitch = (self.doc.camera.pitch + delta.y as f64 * sensitivity)
                 .clamp(-80_f64.to_radians(), 80_f64.to_radians());
-            ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
         }
+        let feet = person.feet;
         person.step(&self.walk.world, &settings, direction, crouch, jump, dt);
+        self.walk.gait.update(
+            (person.feet - feet).truncate().length(),
+            dt,
+            person.grounded,
+            person.crouched,
+            person.sitting,
+        );
         self.sync_walk_camera();
         if self.doc.camera != before {
-            self.changed(ctx);
+            self.camera_changed(ctx);
         }
         // Gravity, held movement, and modifier transitions need frames even
         // when the operating system does not generate repeated key events.
         ctx.request_repaint_after(Duration::from_secs_f64(1. / 60.));
+    }
+
+    fn walk_mouse_motion(&self, ctx: &egui::Context, response: &egui::Response) -> Vec2 {
+        #[cfg(target_arch = "wasm32")]
+        if let Some(canvas) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id("ketchup-canvas"))
+        {
+            if canvas.get_attribute("data-walk-pointer-capture").as_deref() == Some("locked") {
+                // eframe's web backend only supplies absolute positions, which
+                // stay fixed under pointer lock. Consume the JS movement deltas.
+                let mut delta = Vec2::ZERO;
+                for (axis, key) in ["data-walk-look-x", "data-walk-look-y"].iter().enumerate() {
+                    delta[axis] = canvas
+                        .get_attribute(key)
+                        .and_then(|v| v.parse::<f32>().ok())
+                        .filter(|v| v.is_finite())
+                        .unwrap_or(0.);
+                    let _ = canvas.set_attribute(key, "0");
+                }
+                return delta / ctx.zoom_factor();
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.walk.cursor_context.is_some() {
+            return ctx.input(|i| i.pointer.motion().unwrap_or_else(|| i.pointer.delta()));
+        }
+        if response.hovered() {
+            ctx.input(|i| i.pointer.motion().unwrap_or_else(|| i.pointer.delta()))
+        } else {
+            Vec2::ZERO
+        }
     }
 }
 

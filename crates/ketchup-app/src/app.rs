@@ -2072,12 +2072,35 @@ impl KetchupApp {
         ctx.request_repaint();
     }
 
+    fn sidebar_shortcut(&mut self, ctx: &egui::Context) {
+        let walking = self.tool == Tool::Walk;
+        let consumed = ctx.input_mut(|i| {
+            let mut consumed = false;
+            if i.focused {
+                i.events.retain(|event| {
+                    if let egui::Event::Key { key: Key::Tab, pressed: true, repeat, modifiers, .. } = event
+                        && (!modifiers.any() || (walking && *modifiers == egui::Modifiers::SHIFT))
+                    {
+                        consumed = true;
+                        if !repeat { self.inspector = !self.inspector; }
+                        false
+                    } else { true }
+                });
+            }
+            consumed
+        });
+        if consumed {
+            ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+            ctx.request_repaint();
+        }
+    }
+
     fn keyboard(&mut self, ctx: &egui::Context) {
         // Track Ctrl through dialogs and shortcut early returns. When modeling
         // input is allowed, replay modifier events from the previous state.
         let pull_modifier_was_down = self.push_pull_modifier_down;
         self.push_pull_modifier_down = ctx.input(|i| i.modifiers.ctrl);
-        // Walk owns movement keys, including Space and Ctrl, before modeling
+        // Walk owns movement keys, including Space and Shift, before modeling
         // shortcuts can select tools, edit geometry, or open project dialogs.
         if self.tool == Tool::Walk {
             self.walk_keyboard(ctx);
@@ -2229,36 +2252,7 @@ impl KetchupApp {
             };
             return;
         }
-        let sidebar_tab = ctx.input_mut(|i| {
-            let mut consumed = false;
-            if i.focused {
-                i.events.retain(|event| {
-                    if let egui::Event::Key {
-                        key: Key::Tab,
-                        pressed: true,
-                        repeat,
-                        modifiers,
-                        ..
-                    } = event
-                        && !modifiers.any()
-                    {
-                        consumed = true;
-                        if !repeat {
-                            self.inspector = !self.inspector;
-                        }
-                        false
-                    } else {
-                        true
-                    }
-                });
-            }
-            consumed
-        });
-        if sidebar_tab {
-            // egui schedules Tab focus traversal before application shortcuts run.
-            ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
-            ctx.request_repaint();
-        }
+        self.sidebar_shortcut(ctx);
         let events = ctx.input(|i| i.events.clone());
         let copy_event = events.iter().any(|e| matches!(e, egui::Event::Copy));
         let cut_event = events.iter().any(|e| matches!(e, egui::Event::Cut));
@@ -6380,6 +6374,7 @@ impl eframe::App for KetchupApp {
         self.update_window(&ctx);
         self.project_dialogs(&ctx);
         self.screenshot_dialog(&ctx);
+        self.sync_walk_cursor(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
         Self::window_resize_handles(ui);
         self.sharing_after_frame(&ctx);

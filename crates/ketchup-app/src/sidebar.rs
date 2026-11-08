@@ -148,7 +148,7 @@ mod guide_preference_tests {
         app.set_tool(Tool::Walk);
         app.walk.sitting = true;
         app.general_settings.section = settings::Section::Navigation;
-        app.general_settings.walk = walk::Settings { eye_height: 1.8, width: 0.6, depth: 0.4 };
+        app.general_settings.walk = walk::Settings { eye_height: 1.8, width: 0.6, depth: 0.4, ..Default::default() };
         app.persist_inspector_changes(&ctx, Some(&mut storage), false);
         assert!(storage.flushed);
         assert!(!app.project.modified);
@@ -163,6 +163,56 @@ mod guide_preference_tests {
         restored.replace_project(Document::default(), None, &ctx);
         assert!(restored.walk.person.is_none());
         assert_eq!(restored.general_settings.walk, app.general_settings.walk);
+    }
+
+    #[test]
+    fn walk_speed_defaults_and_saves_immediately_without_a_model_edit() {
+        let old: InspectorPreferences = serde_json::from_str(
+            r#"{"general":{"walk":{"eye_height":1.8,"width":0.6,"depth":0.4}}}"#,
+        ).unwrap();
+        assert_eq!(old.general.walk.speed_kmh, 6.);
+        assert_eq!(old.general.walk.eye_height, 1.8);
+        let ctx = egui::Context::default();
+        let mut app = KetchupApp::with_document(Document::default(), None, true);
+        let mut storage = Storage::default();
+        for speed in [2., 6., 9.5] {
+            app.general_settings.walk.speed_kmh = speed;
+            storage.flushed = false;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            assert!(app.dirty_since.is_none());
+            let mut restored = KetchupApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+            assert_eq!(restored.general_settings.walk.speed_kmh, speed);
+            restored.replace_project(Document::default(), None, &ctx);
+            assert_eq!(restored.general_settings.walk.speed_kmh, speed);
+        }
+    }
+
+    #[test]
+    fn walk_look_sensitivity_defaults_and_saves_without_a_model_edit() {
+        let old: InspectorPreferences = serde_json::from_str(
+            r#"{"general":{"walk":{"speed_kmh":9,"eye_height":1.8}}}"#,
+        ).unwrap();
+        assert_eq!(old.general.walk.look_sensitivity, 0.65);
+        assert_eq!(old.general.walk.speed_kmh, 9.);
+        let ctx = egui::Context::default();
+        let mut app = KetchupApp::with_document(Document::default(), None, true);
+        let mut storage = Storage::default();
+        for sensitivity in [0.25, 0.65, 1.5] {
+            app.general_settings.walk.look_sensitivity = sensitivity;
+            storage.flushed = false;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            assert!(app.dirty_since.is_none());
+            let mut restored = KetchupApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+            assert_eq!(restored.general_settings.walk.look_sensitivity, sensitivity);
+            restored.replace_project(Document::default(), None, &ctx);
+            assert_eq!(restored.general_settings.walk.look_sensitivity, sensitivity);
+        }
     }
 
     #[test]

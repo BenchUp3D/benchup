@@ -32,7 +32,7 @@ fn move_for(
 }
 
 #[test]
-fn walking_is_real_scale_frame_rate_independent_and_diagonals_are_normalized() {
+fn walking_at_six_kmh_is_frame_rate_independent_and_diagonals_are_normalized() {
     let settings = Settings::default();
     let world = World::new(floor(0.));
     let start = Person::place(&world, DVec3::ZERO, 0., &settings, false).unwrap();
@@ -41,12 +41,33 @@ fn walking_is_real_scale_frame_rate_independent_and_diagonals_are_normalized() {
         for _ in 0..fps {
             person.step(&world, &settings, DVec2::Y, false, false, 1. / fps as f64);
         }
-        assert!((person.feet.x + 1.35).abs() < 1e-8);
+        assert!((person.feet.x + 5. / 3.).abs() < 1e-8);
         assert!(person.feet.z.abs() < 1e-8);
     }
     let mut diagonal = start;
     move_for(&mut diagonal, &world, &settings, DVec2::ONE, 1.);
-    assert!((diagonal.feet.length() - 1.35).abs() < 1e-8);
+    assert!((diagonal.feet.length() - 5. / 3.).abs() < 1e-8);
+}
+
+#[test]
+fn configured_speed_controls_walking_and_crouching_at_different_frame_rates() {
+    let world = World::new(floor(0.));
+    for (speed_kmh, meters_per_second) in [(3., 5. / 6.), (6., 5. / 3.), (9., 2.5)] {
+        let settings = Settings {
+            speed_kmh,
+            ..Settings::default()
+        };
+        for fps in [30, 60, 120] {
+            for crouch in [false, true] {
+                let mut person = Person::place(&world, DVec3::ZERO, 0., &settings, false).unwrap();
+                for _ in 0..fps {
+                    person.step(&world, &settings, DVec2::Y, crouch, false, 1. / fps as f64);
+                }
+                let expected = meters_per_second * if crouch { 0.45 } else { 1. };
+                assert!((person.feet.x + expected).abs() < 1e-8);
+            }
+        }
+    }
 }
 
 #[test]
@@ -261,9 +282,9 @@ fn sitting_locks_translation_and_limits_head_yaw_to_180_degrees() {
     person.step(&world, &settings, DVec2::ONE, true, true, 1.);
     assert_eq!(person.feet, start);
     assert!(person.eye_height(&settings) < 1.);
-    person.turn(100., &world, &settings);
+    person.turn(100.);
     assert!((person.yaw - 0.7 - std::f64::consts::FRAC_PI_2).abs() < 1e-8);
-    person.turn(-200., &world, &settings);
+    person.turn(-200.);
     assert!((person.yaw - 0.7 + std::f64::consts::FRAC_PI_2).abs() < 1e-8);
     assert!(person.toggle_sit(&world, &settings));
     assert_eq!(person.eye_height(&settings), settings.eye_height);
@@ -322,7 +343,7 @@ fn walking_off_a_platform_falls_and_floor_holes_are_not_filled() {
 }
 
 #[test]
-fn body_turns_cannot_sweep_through_a_narrow_passage() {
+fn looking_near_walls_is_unrestricted_and_keeps_the_body_clear() {
     let settings = Settings {
         width: 0.8,
         depth: 0.2,
@@ -335,9 +356,47 @@ fn body_turns_cannot_sweep_through_a_narrow_passage() {
             .chain(wall_x(0.3, 0., 3.)),
     );
     let mut person = Person::place(&world, DVec3::ZERO, 0., &settings, false).unwrap();
-    person.turn(std::f64::consts::FRAC_PI_2, &world, &settings);
-    assert!(person.yaw > 0. && person.yaw < 1.);
+    let feet = person.feet;
+    person.turn(std::f64::consts::FRAC_PI_2);
+    assert_eq!(person.yaw, std::f64::consts::FRAC_PI_2);
+    assert_eq!(person.feet, feet);
     assert!(person.fits(&world, &settings));
+    // Movement can continue along the corridor while the collision footprint
+    // stays in the orientation that fits. Looking does not bypass the walls.
+    move_for(&mut person, &world, &settings, DVec2::Y, 2.);
+    assert!(person.feet.y < -2.);
+    assert!(person.fits(&world, &settings));
+    person.turn(std::f64::consts::TAU * 3.);
+    assert!(person.yaw > std::f64::consts::TAU * 3.);
+    assert!(person.fits(&world, &settings));
+}
+
+#[test]
+fn gait_is_subtle_tracks_travel_and_settles_when_still() {
+    let mut gait = physics::Gait::default();
+    let mut lowest = 0_f64;
+    for _ in 0..240 {
+        gait.update((5. / 3.) / 120., 1. / 120., true, false, false);
+        lowest = lowest.min(gait.offset);
+        assert!((-0.006..=0.).contains(&gait.offset));
+    }
+    assert!(lowest < -0.004);
+    for _ in 0..240 {
+        gait.update(0., 1. / 120., true, false, false);
+    }
+    assert_eq!(gait.offset, 0.);
+    // Held keys against an obstacle produce no bob without actual travel.
+    for _ in 0..120 {
+        gait.update(0., 1. / 120., true, false, false);
+    }
+    assert_eq!(gait.offset, 0.);
+    gait.update(0.2, 0.1, true, false, false);
+    assert!(gait.offset < 0.);
+    gait.update(0.1, 0.1, false, false, false);
+    assert_eq!(gait.offset, 0.);
+    gait.update(0.2, 0.1, true, false, false);
+    gait.update(0.1, 0.1, true, false, true);
+    assert_eq!(gait.offset, 0.);
 }
 
 #[test]
@@ -352,7 +411,7 @@ fn spatial_hierarchy_finds_local_walls_and_long_frame_stalls_are_bounded() {
     let world = World::new(triangles);
     let mut person = Person::place(&world, DVec3::ZERO, 0., &settings, false).unwrap();
     person.step(&world, &settings, DVec2::Y, false, false, 5.);
-    assert!((person.feet.x + 0.135).abs() < 1e-8);
+    assert!((person.feet.x + 1. / 6.).abs() < 1e-8);
     move_for(&mut person, &world, &settings, DVec2::Y, 3.);
     assert!(person.feet.x > -0.86 && person.feet.x < -0.8);
 }
@@ -364,6 +423,8 @@ fn invalid_settings_normalize_and_old_data_gets_defaults() {
         Settings::default()
     );
     let mut settings = Settings {
+        speed_kmh: f64::NAN,
+        look_sensitivity: f64::NAN,
         eye_height: f64::NAN,
         width: -1.,
         depth: f64::INFINITY,
@@ -372,4 +433,19 @@ fn invalid_settings_normalize_and_old_data_gets_defaults() {
     assert_eq!(settings.eye_height, Settings::default().eye_height);
     assert_eq!(settings.width, 0.2);
     assert_eq!(settings.depth, Settings::default().depth);
+    assert_eq!(settings.speed_kmh, 6.);
+    assert_eq!(settings.look_sensitivity, 0.65);
+    assert!(Settings::default().look_sensitivity <= 0.67);
+    settings.speed_kmh = -1.;
+    settings.normalize();
+    assert_eq!(settings.speed_kmh, 0.5);
+    settings.speed_kmh = 100.;
+    settings.normalize();
+    assert_eq!(settings.speed_kmh, 12.);
+    settings.look_sensitivity = -1.;
+    settings.normalize();
+    assert_eq!(settings.look_sensitivity, 0.1);
+    settings.look_sensitivity = 10.;
+    settings.normalize();
+    assert_eq!(settings.look_sensitivity, 2.);
 }

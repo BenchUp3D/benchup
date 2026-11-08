@@ -460,6 +460,20 @@ impl KetchupApp {
                 );
                 ui.separator();
                 ui.text_label(RichText::new("Walking person").strong());
+                inspector_field(ui, "walk_speed", "Walking speed", |ui| {
+                    ui.add(egui::DragValue::new(&mut self.general_settings.walk.speed_kmh)
+                        .speed(0.1).range(0.5..=12.).suffix(" km/h"))
+                });
+                inspector_field(ui, "walk_look_sensitivity", "Look sensitivity", |ui| {
+                    let mut percent = self.general_settings.walk.look_sensitivity * 100.;
+                    let response = ui.add(egui::DragValue::new(&mut percent)
+                        .speed(1.).range(10. ..=200.).suffix(" %"))
+                        .on_hover_text("Scales mouse look while walking. 100% matches Orbit sensitivity.");
+                    if response.changed() {
+                        self.general_settings.walk.look_sensitivity = percent / 100.;
+                    }
+                    response
+                });
                 ui.text_weak("Eye height is measured above the floor. Body width and depth determine obstacle clearance; allow 12 cm above the eyes for the head.");
                 let unit = self.doc.display.units.length;
                 for (key, label, value, min, max) in [
@@ -479,7 +493,7 @@ impl KetchupApp {
                         response
                     });
                 }
-                ui.text_weak("WASD / arrows: walk · Ctrl: crouch · Space: jump · Alt: sit / stand · Drag: look · Escape: exit");
+                ui.text_weak("WASD / arrows: walk · Shift: crouch · Space: jump · Alt: sit / stand · Move mouse: look · Escape: exit");
             }
             Section::Shortcuts => {
                 ui.text_weak(tr!("settings.click_a_shortcut_then_press_a_letter_or"));

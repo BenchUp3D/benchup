@@ -5,12 +5,13 @@ use ketchup_core::{DVec2, DVec3};
 pub(super) const STEP: f64 = 0.18;
 const SKIN: f64 = 0.002;
 const GRAVITY: f64 = 9.81;
-const WALK_SPEED: f64 = 1.35;
 const MAX_SLOPE_Z: f64 = std::f64::consts::FRAC_1_SQRT_2;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct Settings {
+    pub speed_kmh: f64,
+    pub look_sensitivity: f64,
     pub eye_height: f64,
     pub width: f64,
     pub depth: f64,
@@ -19,6 +20,8 @@ pub(crate) struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            speed_kmh: 6.,
+            look_sensitivity: 0.65,
             eye_height: 1.65,
             width: 0.5,
             depth: 0.3,
@@ -30,6 +33,13 @@ impl Settings {
     pub fn normalize(&mut self) {
         let defaults = Self::default();
         for (value, default, min, max) in [
+            (&mut self.speed_kmh, defaults.speed_kmh, 0.5, 12.),
+            (
+                &mut self.look_sensitivity,
+                defaults.look_sensitivity,
+                0.1,
+                2.,
+            ),
             (&mut self.eye_height, defaults.eye_height, 0.5, 2.3),
             (&mut self.width, defaults.width, 0.2, 1.2),
             (&mut self.depth, defaults.depth, 0.15, 1.2),
@@ -164,14 +174,18 @@ impl World {
         if self.nodes.is_empty() {
             return false;
         }
-        let mut pending = vec![0];
-        while let Some(index) = pending.pop() {
+        let mut pending = [0; usize::BITS as usize + 1];
+        let mut len = 1;
+        while len != 0 {
+            len -= 1;
+            let index = pending[len];
             let node = &self.nodes[index];
             if !node.bounds.overlaps(bounds) {
                 continue;
             }
             if let Some((a, b)) = node.children {
-                pending.extend([a, b]);
+                pending[len..len + 2].copy_from_slice(&[a, b]);
+                len += 2;
             } else {
                 for surface in &self.surfaces[node.start..node.end] {
                     if surface.bounds.overlaps(bounds) && visit(surface) {
@@ -229,38 +243,42 @@ impl World {
             if !surface.walkable {
                 return false;
             }
-            let mut polygon: Vec<_> = surface
-                .vertices
-                .iter()
-                .map(|p| {
-                    let delta = *p - feet;
-                    DVec3::new(delta.dot(right), delta.dot(forward), p.z)
-                })
-                .collect();
+            // A triangle clipped to a rectangle has at most seven vertices.
+            // Keep both buffers on the stack: this query runs every footstep.
+            let mut polygon = [DVec3::ZERO; 12];
+            for (out, p) in polygon.iter_mut().zip(surface.vertices) {
+                let delta = p - feet;
+                *out = DVec3::new(delta.dot(right), delta.dot(forward), p.z);
+            }
+            let mut len = 3;
             for (axis, sign, limit) in [
                 (0, 1., settings.width * 0.5 - SKIN),
                 (0, -1., settings.width * 0.5 - SKIN),
                 (1, 1., settings.depth * 0.5 - SKIN),
                 (1, -1., settings.depth * 0.5 - SKIN),
             ] {
-                let mut clipped = Vec::new();
-                if let Some(&last) = polygon.last() {
-                    let mut a = last;
-                    for &b in &polygon {
+                let mut clipped = [DVec3::ZERO; 12];
+                let mut count = 0;
+                if len != 0 {
+                    let mut a = polygon[len - 1];
+                    for &b in &polygon[..len] {
                         let da = a[axis] * sign - limit;
                         let db = b[axis] * sign - limit;
                         if (da <= 0.) != (db <= 0.) {
-                            clipped.push(a.lerp(b, da / (da - db)));
+                            clipped[count] = a.lerp(b, da / (da - db));
+                            count += 1;
                         }
                         if db <= 0. {
-                            clipped.push(b);
+                            clipped[count] = b;
+                            count += 1;
                         }
                         a = b;
                     }
                 }
                 polygon = clipped;
+                len = count;
             }
-            if let Some(z) = polygon.iter().map(|p| p.z).reduce(f64::max)
+            if let Some(z) = polygon[..len].iter().map(|p| p.z).reduce(f64::max)
                 && z >= low - 1e-8
                 && z <= high + 1e-8
             {
@@ -308,6 +326,7 @@ fn triangle_box(triangle: [DVec3; 3], half: DVec3) -> bool {
 pub(crate) struct Person {
     pub feet: DVec3,
     pub yaw: f64,
+    body_yaw: f64,
     pub sitting: bool,
     pub crouched: bool,
     seat_yaw: f64,
@@ -336,6 +355,7 @@ impl Person {
             .then_some(Self {
                 feet,
                 yaw,
+                body_yaw: yaw,
                 seat_yaw: yaw,
                 sitting,
                 crouched: false,
@@ -352,36 +372,19 @@ impl Person {
     }
 
     pub fn fits(&self, world: &World, settings: &Settings) -> bool {
-        world.clear(
-            self.feet,
-            if self.sitting {
-                self.seat_yaw
-            } else {
-                self.yaw
-            },
-            settings,
-            self.height(settings),
-        )
+        world.clear(self.feet, self.body_yaw, settings, self.height(settings))
     }
 
-    pub fn turn(&mut self, delta: f64, world: &World, settings: &Settings) {
+    pub fn turn(&mut self, delta: f64) {
         if self.sitting {
             self.yaw = (self.yaw + delta).clamp(
                 self.seat_yaw - std::f64::consts::FRAC_PI_2,
                 self.seat_yaw + std::f64::consts::FRAC_PI_2,
             );
         } else {
-            // Subdivide rotation as well as translation so an elongated body
-            // cannot sweep through a wall when the pointer moves abruptly.
-            let delta = delta.clamp(-std::f64::consts::PI, std::f64::consts::PI);
-            let steps = (delta.abs() / 0.03).ceil().max(1.) as usize;
-            for _ in 0..steps {
-                let yaw = self.yaw + delta / steps as f64;
-                if !world.clear(self.feet, yaw, settings, self.height(settings)) {
-                    break;
-                }
-                self.yaw = yaw;
-            }
+            // Looking never rotates the collision footprint into a wall. The
+            // body follows during movement when its new orientation fits.
+            self.yaw += delta;
         }
     }
 
@@ -392,7 +395,7 @@ impl Person {
         if self.sitting {
             if !world.clear(
                 self.feet,
-                self.yaw,
+                self.body_yaw,
                 settings,
                 settings.eye(false, false) + 0.12,
             ) {
@@ -421,17 +424,27 @@ impl Person {
         }
         if crouch {
             self.crouched = true;
-        } else if world.clear(
-            self.feet,
-            self.yaw,
-            settings,
-            settings.eye(false, false) + 0.12,
-        ) {
+        } else if self.crouched
+            && world.clear(
+                self.feet,
+                self.body_yaw,
+                settings,
+                settings.eye(false, false) + 0.12,
+            )
+        {
             self.crouched = false;
         }
         if jump && self.grounded && !self.crouched {
             self.velocity_z = (2. * GRAVITY * 0.25).sqrt();
             self.grounded = false;
+        }
+        if direction == DVec2::ZERO && self.grounded {
+            return;
+        }
+        if direction != DVec2::ZERO
+            && world.clear(self.feet, self.yaw, settings, self.height(settings))
+        {
+            self.body_yaw = self.yaw;
         }
         let dt = dt.clamp(0., 0.1);
         // Small bounded steps prevent tunnelling through thin faces, independent
@@ -441,7 +454,7 @@ impl Person {
         let (right, forward) = basis(self.yaw);
         let direction = direction / direction.length().max(1.);
         let delta = (right * direction.x + forward * direction.y)
-            * WALK_SPEED
+            * (settings.speed_kmh / 3.6)
             * if self.crouched { 0.45 } else { 1. }
             * dt;
         for _ in 0..count {
@@ -454,7 +467,7 @@ impl Person {
             if self.velocity_z <= 0.
                 && let Some(z) = world.floor(
                     self.feet,
-                    self.yaw,
+                    self.body_yaw,
                     settings,
                     self.feet.z + fall - SKIN,
                     self.feet.z + SKIN,
@@ -465,7 +478,7 @@ impl Person {
                 self.grounded = true;
             } else {
                 let next = self.feet + DVec3::Z * fall;
-                if world.clear(next, self.yaw, settings, self.height(settings)) {
+                if world.clear(next, self.body_yaw, settings, self.height(settings)) {
                     self.feet = next;
                     self.grounded = false;
                 } else {
@@ -483,7 +496,7 @@ impl Person {
         if self.grounded && self.velocity_z <= 0. {
             if let Some(z) = world.floor(
                 next,
-                self.yaw,
+                self.body_yaw,
                 settings,
                 self.feet.z - STEP,
                 self.feet.z + STEP,
@@ -494,7 +507,7 @@ impl Person {
                 if z > self.feet.z
                     && !world.clear(
                         DVec3::new(self.feet.x, self.feet.y, z),
-                        self.yaw,
+                        self.body_yaw,
                         settings,
                         self.height(settings),
                     )
@@ -503,11 +516,49 @@ impl Person {
                 }
             }
         }
-        if world.clear(next, self.yaw, settings, self.height(settings)) {
+        if world.clear(next, self.body_yaw, settings, self.height(settings)) {
             self.feet = next;
             true
         } else {
             false
+        }
+    }
+}
+
+/// A small downward eye dip tied to actual footsteps, never to held keys.
+/// It does not move the body collider or raise the head into low ceilings.
+#[derive(Default)]
+pub(super) struct Gait {
+    phase: f64,
+    pub offset: f64,
+}
+
+impl Gait {
+    pub fn update(
+        &mut self,
+        distance: f64,
+        dt: f64,
+        grounded: bool,
+        crouched: bool,
+        sitting: bool,
+    ) {
+        if sitting || !grounded {
+            self.phase = 0.;
+            self.offset = 0.;
+            return;
+        }
+        let moving = distance > 1e-6;
+        let target = if moving {
+            self.phase =
+                (self.phase + distance / 0.65 * std::f64::consts::TAU) % std::f64::consts::TAU;
+            -(if crouched { 0.001 } else { 0.003 }) * (1. - self.phase.cos())
+        } else {
+            0.
+        };
+        self.offset += (target - self.offset) * (1. - (-dt.max(0.) * 16.).exp());
+        if !moving && self.offset.abs() < 1e-5 {
+            self.offset = 0.;
+            self.phase = 0.;
         }
     }
 }

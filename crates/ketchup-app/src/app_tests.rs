@@ -2,6 +2,198 @@ use super::*;
 use crate::test_ui::ContextExt as _;
 use eframe::App;
 
+fn walk_fixture() -> Harness {
+    let mut h = Harness::new();
+    properties_outline(&mut h.app.doc.model, &[
+        DVec3::new(-10., -10., 0.), DVec3::new(10., -10., 0.),
+        DVec3::new(10., 10., 0.), DVec3::new(-10., 10., 0.),
+    ]);
+    h.app.doc.camera.set_standard_view(ketchup_core::StandardView::Top);
+    h.app.fit(&h.ctx);
+    h.app.set_tool(Tool::Walk);
+    h.frame(vec![], egui::Modifiers::NONE);
+    h.click(h.at(DVec3::ZERO));
+    h
+}
+
+#[test]
+fn shift_crouches_ctrl_does_not_and_tab_still_toggles_while_crouching() {
+    let mut h = walk_fixture();
+    let standing = h.app.doc.camera.eye();
+    h.frame(vec![], egui::Modifiers::CTRL);
+    assert!(!h.app.walk.person.as_ref().unwrap().crouched);
+    assert!(h.app.doc.camera.eye().abs_diff_eq(standing, 1e-8));
+    h.frame(vec![], egui::Modifiers::SHIFT);
+    assert!(h.app.walk.person.as_ref().unwrap().crouched);
+    assert!((h.app.doc.camera.eye().z - h.app.general_settings.walk.eye_height * 0.6).abs() < 1e-8);
+    let visible = h.app.inspector;
+    h.frame(vec![egui::Event::Key { key: Key::Tab, physical_key: None,
+        pressed: true, repeat: false, modifiers: egui::Modifiers::SHIFT }], egui::Modifiers::SHIFT);
+    assert_eq!(h.app.inspector, !visible);
+    assert!(h.app.walk.person.as_ref().unwrap().crouched);
+    assert_eq!(h.app.tool, Tool::Walk);
+    h.frame(vec![], egui::Modifiers::NONE);
+    assert!(!h.app.walk.person.as_ref().unwrap().crouched);
+    assert!(h.app.doc.camera.eye().abs_diff_eq(standing, 1e-8));
+}
+
+#[test]
+fn tab_toggles_sidebar_while_walking_and_sitting_without_changing_camera() {
+    let mut h = walk_fixture();
+    for sitting in [false, true] {
+        if sitting { h.frame(vec![], egui::Modifiers::ALT); }
+        let camera = h.app.doc.camera.clone();
+        let visible = h.app.inspector;
+        h.key(Key::Tab);
+        assert_eq!(h.app.inspector, !visible);
+        assert_eq!(h.app.tool, Tool::Walk);
+        assert_eq!(h.app.doc.camera, camera);
+        assert_eq!(h.app.walk.person.as_ref().unwrap().sitting, sitting);
+        h.key(Key::Tab);
+        assert_eq!(h.app.inspector, visible);
+        assert_eq!(h.app.doc.camera, camera);
+    }
+    assert!(h.app.doc.history.is_empty());
+}
+
+#[test]
+fn walk_camera_updates_reuse_collision_and_document_geometry() {
+    let mut h = walk_fixture();
+    let builds = h.app.walk.world_builds;
+    let revision = h.app.document_model.revision();
+    h.app.general_settings.orbit_speed = 2.;
+    let yaw = h.app.doc.camera.yaw;
+    h.frame(vec![egui::Event::MouseMoved(egui::vec2(10., 0.))], egui::Modifiers::NONE);
+    assert!((h.app.doc.camera.yaw - yaw + 0.091).abs() < 1e-8);
+    for _ in 0..20 {
+        h.frame(vec![egui::Event::MouseMoved(egui::vec2(3., 1.))], egui::Modifiers::NONE);
+        assert_eq!(h.app.walk.world_builds, builds);
+        assert_eq!(h.app.document_model.revision(), revision);
+        assert!(!h.app.document_model_dirty);
+    }
+    h.key(Key::W);
+    assert_eq!(h.app.walk.world_builds, builds);
+    assert_eq!(h.app.document_model.revision(), revision);
+    // A real model change must still invalidate the collision world.
+    h.app.doc.model.add_edge(DVec3::Z * 3., DVec3::new(1., 0., 3.)).unwrap();
+    h.frame(vec![], egui::Modifiers::NONE);
+    assert!(h.app.walk.world_builds > builds);
+    assert!(h.app.walk.person.is_none());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn walking_look_sensitivity_applies_to_both_axes_without_repositioning() {
+    let mut h = walk_fixture();
+    for (sensitivity, yaw_delta, pitch_delta) in [(0.25, 0.0175, 0.007), (0.65, 0.0455, 0.0182), (1.5, 0.105, 0.042)] {
+        let before = h.app.doc.camera.clone();
+        h.app.general_settings.walk.look_sensitivity = sensitivity;
+        h.frame(vec![egui::Event::MouseMoved(egui::vec2(10., 4.))], egui::Modifiers::NONE);
+        assert!((h.app.doc.camera.yaw - before.yaw + yaw_delta).abs() < 1e-8);
+        assert!((h.app.doc.camera.pitch - before.pitch - pitch_delta).abs() < 1e-8);
+        assert!(h.app.doc.camera.eye().abs_diff_eq(before.eye(), 1e-8));
+        assert_eq!(h.app.tool, Tool::Walk);
+        assert!(h.app.walk.person.is_some());
+    }
+}
+
+#[test]
+fn walking_has_a_small_eye_bob_that_does_not_move_the_feet_and_settles_at_rest() {
+    let mut h = walk_fixture();
+    let event = |pressed| egui::Event::Key { key: Key::W, physical_key: None,
+        pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    h.frame(vec![event(true)], egui::Modifiers::NONE);
+    let mut lowest = 0_f64;
+    for _ in 0..60 {
+        h.frame(vec![], egui::Modifiers::NONE);
+        let person = h.app.walk.person.as_ref().unwrap();
+        let bob = h.app.doc.camera.eye().z - person.feet.z - h.app.general_settings.walk.eye_height;
+        lowest = lowest.min(bob);
+        assert!((-0.006000001..=1e-8).contains(&bob));
+        assert_eq!(person.feet.z, 0.);
+    }
+    assert!(lowest < -0.002);
+    h.frame(vec![event(false)], egui::Modifiers::NONE);
+    let feet = h.app.walk.person.as_ref().unwrap().feet;
+    for _ in 0..120 { h.frame(vec![], egui::Modifiers::NONE); }
+    assert_eq!(h.app.walk.person.as_ref().unwrap().feet, feet);
+    assert!((h.app.doc.camera.eye().z - h.app.general_settings.walk.eye_height).abs() < 1e-8);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn walk_mouse_look_needs_no_button_uses_raw_motion_and_releases_capture() {
+    let mut h = Harness::new();
+    properties_outline(&mut h.app.doc.model, &[
+        DVec3::new(-10., -10., 0.), DVec3::new(10., -10., 0.),
+        DVec3::new(10., 10., 0.), DVec3::new(-10., 10., 0.),
+    ]);
+    h.app.doc.camera.set_standard_view(ketchup_core::StandardView::Top);
+    h.app.fit(&h.ctx);
+    let original = h.app.doc.camera.clone();
+    h.app.set_tool(Tool::Walk);
+    h.frame(vec![], egui::Modifiers::NONE);
+    let pos = h.at(DVec3::ZERO);
+    let placed = h.click(pos);
+    assert!(window_commands(&placed).contains(&egui::ViewportCommand::CursorVisible(false)));
+    let eye = h.app.doc.camera.eye();
+    let yaw = h.app.doc.camera.yaw;
+    h.frame(vec![egui::Event::PointerMoved(pos + egui::vec2(10., -5.))], egui::Modifiers::NONE);
+    assert!(!h.ctx.input(|i| i.pointer.any_down()));
+    assert!((h.app.doc.camera.yaw - yaw + 0.0455).abs() < 1e-8);
+    assert!((h.app.doc.camera.pitch + 0.02275).abs() < 1e-8);
+    assert!(h.app.doc.camera.eye().abs_diff_eq(eye, 1e-8));
+    let yaw = h.app.doc.camera.yaw;
+    let pitch = h.app.doc.camera.pitch;
+    // Absolute and raw events often arrive together. Count raw motion once.
+    h.frame(vec![egui::Event::PointerMoved(pos + egui::vec2(300., 100.)),
+        egui::Event::MouseMoved(egui::vec2(12., 6.))], egui::Modifiers::NONE);
+    assert!((h.app.doc.camera.yaw - yaw + 0.0546).abs() < 1e-8);
+    assert!((h.app.doc.camera.pitch - pitch - 0.0273).abs() < 1e-8);
+    let yaw = h.app.doc.camera.yaw;
+    h.frame(vec![egui::Event::MouseMoved(egui::vec2(12., 0.))], egui::Modifiers::NONE);
+    assert!((h.app.doc.camera.yaw - yaw + 0.0546).abs() < 1e-8);
+    let before_dialog = h.app.doc.camera.clone();
+    h.app.settings_open = true;
+    let paused = h.frame(vec![egui::Event::MouseMoved(egui::vec2(100., 100.))], egui::Modifiers::NONE);
+    assert_eq!(h.app.doc.camera, before_dialog);
+    assert!(window_commands(&paused).contains(&egui::ViewportCommand::CursorVisible(true)));
+    h.app.settings_open = false;
+    h.frame(vec![], egui::Modifiers::NONE);
+    let exited = h.frame(vec![egui::Event::Key {
+        key: Key::Escape, physical_key: None, pressed: true, repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    }], egui::Modifiers::NONE);
+    assert_eq!(h.app.doc.camera, original);
+    assert_eq!(h.app.tool, Tool::Select);
+    assert!(window_commands(&exited).contains(&egui::ViewportCommand::CursorGrab(egui::CursorGrab::None)));
+    assert!(window_commands(&exited).contains(&egui::ViewportCommand::CursorVisible(true)));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn seated_mouse_look_without_buttons_keeps_eye_fixed_and_yaw_within_180_degrees() {
+    let mut h = Harness::new();
+    properties_outline(&mut h.app.doc.model, &[
+        DVec3::new(-10., -10., 0.), DVec3::new(10., -10., 0.),
+        DVec3::new(10., 10., 0.), DVec3::new(-10., 10., 0.),
+    ]);
+    h.app.doc.camera.set_standard_view(ketchup_core::StandardView::Top);
+    h.app.fit(&h.ctx);
+    h.app.set_tool(Tool::Walk);
+    h.frame(vec![], egui::Modifiers::NONE);
+    h.click(h.at(DVec3::ZERO));
+    h.frame(vec![], egui::Modifiers::ALT);
+    let eye = h.app.doc.camera.eye();
+    let center = h.app.doc.camera.yaw;
+    h.frame(vec![egui::Event::MouseMoved(egui::vec2(1000., 0.))], egui::Modifiers::NONE);
+    assert!((h.app.doc.camera.yaw - center + std::f64::consts::FRAC_PI_2).abs() < 1e-8);
+    assert!(h.app.doc.camera.eye().abs_diff_eq(eye, 1e-8));
+    h.frame(vec![egui::Event::MouseMoved(egui::vec2(-2000., 0.))], egui::Modifiers::NONE);
+    assert!((h.app.doc.camera.yaw - center - std::f64::consts::FRAC_PI_2).abs() < 1e-8);
+    assert!(h.app.doc.camera.eye().abs_diff_eq(eye, 1e-8));
+}
+
 #[test]
 fn walk_button_places_eye_on_a_face_and_movement_keys_do_not_edit() {
     let mut h = Harness::new();

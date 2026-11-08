@@ -81,6 +81,140 @@
           }, { capture: true, passive: false });
         }
         window.addEventListener("blur", () => modelTouches.clear());
+        // Never change the user's window mode for Walk. Keyboard Lock is only
+        // effective in existing API fullscreen; ordinary tabs retain browser-
+        // reserved shortcuts such as Ctrl+W. Pointer Lock works in a window.
+        let captureVersion = 0;
+        const isWalking = () => canvas.dataset.walkActive === "true";
+        const captureState = () => canvas.dataset.walkKeyboardCapture || "idle";
+        const setCaptureState = state => { canvas.dataset.walkKeyboardCapture = state; };
+        let pointerVersion = 0;
+        const pointerState = () => canvas.dataset.walkPointerCapture || "idle";
+        const clearMouseMotion = () => {
+          canvas.dataset.walkLookX = "0";
+          canvas.dataset.walkLookY = "0";
+        };
+        const releaseWalkPointer = () => {
+          ++pointerVersion;
+          canvas.dataset.walkPointerCapture = "idle";
+          clearMouseMotion();
+          if (document.pointerLockElement === canvas) document.exitPointerLock();
+        };
+        const releaseWalkKeyboard = () => {
+          ++captureVersion;
+          releaseWalkPointer();
+          navigator.keyboard?.unlock?.();
+          setCaptureState("idle");
+        };
+        const exitWalkFromBrowser = () => {
+          if (isWalking()) {
+            canvas.dataset.walkExitRequested = "true";
+            // Wake eframe even when the browser consumed the real Escape key.
+            for (const type of ["keydown", "keyup"]) {
+              canvas.dispatchEvent(new KeyboardEvent(type, {
+                key: "Escape", code: "Escape", bubbles: true,
+              }));
+            }
+          }
+          releaseWalkKeyboard();
+        };
+        const captureWalkPointer = async () => {
+          if (!isWalking() || ["pending", "locked"].includes(pointerState())) return;
+          if (!canvas.requestPointerLock) {
+            canvas.dataset.walkPointerCapture = "unavailable";
+            return;
+          }
+          const version = ++pointerVersion;
+          canvas.dataset.walkPointerCapture = "pending";
+          clearMouseMotion();
+          try {
+            // Older browsers return void and report success through events.
+            const result = canvas.requestPointerLock();
+            if (result?.then) await result;
+            if (version !== pointerVersion || !isWalking()) {
+              if (!isWalking() || canvas.dataset.walkPlaced !== "true"
+                  || canvas.dataset.walkInputEnabled !== "true") releaseWalkPointer();
+              return;
+            }
+            if (document.pointerLockElement === canvas) {
+              canvas.dataset.walkPointerCapture = "locked";
+              if (canvas.dataset.walkInputEnabled === "true") canvas.focus({ preventScroll: true });
+            }
+          } catch {
+            if (version === pointerVersion && isWalking()) canvas.dataset.walkPointerCapture = "unavailable";
+          }
+        };
+        document.addEventListener("pointerlockchange", () => {
+          if (document.pointerLockElement === canvas) {
+            if (isWalking() && (pointerState() === "pending" || canvas.dataset.walkPlaced === "true")) {
+              clearMouseMotion();
+              canvas.dataset.walkPointerCapture = "locked";
+            } else { releaseWalkPointer(); }
+          } else if (pointerState() === "locked") {
+            // Browser Escape may unlock the pointer without sending Escape to
+            // eframe. Exit Walk and restore the pre-walk camera in that case.
+            exitWalkFromBrowser();
+          }
+        });
+        document.addEventListener("pointerlockerror", () => {
+          if (pointerState() === "pending") canvas.dataset.walkPointerCapture = "unavailable";
+        });
+        document.addEventListener("mousemove", event => {
+          if (document.pointerLockElement !== canvas || !isWalking()
+              || canvas.dataset.walkPlaced !== "true" || canvas.dataset.walkInputEnabled !== "true") return;
+          for (const [key, movement] of [["walkLookX", event.movementX], ["walkLookY", event.movementY]]) {
+            if (Number.isFinite(movement)) {
+              canvas.dataset[key] = String((Number(canvas.dataset[key]) || 0) + movement);
+            }
+          }
+        }, { capture: true });
+        const captureWalkKeyboard = async () => {
+          if (!isWalking() || ["pending", "locked"].includes(captureState())) return;
+          if (!navigator.keyboard?.lock || !document.fullscreenElement) {
+            setCaptureState("unavailable");
+            return;
+          }
+          const version = ++captureVersion;
+          setCaptureState("pending");
+          const cancelled = () => version !== captureVersion || !isWalking();
+          const cleanCancelled = () => {
+            if (!isWalking()) {
+              navigator.keyboard.unlock();
+            }
+          };
+          try {
+            // Leave Escape unlocked so the browser's normal exit still works.
+            await navigator.keyboard.lock(["KeyW", "KeyA", "KeyS", "KeyD"]);
+            if (cancelled()) { cleanCancelled(); return; }
+            if (canvas.dataset.walkInputEnabled === "true") canvas.focus({ preventScroll: true });
+            setCaptureState("locked");
+          } catch {
+            if (!cancelled()) setCaptureState("unavailable");
+          }
+        };
+        canvas.addEventListener("pointerup", event => {
+          if (event.button === 0 && isWalking()
+              && canvas.dataset.walkInputEnabled === "true" && inModelPane(event)) {
+            void captureWalkPointer();
+            void captureWalkKeyboard();
+          }
+        }, { capture: true });
+        new MutationObserver(() => {
+          if (!isWalking()) releaseWalkKeyboard();
+          else if (canvas.dataset.walkPlaced !== "true"
+              || (canvas.dataset.walkInputEnabled !== "true" && pointerState() === "locked")) releaseWalkPointer();
+        }).observe(canvas, { attributes: true, attributeFilter: ["data-walk-active", "data-walk-input-enabled", "data-walk-placed"] });
+        document.addEventListener("fullscreenchange", () => {
+          if (!document.fullscreenElement && captureState() === "locked") {
+            ++captureVersion;
+            navigator.keyboard?.unlock?.();
+            setCaptureState("unavailable");
+          }
+        });
+        window.addEventListener("blur", () => {
+          if (captureState() === "locked" || pointerState() === "locked") exitWalkFromBrowser();
+        });
+        window.addEventListener("pagehide", releaseWalkKeyboard);
         // Keep these in sync with KetchupApp::keyboard in app.rs. eframe only
         // cancels a subset of browser shortcuts, even with should_prevent_default.
         const commandKeys = new Set(["a", "f", "n", "o", "s", "y", "z"]);
@@ -98,10 +232,10 @@
             key = event.code.slice(3).toLowerCase();
           }
           const command = event.ctrlKey || event.metaKey;
-          // Crouch combines Ctrl with movement. Keep those combinations in
-          // the canvas while walking instead of invoking browser commands.
+          // Keep Walk modifiers and movement in the canvas, including Shift
+          // for crouching, while still delivering every event to eframe.
           const walking = event.target === canvas && canvas.dataset.walkActive === "true";
-          const walkKey = ["w", "a", "s", "d", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Alt", "Control"].includes(key);
+          const walkKey = ["w", "a", "s", "d", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Alt", "Shift", "Control"].includes(key);
           // Do not cancel C/X/V: their default action delivers the native
           // clipboard events consumed (and cancelled) by eframe.
           if ((walking && walkKey) || (command && commandKeys.has(key))
