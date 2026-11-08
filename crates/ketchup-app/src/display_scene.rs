@@ -4,6 +4,13 @@ use ketchup_core::DisplaySettings;
 /// Resolve scene appearance once for interactive and offscreen viewports.
 pub(super) fn effective_display(display: &DisplaySettings, model: &Model, dark: bool) -> DisplaySettings {
     let mut effective = crate::environment::for_theme(display, dark);
+    // Keep the user's overlay preference, but do not route an unassigned
+    // imported scene through the precision renderer for an empty overlay.
+    effective.grain_direction = effective.grain_direction
+        && model
+            .objects
+            .values()
+            .any(|object| object.grain_axis().is_some());
     if display.group_emphasis && model.edit_context.is_some_and(|id| model.contains_entity(&id)) {
         if effective.face_style == ketchup_core::FaceStyle::Wireframe {
             effective.face_style = ketchup_core::FaceStyle::Shaded;

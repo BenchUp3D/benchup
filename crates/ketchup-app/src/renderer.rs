@@ -4,6 +4,10 @@ use ketchup_core::{Camera, CameraView, DVec2, DVec3, Face, Model};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
+#[path = "resident_scene.rs"]
+mod resident;
+pub(crate) use resident::supported as resident_supported;
+
 /// Shared reference geometry fade, measured along the camera's forward axis.
 pub(crate) struct ReferenceFade {
     eye: DVec3,
@@ -74,8 +78,9 @@ impl EdgeSurface {
 // large document separately for each camera.
 #[derive(Default)]
 pub struct ModelSnapshot {
-    model: Option<Model>,
+    model: Option<Arc<Model>>,
     revision: u64,
+    source_revision: Option<u64>,
 }
 
 pub(crate) struct GroupMarker {
@@ -108,9 +113,37 @@ impl GroupMarkerCache {
 }
 
 impl ModelSnapshot {
+    pub(crate) fn update_scene(&mut self, model: &Model) -> u64 {
+        self.source_revision = None;
+        if self
+            .model
+            .as_deref()
+            .is_none_or(|previous| !previous.same_scene(model))
+        {
+            self.model = Some(Arc::new(model.clone()));
+            self.revision = self.revision.wrapping_add(1);
+        }
+        self.revision
+    }
+    pub(crate) fn shared(&self) -> Arc<Model> {
+        Arc::clone(self.model.as_ref().unwrap())
+    }
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+    /// A caller that already compared the source document can share that
+    /// revision with a derived snapshot, instead of scanning it again.
+    pub(crate) fn update_from_source(&mut self, model: &Model, source_revision: u64) -> u64 {
+        if self.source_revision != Some(source_revision) {
+            self.update(model);
+            self.source_revision = Some(source_revision);
+        }
+        self.revision
+    }
     pub fn update(&mut self, model: &Model) -> u64 {
-        if self.model.as_ref() != Some(model) {
-            self.model = Some(model.clone());
+        self.source_revision = None;
+        if self.model.as_deref() != Some(model) {
+            self.model = Some(Arc::new(model.clone()));
             self.revision = self.revision.wrapping_add(1);
         }
         self.revision
@@ -122,6 +155,7 @@ pub struct SceneKey {
     pub joinery_members: Option<[u64; 2]>,
     pub joint_preview: Option<([u64; 2], ketchup_core::joinery::JointSettings)>,
     pub model_revision: u64,
+    pub edit_context: Option<u64>,
     pub camera: Camera,
     pub size: DVec2,
     pub pixels_per_point: f32,
@@ -135,6 +169,7 @@ pub struct SceneKey {
 
 #[derive(Default)]
 pub struct SceneCache {
+    resident: resident::Cache,
     annotations: Option<(Rect, [usize; 2], Vec<egui::Shape>)>,
     joint_surfaces: JointSurfaceCache,
     occlusion: Occlusion,
@@ -1500,7 +1535,7 @@ impl Mesh {
     /// when model section cuts and fog are enabled.
     pub fn axis_line(&mut self, camera: &Camera, a: DVec3, b: DVec3, width: f64, color: Color32) {
         let fade = ReferenceFade::new(camera);
-        let inverse = camera.matrix(self.size).inverse();
+        let inverse = self.view.matrix().inverse();
         let depths = [fade.depth(a), fade.depth(b)];
         let mut cuts = vec![0., 1.];
         // Match the grid's short depth bands, anchoring full opacity at origin
@@ -3123,6 +3158,7 @@ pub(crate) fn install_resources(
         mask_shadow,
         shadow_faces,
     });
+    resident::install(device, format, renderer);
 }
 #[derive(Clone, Copy, PartialEq)]
 enum PipelinePass {
@@ -3491,15 +3527,18 @@ impl SceneCallback {
 
 /// Keep triangulation independent of camera, selection, hover, and materials.
 /// Compare source geometry as Model's collections also allow direct edits.
-#[derive(Default)]
+#[derive(Default,Clone)]
 pub struct FaceCache {
+    source_revision: Option<u64>,
     faces: BTreeMap<u64, CachedFace>,
     source_vertices: Vec<(u64, DVec3)>,
     adjacent_faces: BTreeMap<(u64, u64), Vec<u64>>,
+    max_edge_faces: usize,
     revision: u64,
     #[cfg(test)]
     topology_builds: usize,
 }
+#[derive(Clone)]
 pub struct CachedFace {
     boundary: Face,
     positions: Vec<DVec3>,
@@ -3512,7 +3551,16 @@ pub struct CachedFace {
     rings: Vec<Vec<DVec2>>,
 }
 impl FaceCache {
+    /// Picking also tracks loose edges, which need not change face geometry.
+    pub(crate) fn source_revision(&self) -> Option<u64> { self.source_revision }
+    pub(crate) fn update_for_revision(&mut self, model: &Model, revision: u64) {
+        if self.source_revision != Some(revision) {
+            self.update(model);
+            self.source_revision = Some(revision);
+        }
+    }
     pub fn update(&mut self, model: &Model) {
+        self.source_revision = None;
         // Hover and orbit do not change topology. Validate in collection
         // order rather than looking up every face endpoint in the model.
         let same_topology = self.faces.len() == model.faces.len()
@@ -3543,6 +3591,7 @@ impl FaceCache {
                     }
                 }
             }
+            self.max_edge_faces = self.adjacent_faces.values().map(Vec::len).max().unwrap_or(0);
             #[cfg(test)]
             {
                 self.topology_builds += 1;
@@ -7038,21 +7087,30 @@ impl EntityState {
 }
 
 /// Moving vertices/instance frames does not change hierarchy or inherited state.
-#[derive(Default)]
+#[derive(Default,Clone)]
 pub struct EntityCache {
+    source_revision: Option<u64>,
     objects: Vec<(u64, std::collections::BTreeSet<u64>)>,
     hidden: std::collections::BTreeSet<u64>,
     locked: std::collections::BTreeSet<u64>,
     context: Option<u64>,
     states: BTreeMap<u64, EntityState>,
+    parents: BTreeMap<u64,u64>,
+    scoped_objects: BTreeMap<u64,Option<u64>>,
     tags: BTreeMap<u64, ketchup_core::Tag>,
     entity_tags: BTreeMap<u64, u64>,
     revision: u64,
 }
 impl EntityCache {
+    pub(crate) fn update_for_revision(&mut self, model: &Model, revision: u64) {
+        if self.source_revision != Some(revision) || self.context != model.edit_context {
+            self.update(model);
+            self.source_revision = Some(revision);
+        }
+    }
     pub fn update(&mut self, model: &Model) {
-        if self.context == model.edit_context
-            && self.hidden == model.hidden
+        self.source_revision = None;
+        if self.hidden == model.hidden
             && self.locked == model.locked
             && self.tags == model.tags
             && self.entity_tags == model.entity_tags
@@ -7063,6 +7121,11 @@ impl EntityCache {
                 .zip(&model.objects)
                 .all(|((id, entities), (key, object))| id == key && *entities == object.entities)
         {
+            if self.context != model.edit_context {
+                self.context = model.edit_context;
+                self.revision = self.revision.wrapping_add(1);
+                self.resolve_scope();
+            }
             return;
         }
         self.revision = self.revision.wrapping_add(1);
@@ -7112,17 +7175,13 @@ impl EntityCache {
                 }
                 locked |= self.locked.contains(&current);
                 let parent = parents.get(&current).copied();
-                if context.is_none() && Some(current) != self.context && parent == self.context {
+                if parent.is_none() {
                     context = Some(current);
                 }
                 let Some(parent) = parent else {
                     break;
                 };
                 current = parent;
-            }
-            // The editing context and its ancestors are never selectable.
-            if Some(*id) == self.context {
-                context = None;
             }
             self.states.insert(
                 *id,
@@ -7138,12 +7197,44 @@ impl EntityCache {
                 },
             );
         }
+        self.parents = parents;
+        self.resolve_scope();
+    }
+    pub(crate) fn in_set(&self, mut id: u64, roots: &std::collections::BTreeSet<u64>) -> bool {
+        loop {
+            if roots.contains(&id) {
+                return true;
+            }
+            let Some(&parent) = self.parents.get(&id) else {
+                return false;
+            };
+            id = parent;
+        }
+    }
+    fn resolve_scope(&mut self) {
+        self.scoped_objects.clear();
+        for (id, _) in &self.objects {
+            let mut current = *id;
+            let mut result = None;
+            while Some(current) != self.context {
+                let parent = self.parents.get(&current).copied();
+                if parent == self.context {
+                    result = Some(current);
+                    break;
+                }
+                let Some(parent) = parent else {
+                    break;
+                };
+                current = parent;
+            }
+            self.scoped_objects.insert(*id, result);
+        }
     }
     pub fn revision(&self) -> u64 {
         self.revision
     }
     pub fn get(&self, id: u64) -> EntityState {
-        self.states.get(&id).copied().unwrap_or(EntityState {
+        let mut state = self.states.get(&id).copied().unwrap_or(EntityState {
             hidden: self.hidden.contains(&id),
             entity_hidden: self.hidden.contains(&id),
             object_hidden: false,
@@ -7152,7 +7243,19 @@ impl EntityCache {
             tag_color: None,
             locked: self.locked.contains(&id),
             context: self.context.is_none().then_some(id),
-        })
+        });
+        if self.context.is_some() {
+            state.context = if self.parents.get(&id).copied() == self.context {
+                Some(id)
+            } else {
+                self.parents
+                    .get(&id)
+                    .and_then(|parent| self.scoped_objects.get(parent))
+                    .copied()
+                    .flatten()
+            };
+        }
+        state
     }
 }
 
@@ -7194,6 +7297,19 @@ mod entity_cache_tests {
                     assert_eq!(state.locked, model.is_locked(*id));
                     assert_eq!(state.context, model.entity_in_context(*id));
                 }
+            }
+        }
+        // Geometry revisions stay stable while scope alone changes. Cached
+        // inherited state must still match a fresh hierarchy lookup.
+        let mut snapshot = ModelSnapshot::default();
+        let revision = snapshot.update_scene(&model);
+        cache.update_for_revision(&model, revision);
+        for context in [None, Some(outer), Some(inner), None] {
+            model.edit_context = context;
+            assert_eq!(snapshot.update_scene(&model), revision);
+            cache.update_for_revision(&model, revision);
+            for id in model.edges.keys().chain(model.objects.keys()) {
+                assert_eq!(cache.get(*id).context, model.entity_in_context(*id));
             }
         }
         model.edit_context = None;

@@ -261,6 +261,45 @@ cargo test -p ketchup-app gpu_renders_empty_and_modeled_workspace --locked -- --
 
 Snapshots appear in `target/qa/`. This test requires a working native GPU adapter. Normal tests cover document validation, geometry, inference, camera math, selection, undo/redo, and synthetic keyboard/pointer interactions through egui.
 
+Measure actual viewport frame intervals in the running Web app without starting a build:
+
+```sh
+node scripts/benchmark_viewport_web.mjs --headed --project /path/to/Project.k3d --seconds 25 --min-fps 45 --output /tmp/ketchup-viewport.json
+```
+
+The benchmark uses an isolated browser profile, preserves the complete project,
+warms up for five seconds, and records FPS, frame timings, the hardware adapter,
+geometry buffer rebuilds, screenshots, and the project hash. It rejects software
+adapters, blank screenshots, GPU validation errors, and missing measurements.
+Use `--mode select` to alternate selection while picking across the scene, or
+`--mode groups` to repeatedly enter/leave nested groups. `--mode draw-line`
+and `--mode draw-rectangle` drive real pointer/keyboard events with snapping,
+preview, geometry creation and autosave enabled; their FPS includes the commit
+stall and counts actual GPU frame submissions. Reports include commit latency
+and the number of created edges. `--mode measure-tape` measures live tape
+snapping with a saved guide present and checks that another guide is saved.
+`--mode walk` places a person on a real floor, walks with WASD and turns the
+camera. `--after-walk` checks an editor tool after exiting Walk and restoring its
+camera. The reports count Walk bridge mutations so repeated browser capture
+updates cannot silently return. `--require-pointer-lock` additionally requires
+browser mouse capture; without it, a reported browser refusal uses ordinary
+mouse look. Each run pins its loaded artifact against development-server reloads.
+`--validate-snapping` compares indexed and exhaustive inference on the actual
+project, including axis/plane locks, editing scopes and both projections.
+`--validate-state`
+checks immediate selection/context restoration after reload and isolation from
+another project; `--validate-shader` checks edge occlusion on the GPU.
+Pass `--legacy` to compare
+the CPU projection path on the same scene, or `--profile` for a separate CPU
+profile (profiling adds overhead). The default server is `http://127.0.0.1:8080/`;
+use `--url` or `--browser` to override the server or Chromium executable.
+Large opaque perspective scenes retain their face and edge geometry on the GPU;
+other display modes continue to use the precision renderer. Selection, hover,
+and editing scope update a small GPU state texture without rebuilding geometry.
+Exact inspector measurements run in a background worker. Selection and editing
+scope persist immediately in a small record tied to the current autosave,
+avoiding a complete document rewrite for each click.
+
 Run the repeatable CPU interaction benchmarks explicitly (10/100-face drawing,
 10/100-object Move, a 4,096-face imported model, axes on/off with 512 groups,
 and 256/1,024 shadow casters over a large receiving face):

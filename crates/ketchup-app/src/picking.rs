@@ -2,6 +2,8 @@
 //! reconstructs face planes or searches every group's membership for each edge.
 use crate::renderer::{EntityCache, FaceCache};
 use ketchup_core::{Camera, DVec2, DVec3, Model, Ray, selection};
+#[path = "snapping_index.rs"]
+mod snapping_index;
 
 #[derive(Clone, Copy)]
 struct Bounds {
@@ -49,6 +51,7 @@ pub struct PickingCache {
     items: Vec<Item>,
     nodes: Vec<Node>,
     edges: EdgePickingCache,
+    snapping: snapping_index::Index,
 }
 pub struct SnapQuery<'a> {
     picking: &'a PickingCache,
@@ -63,9 +66,94 @@ impl<'a> SnapQuery<'a> {
     }
 }
 impl ketchup_core::inference::FaceQuery for SnapQuery<'_> {
+    fn contains_target(
+        &self,
+        model: &Model,
+        camera: &Camera,
+        size: DVec2,
+        point: DVec3,
+        kind: ketchup_core::Inference,
+    ) -> Option<bool> {
+        use ketchup_core::inference::{Inference, SnapTargets};
+        let cursor = camera.view(size).project(point)?;
+        let geometry = self.nearby_geometry(
+            camera,
+            size,
+            cursor,
+            SnapTargets {
+                edges: kind == Inference::OnEdge,
+                faces: kind == Inference::OnFace,
+                face_centers: false,
+            },
+        )?;
+        match kind {
+            Inference::OnFace => Some(
+                geometry
+                    .faces
+                    .into_iter()
+                    .any(|id| model.face_contains(&model.faces[&id], point, true)),
+            ),
+            Inference::OnEdge => Some(geometry.edges.into_iter().any(|id| {
+                let (a, b) = model.points(&model.edges[&id]);
+                let t = ((point - a).dot(b - a) / (b - a).length_squared()).clamp(0., 1.);
+                (a + (b - a) * t).distance(point) < 1e-7
+            })),
+            _ => None,
+        }
+    }
+    fn nearby_geometry(
+        &self,
+        camera: &Camera,
+        size: DVec2,
+        cursor: DVec2,
+        targets: ketchup_core::inference::SnapTargets,
+    ) -> Option<ketchup_core::inference::SnapGeometry> {
+        if self.excluded.is_some()
+            || !self
+                .picking
+                .snapping
+                .matches(self.faces, self.entities, camera, size)
+        {
+            return None;
+        }
+        Some(
+            self.picking
+                .snapping
+                .nearby(cursor, targets, &self.picking.edges, self.entities),
+        )
+    }
+    fn alignment_references(
+        &self,
+        camera: &Camera,
+        size: DVec2,
+        cursor: DVec2,
+    ) -> Option<[Vec<DVec3>; 3]> {
+        if self.excluded.is_some()
+            || !self
+                .picking
+                .snapping
+                .matches(self.faces, self.entities, camera, size)
+        {
+            return None;
+        }
+        let view = camera.view(size);
+        self.picking.snapping.alignment(cursor, |point| {
+            let Some(pixel) = view.project(point) else {
+                return false;
+            };
+            let ray = view.ray(pixel);
+            self.nearest(ray, true)
+                .is_none_or(|(_, t, _)| t + 1e-5 >= point.distance(ray.origin))
+        })
+    }
     fn nearest(&self, ray: Ray, scoped: bool) -> Option<(u64, f64, DVec3)> {
         self.picking.nearest_matching(
-            self.faces, self.entities, ray, false, scoped, &mut 0,
+            self.faces,
+            self.entities,
+            ray,
+            false,
+            scoped,
+            &mut 0,
             |id| self.excluded.is_none_or(|ids| !ids.contains(&id)),
         )
     }
@@ -75,13 +163,63 @@ impl ketchup_core::inference::FaceQuery for SnapQuery<'_> {
     }
 }
 impl PickingCache {
+    pub(crate) fn reference_edges(
+        &self,
+        faces: &FaceCache,
+        entities: &EntityCache,
+        camera: &Camera,
+        size: DVec2,
+        point: DVec3,
+    ) -> Option<Vec<u64>> {
+        if !self.snapping.matches(faces, entities, camera, size) {
+            return None;
+        }
+        let pixel = camera.view(size).project(point)?;
+        Some(
+            self.snapping
+                .nearby(
+                    pixel,
+                    ketchup_core::inference::SnapTargets {
+                        edges: true,
+                        faces: false,
+                        face_centers: false,
+                    },
+                    &self.edges,
+                    entities,
+                )
+                .edges,
+        )
+    }
+    pub(crate) fn prepare_snapping(
+        &mut self,
+        model: &Model,
+        faces: &FaceCache,
+        entities: &EntityCache,
+        camera: &Camera,
+        size: DVec2,
+    ) {
+        self.prepare_view(model, faces, camera, size);
+        self.snapping.prepare(model, faces, entities, camera, size);
+    }
+    pub(crate) fn prepare_view(
+        &mut self,
+        model: &Model,
+        faces: &FaceCache,
+        camera: &Camera,
+        size: DVec2,
+    ) {
+        self.update(faces);
+        self.edges
+            .update_for_revision(model, camera, size, faces.source_revision());
+    }
+
     /// Attachment eligibility needs neither barycentric weights nor another
     /// triangulation. Query the existing edge and face indices at the snap.
     pub fn contains_geometry_point(&mut self, model: &Model, faces: &FaceCache,
         entities: &EntityCache, camera: &Camera, size: DVec2, point: DVec3) -> bool
     {
         let epsilon = ketchup_core::document::EPS;
-        self.edges.update(model, camera, size);
+        self.edges.update_for_revision(model, camera, size,faces.source_revision());
         if let Some(pixel) = camera.view(size).project(point) {
             for (id, _) in self.edges.candidates(pixel, 0.01, entities) {
                 let (a, b) = model.points(&model.edges[&id]);
@@ -377,7 +515,7 @@ impl PickingCache {
     ) -> Option<(u64, DVec3)> {
         let view = camera.view(size);
         let ray = view.ray(pixel);
-        self.edges.update(model, camera, size);
+        self.edges.update_for_revision(model, camera, size,faces.source_revision());
         let candidates = self.edges.candidates(pixel, radius, entities);
         for (id, _) in candidates {
             let edge = &model.edges[&id];
@@ -405,6 +543,7 @@ impl PickingCache {
 #[derive(Default)]
 struct EdgePickingCache {
     view: Option<(Camera, DVec2)>,
+    known_revision:Option<u64>,
     source_edges: Vec<ketchup_core::Edge>,
     source_vertices: Vec<(u64, DVec3)>,
     world_edges: Vec<(u64, DVec3, DVec3)>,
@@ -434,7 +573,27 @@ struct ScreenEdgeNode {
 }
 
 impl EdgePickingCache {
+    fn update_for_revision(
+        &mut self,
+        model: &Model,
+        camera: &Camera,
+        size: DVec2,
+        revision: Option<u64>,
+    ) {
+        if revision.is_some()
+            && self.known_revision == revision
+            && self
+                .view
+                .as_ref()
+                .is_some_and(|(c, s)| c == camera && *s == size)
+        {
+            return;
+        }
+        self.update(model, camera, size);
+        self.known_revision = revision;
+    }
     fn update(&mut self, model: &Model, camera: &Camera, size: DVec2) {
+        self.known_revision=None;
         // Public model collections permit direct edits, so validate the source
         // with linear iterators. An unchanged hover does no edge projection,
         // map lookup per endpoint, or spatial-index construction.

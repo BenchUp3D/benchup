@@ -442,3 +442,144 @@ fn markers_ignore_owners_but_are_occluded_by_other_objects() {
         assert!(picking.marker_visible(&faces, &entities, &camera, size, anchor, &both));
     }
 }
+
+#[test]
+fn picking_refreshes_loose_edges_without_face_changes() {
+    let mut model = Model::default();
+    model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+    let camera = Camera::default();
+    let size = DVec2::new(800., 600.);
+    let mut faces = FaceCache::default();
+    let mut picking = PickingCache::default();
+    faces.update_for_revision(&model, 1);
+    picking.prepare_view(&model, &faces, &camera, size);
+    let face_revision = faces.revision();
+    assert_eq!(picking.edges.world_edges.len(), 1);
+    model.add_edge(DVec3::Y, DVec3::Y + DVec3::X).unwrap();
+    faces.update_for_revision(&model, 2);
+    assert_eq!(faces.revision(), face_revision);
+    picking.prepare_view(&model, &faces, &camera, size);
+    assert_eq!(picking.edges.world_edges.len(), 2);
+    // Public callers that have not validated a source revision still detect
+    // direct collection edits, including a moved vertex outside every face.
+    let id = *model.vertices.keys().next().unwrap();
+    model.vertices.get_mut(&id).unwrap().position.z += 0.5;
+    faces.update(&model);
+    picking.prepare_view(&model, &faces, &camera, size);
+    assert!(picking.edges.world_edges.iter().any(|(_, a, b)| a.z == 0.5 || b.z == 0.5));
+}
+
+#[test]
+fn indexed_drawing_inference_matches_full_queries() {
+    use ketchup_core::inference::{
+        Axis, AxisConstraint, FaceQuery, SnapTargets, infer_axis_alignment_with_constraint,
+        infer_with_constraint,
+    };
+    use std::collections::BTreeSet;
+    let mut model = triangle_grid(96);
+    let group = model
+        .make_object(&model.selectable_entities(), false, "Snapping references")
+        .unwrap();
+    let mut faces = FaceCache::default();
+    let mut entities = EntityCache::default();
+    let mut picking = PickingCache::default();
+    let empty = BTreeSet::new();
+    let size = DVec2::new(1200., 800.);
+    let mut camera = Camera::default();
+    camera.fit(model.bounds(), size);
+    for (revision, context) in [None, Some(group), None].into_iter().enumerate() {
+        model.edit_context = context;
+        for projection in [
+            ketchup_core::Projection::Perspective,
+            ketchup_core::Projection::Parallel,
+        ] {
+            camera.projection = projection;
+            faces.update_for_revision(&model, revision as u64 + 1);
+            entities.update_for_revision(&model, revision as u64 + 1);
+            picking.prepare_snapping(&model, &faces, &entities, &camera, size);
+            let indexed = picking.snap_query(&faces, &entities);
+            let full = picking
+                .snap_query(&faces, &entities)
+                .excluding(Some(&empty));
+            for i in 0..80 {
+                let cursor = DVec2::new(70. + (i * 97 % 1060) as f64, 40. + (i * 53 % 720) as f64);
+                for constraint in [
+                    None,
+                    Some(AxisConstraint::Axis(Axis::X)),
+                    Some(AxisConstraint::Plane(Axis::Z)),
+                ] {
+                    for targets in [
+                        SnapTargets::default(),
+                        SnapTargets {
+                            edges: true,
+                            faces: false,
+                            face_centers: false,
+                        },
+                        SnapTargets {
+                            edges: false,
+                            faces: true,
+                            face_centers: true,
+                        },
+                    ] {
+                        let start = (i % 3 != 0).then_some(DVec3::new(2.3, 0.7, 0.));
+                        let query = |faces: &dyn FaceQuery| {
+                            infer_with_constraint(
+                                &model,
+                                &camera,
+                                size,
+                                cursor,
+                                start,
+                                constraint,
+                                true,
+                                true,
+                                Some(faces),
+                                targets,
+                            )
+                        };
+                        let a = query(&indexed);
+                        let b = query(&full);
+                        assert_eq!(
+                            a.map(|s| s.kind),
+                            b.map(|s| s.kind),
+                            "{cursor:?}, {projection:?}, {constraint:?}"
+                        );
+                        if let (Some(a), Some(b)) = (a, b) {
+                            assert!(a.point.distance(b.point) < 1e-7);
+                            if let Some(start) = start {
+                                let align = |faces: &dyn FaceQuery| {
+                                    infer_axis_alignment_with_constraint(
+                                        &model,
+                                        &camera,
+                                        size,
+                                        cursor,
+                                        start,
+                                        constraint,
+                                        true,
+                                        a,
+                                        Some(faces),
+                                    )
+                                };
+                                let a = align(&indexed);
+                                let b = align(&full);
+                                assert_eq!(a.snap.kind, b.snap.kind);
+                                assert!(a.snap.point.distance(b.snap.point) < 1e-7);
+                                assert_eq!(a.guides.len(), b.guides.len());
+                            }
+                        }
+                    }
+                }
+            }
+            // Context/visibility changes must invalidate cached visibility too.
+            assert!(picking.snapping.matches(&faces, &entities, &camera, size));
+        }
+    }
+    model.hidden.insert(group);
+    entities.update(&model);
+    assert!(!picking.snapping.matches(&faces, &entities, &camera, size));
+    picking.prepare_snapping(&model, &faces, &entities, &camera, size);
+    let geometry = picking
+        .snap_query(&faces, &entities)
+        .nearby_geometry(&camera, size, size * 0.5, SnapTargets::default())
+        .unwrap();
+    assert!(geometry.points.is_empty() && geometry.edges.is_empty() && geometry.faces.is_empty());
+}

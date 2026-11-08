@@ -109,6 +109,24 @@ pub struct Model {
 }
 
 impl Model {
+    /// Editing scope changes interaction, not document geometry or appearance.
+    pub fn same_scene(&self, other: &Self) -> bool {
+        self.guides == other.guides
+            && self.connections == other.connections
+            && self.vertices == other.vertices
+            && self.edges == other.edges
+            && self.faces == other.faces
+            && self.face_colors == other.face_colors
+            && self.dimensions == other.dimensions
+            && self.texts == other.texts
+            && self.objects == other.objects
+            && self.stock_materials == other.stock_materials
+            && self.hidden == other.hidden
+            && self.locked == other.locked
+            && self.tags == other.tags
+            && self.entity_tags == other.entity_tags
+            && self.next_id == other.next_id
+    }
     pub(crate) fn id(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id

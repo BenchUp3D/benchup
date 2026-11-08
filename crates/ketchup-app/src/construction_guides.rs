@@ -182,10 +182,22 @@ impl KetchupApp {
         ) {
             return None;
         }
-        self.doc
-            .model
-            .edges
-            .values()
+        let nearby = self.picking_cache.reference_edges(
+            &self.face_cache,
+            &self.entity_cache,
+            &self.doc.camera,
+            dv(self.viewport.size()),
+            snap.point,
+        );
+        let edges: Vec<_> = if let Some(ids) = nearby {
+            ids.into_iter()
+                .filter_map(|id| self.doc.model.edges.get(&id))
+                .collect()
+        } else {
+            self.doc.model.edges.values().collect()
+        };
+        edges
+            .into_iter()
             .filter(|e| !self.doc.model.is_hidden(e.id))
             .find_map(|e| {
                 let (a, b) = self.doc.model.points(e);
@@ -217,7 +229,11 @@ impl KetchupApp {
                     .and_then(|edit| edit.preview.as_ref())
             })
             .unwrap_or(&self.doc.model);
-        let selected = model.expand_entities(&self.selected);
+        let selected = if model.guides.is_empty() {
+            BTreeSet::new()
+        } else {
+            model.expand_entities(&self.selected)
+        };
         let colors = Palette::for_painter(p);
         for (id, guide) in model.guides.iter().filter(|(id, _)| !model.is_hidden(**id)) {
             let hovered = self.hover.is_some() && self.hover == model.entity_in_context(*id);

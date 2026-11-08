@@ -743,7 +743,8 @@ impl KetchupApp {
         // Selection alone must survive an immediate reload, without marking
         // the model modified or waiting for the document autosave delay.
         if self.sync_selection() {
-            self.persist();
+            if self.dirty_since.is_some() || self.storage_recovery {self.persist();}
+            else {match storage::save_selection(&self.doc) {Ok(())=>self.save_error=None,Err(error)=>self.save_error=Some(error)}}
         }
     }
 }

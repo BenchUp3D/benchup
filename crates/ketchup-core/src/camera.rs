@@ -165,9 +165,13 @@ impl Camera {
         })
     }
     pub fn matrix(&self, size: DVec2) -> DMat4 {
+        self.matrix_with_clip_planes(size, 0.005, 1e8)
+    }
+    /// Alternative depth precision without changing the screen projection.
+    pub fn matrix_with_clip_planes(&self, size: DVec2, near: f64, far: f64) -> DMat4 {
         let aspect = (size.x / size.y.max(1.0)).max(0.01);
         let projection = match self.projection {
-            Projection::Perspective => DMat4::perspective_rh(self.fov, aspect, 0.005, 1e8),
+            Projection::Perspective => DMat4::perspective_rh(self.fov, aspect, near, far),
             Projection::Parallel => {
                 let half_height = self.distance * (self.fov * 0.5).tan();
                 let half_width = half_height * aspect;
@@ -176,8 +180,8 @@ impl Camera {
                     half_width,
                     -half_height,
                     half_height,
-                    0.005,
-                    1e8,
+                    near,
+                    far,
                 )
             }
         };
@@ -185,8 +189,11 @@ impl Camera {
     }
     /// Prepare projection once for a render pass or pointer query.
     pub fn view(&self, size: DVec2) -> CameraView {
+        self.view_with_clip_planes(size, 0.005, 1e8)
+    }
+    pub fn view_with_clip_planes(&self, size: DVec2, near: f64, far: f64) -> CameraView {
         CameraView {
-            matrix: self.matrix(size),
+            matrix: self.matrix_with_clip_planes(size, near, far),
             inverse: std::cell::OnceCell::new(),
             eye: self.eye(),
             parallel_direction: (self.projection == Projection::Parallel)
@@ -269,6 +276,9 @@ pub struct CameraView {
     size: DVec2,
 }
 impl CameraView {
+    pub fn matrix(&self) -> DMat4 {
+        self.matrix
+    }
     pub fn eye(&self) -> DVec3 {
         self.eye
     }

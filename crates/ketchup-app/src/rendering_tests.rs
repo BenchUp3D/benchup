@@ -161,3 +161,156 @@ fn joinery_and_annotations_remain_retained_while_the_outliner_is_open() {
     render_with_outliner(&mut app);
     assert_eq!(app.scene_cache.mesh_builds, builds + 1);
 }
+
+#[test]
+fn inspector_and_viewports_share_source_validation_and_same_frame_edits_invalidate_it() {
+    let mut app = KetchupApp::with_document(Document::default(), None, true);
+    app.doc.model.add_edge(DVec3::ZERO,DVec3::X).unwrap();
+    let ctx = egui::Context::default();
+    let mut revision = 0;
+    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        revision = app.document_revision(ui.ctx());
+        app.doc.camera.yaw += 0.1;
+        app.camera_changed(ui.ctx());
+        assert_eq!(app.document_revision(ui.ctx()),revision);
+        app.doc.model.vertices.values_mut().next().unwrap().position.z += 0.1;
+        app.changed(ui.ctx());
+        let changed = app.document_revision(ui.ctx());
+        assert!(changed > revision);
+        revision = changed;
+    });
+    // Direct collection edits between frames still trigger validation.
+    app.doc.model.vertices.values_mut().next().unwrap().position.y += 0.1;
+    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        assert!(app.document_revision(ui.ctx()) > revision);
+    });
+}
+
+#[test]
+fn removing_the_last_connection_discards_its_render_guides_and_warnings() {
+    let mut app = KetchupApp::with_document(Document::default(), None, true);
+    let first = ui_solid_box(&mut app.doc.model,DVec3::ZERO,DVec3::new(0.3,0.1,0.04));
+    let second = ui_solid_box(&mut app.doc.model,DVec3::new(0.25,0.,0.),DVec3::new(0.55,0.1,0.04));
+    app.doc.model.add_connection(ketchup_core::connections::Connection {
+        members:[first,second],entry_face:None,
+        operation:ketchup_core::connections::ConnectionOperation::Joinery(Default::default()),
+    }).unwrap();
+    let ctx = egui::Context::default();
+    let rect = Rect::from_min_size(Pos2::ZERO,egui::vec2(800.,600.));
+    render(&mut app,&ctx,rect);
+    assert!(app.joinery_geometry.result.is_some());
+    app.doc.model.connections.clear();
+    app.changed(&ctx);
+    render(&mut app,&ctx,rect);
+    assert!(app.joinery_geometry.result.is_none());
+}
+
+#[test]
+fn drawing_previews_keep_the_resident_scene_and_refresh_after_commit() {
+    let mut doc = Document::default();
+    doc.model = crate::picking::tests::triangle_grid(1024);
+    doc.camera.fit(doc.model.bounds(), DVec2::new(800., 600.));
+    let mut app = KetchupApp::with_document(doc, None, true);
+    let ctx = egui::Context::default();
+    let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.));
+    app.set_tool(Tool::Line);
+    render(&mut app, &ctx, rect);
+    assert_eq!(app.scene_cache.resident_builds(), 1);
+    app.line_start = Some(DVec3::ZERO);
+    for point in [DVec3::X, DVec3::Y, DVec3::Z] {
+        app.snap = Some(Snap {
+            point,
+            kind: Inference::Plane,
+        });
+        render(&mut app, &ctx, rect);
+        assert_eq!(app.scene_cache.resident_builds(), 1);
+    }
+    app.doc
+        .model
+        .add_edge(DVec3::new(-3., -2., 0.), DVec3::new(-2., -2., 0.))
+        .unwrap();
+    app.changed(&ctx);
+    render(&mut app, &ctx, rect);
+    assert_eq!(app.scene_cache.resident_builds(), 2);
+}
+
+#[test]
+fn tape_preview_and_saved_guides_keep_the_resident_scene() {
+    let mut doc = Document::default();
+    doc.model = crate::picking::tests::triangle_grid(1024);
+    doc.camera.fit(doc.model.bounds(), DVec2::new(800., 600.));
+    let mut app = KetchupApp::with_document(doc, None, true);
+    let ctx = egui::Context::default();
+    let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.));
+    app.set_tool(Tool::TapeMeasure);
+    app.measurement = Some(measurement_tools::Measurement {
+        points: vec![DVec3::ZERO],
+        normal: DVec3::Z,
+        ..Default::default()
+    });
+    render(&mut app, &ctx, rect);
+    assert_eq!(app.scene_cache.resident_builds(), 1);
+    for point in [DVec3::X, DVec3::Y, DVec3::new(0.3, 0.4, 0.)] {
+        app.snap = Some(Snap {
+            point,
+            kind: Inference::Plane,
+        });
+        render(&mut app, &ctx, rect);
+        assert_eq!(app.scene_cache.resident_builds(), 1);
+    }
+    assert_eq!(
+        app.measurement_value().unwrap(),
+        app.doc.display.units.format_length(0.5)
+    );
+    app.doc.model.add_guide(DVec3::X, Some(DVec3::Y)).unwrap();
+    app.changed(&ctx);
+    render(&mut app, &ctx, rect);
+    assert_eq!(app.scene_cache.resident_builds(), 2);
+    app.snap = Some(Snap {
+        point: DVec3::X,
+        kind: Inference::OnGuide,
+    });
+    render(&mut app, &ctx, rect);
+    assert_eq!(app.scene_cache.resident_builds(), 2);
+}
+
+#[test]
+fn unused_grain_overlay_keeps_gpu_geometry_without_changing_the_preference() {
+    let mut doc = Document::default();
+    doc.model = crate::picking::tests::triangle_grid(1024);
+    doc.display.grain_direction = true;
+    doc.camera.fit(doc.model.bounds(), DVec2::new(800., 600.));
+    let mut app = KetchupApp::with_document(doc, None, true);
+    let ctx = egui::Context::default();
+    let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.));
+    render(&mut app, &ctx, rect);
+    app.doc.camera.yaw += 0.1;
+    render(&mut app, &ctx, rect);
+    assert_eq!(app.scene_cache.resident_builds(), 1);
+    assert_eq!(app.scene_cache.mesh_builds, 0);
+    assert!(app.doc.display.grain_direction);
+    assert!(
+        !display_scene::effective_display(&app.doc.display, &app.doc.model, true).grain_direction
+    );
+    let group = app
+        .doc
+        .model
+        .make_object(&app.doc.model.selectable_entities(), false, "Grained part")
+        .unwrap();
+    app.doc
+        .model
+        .set_grain_direction(group, Some(DVec3::X))
+        .unwrap();
+    assert!(
+        display_scene::effective_display(&app.doc.display, &app.doc.model, true).grain_direction
+    );
+    assert!(app.doc.display.grain_direction);
+    render(&mut app, &ctx, rect);
+    assert_eq!(app.scene_cache.mesh_builds, 1);
+
+    app.doc.model.set_grain_direction(group, None).unwrap();
+    assert!(
+        !display_scene::effective_display(&app.doc.display, &app.doc.model, true).grain_direction
+    );
+    assert!(app.doc.display.grain_direction);
+}

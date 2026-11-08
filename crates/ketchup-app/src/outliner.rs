@@ -46,7 +46,6 @@ struct Outliner<'a> {
 // position or disclosure state. Reuse them while interacting with the scene.
 #[derive(Default)]
 pub(in crate::app) struct OutlinerCache {
-    source: renderer::ModelSnapshot,
     entities: renderer::EntityCache,
     revision: Option<u64>,
     roots: BTreeSet<u64>,
@@ -1468,7 +1467,7 @@ impl KetchupApp {
             search.scroll_to_me(Some(egui::Align::Center));
             self.focus_outliner_search = false;
         }
-        let revision = self.outliner_cache.source.update(&self.doc.model);
+        let revision = self.document_revision(ui.ctx());
         self.outliner_cache
             .update(&self.doc.model, revision, &self.outliner_filter);
         let roots = &self.outliner_cache.roots;
@@ -1481,7 +1480,7 @@ impl KetchupApp {
             crate::empty_state::EmptyState::new(tr!("outliner.no_matching_objects"), tr!("outliner.try_another_name_or_clear_the_search_to")).show(ui);
             return;
         }
-        self.outliner_cache.entities.update(&self.doc.model);
+        self.outliner_cache.entities.update_for_revision(&self.doc.model, revision);
         let hover_id = ui.scope_id().with("outliner_drag_hover");
         let mut tree = Outliner {
             model: &self.doc.model,
@@ -1557,7 +1556,7 @@ impl KetchupApp {
         });
         ui.ctx()
             .data_mut(|data| data.insert_temp(hover_id, drag_hover));
-        self.outliner_hover = self.doc.model.expand_entities(&hover.into_iter().collect());
+        self.outliner_hover = hover.into_iter().collect();
         if let Some(payload) = egui::DragAndDrop::payload::<OutlinerDrag>(ui.ctx())
             && let Some(pointer) = ui.ctx().pointer_interact_pos()
         {

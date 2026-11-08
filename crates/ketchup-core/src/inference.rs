@@ -118,9 +118,49 @@ impl Default for SnapTargets {
     }
 }
 
+/// Conservative screen-space candidates. The normal inference rules still
+/// decide distance, constraints, visibility, and target priority.
+pub struct SnapGeometry {
+    pub points: Vec<(DVec3, Inference)>,
+    pub edges: Vec<u64>,
+    pub faces: Vec<u64>,
+}
+
 /// Cached face queries for snapping. Scoped queries include descendants of the
 /// current editing level; unscoped queries include every visible surface.
 pub trait FaceQuery {
+    fn contains_target(
+        &self,
+        _model: &Model,
+        _camera: &Camera,
+        _size: DVec2,
+        _point: DVec3,
+        _kind: Inference,
+    ) -> Option<bool> {
+        None
+    }
+
+    fn nearby_geometry(
+        &self,
+        _camera: &Camera,
+        _size: DVec2,
+        _cursor: DVec2,
+        _targets: SnapTargets,
+    ) -> Option<SnapGeometry> {
+        None
+    }
+
+    /// Visible vertex/midpoint references within ten pixels of each projected
+    /// world-axis line. Start and world origin are supplied by the caller.
+    fn alignment_references(
+        &self,
+        _camera: &Camera,
+        _size: DVec2,
+        _cursor: DVec2,
+    ) -> Option<[Vec<DVec3>; 3]> {
+        None
+    }
+
     /// X-ray interactions may target geometry behind otherwise visible faces.
     fn snap_through_faces(&self) -> bool {
         false
@@ -363,23 +403,24 @@ fn move_references(
     }
     references
         .into_iter()
-        .map(|origin| {
-            let pixel = view.project(origin);
-            let directions = [Axis::X, Axis::Y, Axis::Z].map(|axis| {
-                let direction = view
-                    .project(origin + axis.vector() * camera.distance)
-                    .or_else(|| view.project(origin - axis.vector() * camera.distance))?
-                    - pixel?;
-                (direction.length_squared() >= 1e-8).then_some(direction)
-            });
-            MoveReference {
-                origin,
-                pixel,
-                directions,
-                visible: std::cell::OnceCell::new(),
-            }
-        })
+        .map(|origin| move_reference(origin, camera, view))
         .collect()
+}
+fn move_reference(origin: DVec3, camera: &Camera, view: &CameraView) -> MoveReference {
+    let pixel = view.project(origin);
+    let directions = [Axis::X, Axis::Y, Axis::Z].map(|axis| {
+        let direction = view
+            .project(origin + axis.vector() * camera.distance)
+            .or_else(|| view.project(origin - axis.vector() * camera.distance))?
+            - pixel?;
+        (direction.length_squared() >= 1e-8).then_some(direction)
+    });
+    MoveReference {
+        origin,
+        pixel,
+        directions,
+        visible: std::cell::OnceCell::new(),
+    }
 }
 
 fn infer_move(
@@ -502,15 +543,42 @@ fn combine_axis_guides(
         return fallback;
     }
     let view = camera.view(size);
+    let indexed = if prepared.is_none() && snap_to_geometry {
+        faces.and_then(|query| query.alignment_references(camera, size, cursor))
+    } else {
+        None
+    };
     let temporary;
     let references = if let Some(prepared) = prepared {
         prepared
     } else {
-        temporary = move_references(model, camera, &view, start, snap_to_geometry, faces);
+        temporary = move_references(
+            model,
+            camera,
+            &view,
+            start,
+            snap_to_geometry && indexed.is_none(),
+            faces,
+        );
         &temporary
     };
     let axes = [Axis::X, Axis::Y, Axis::Z];
     let guides: [Vec<AxisGuide>; 3] = std::array::from_fn(|i| {
+        let local;
+        let references = if let Some(indexed) = &indexed {
+            local = [start, DVec3::ZERO]
+                .into_iter()
+                .chain(indexed[i].iter().copied())
+                .map(|origin| {
+                    let reference = move_reference(origin, camera, &view);
+                    let _ = reference.visible.set(true);
+                    reference
+                })
+                .collect::<Vec<_>>();
+            &local
+        } else {
+            references
+        };
         let mut nearby: Vec<_> = references
             .iter()
             .enumerate()
@@ -595,20 +663,28 @@ fn combine_axis_guides(
     for (_, _, point, a, b) in intersections {
         // A guide may refine a surface/edge snap, but must stay on its geometry.
         if base.kind == Inference::OnFace
-            && !model
-                .faces
-                .values()
-                .filter(|f| !is_hidden(f.id))
-                .any(|f| model.face_contains(f, point, true))
+            && !faces
+                .and_then(|query| query.contains_target(model, camera, size, point, base.kind))
+                .unwrap_or_else(|| {
+                    model
+                        .faces
+                        .values()
+                        .filter(|f| !is_hidden(f.id))
+                        .any(|f| model.face_contains(f, point, true))
+                })
         {
             continue;
         }
         if base.kind == Inference::OnEdge
-            && !model.edges.values().filter(|e| !is_hidden(e.id)).any(|e| {
-                let (a, b) = model.points(e);
-                let t = ((point - a).dot(b - a) / (b - a).length_squared()).clamp(0., 1.);
-                (a + (b - a) * t).distance(point) < 1e-7
-            })
+            && !faces
+                .and_then(|query| query.contains_target(model, camera, size, point, base.kind))
+                .unwrap_or_else(|| {
+                    model.edges.values().filter(|e| !is_hidden(e.id)).any(|e| {
+                        let (a, b) = model.points(e);
+                        let t = ((point - a).dot(b - a) / (b - a).length_squared()).clamp(0., 1.);
+                        (a + (b - a) * t).distance(point) < 1e-7
+                    })
+                })
         {
             continue;
         }
@@ -759,40 +835,45 @@ pub fn infer_with_constraint(
         } else {
             None
         };
+    let indexed = faces.and_then(|query| query.nearby_geometry(camera, size, cursor, targets));
     let mut candidates = vec![(DVec3::ZERO, Inference::Origin)];
-    let visible_vertices: std::collections::BTreeSet<_> = model
-        .edges
-        .values()
-        .filter(|e| snap_to_geometry && targets.edges && !is_hidden(e.id))
-        .flat_map(|e| [e.a, e.b])
-        .collect();
-    candidates.extend(
-        visible_vertices
-            .iter()
-            .map(|id| (model.vertices[id].position, Inference::Endpoint)),
-    );
-    candidates.extend(
-        model
+    if let Some(indexed) = &indexed {
+        candidates.extend_from_slice(&indexed.points);
+    } else {
+        let visible_vertices: std::collections::BTreeSet<_> = model
             .edges
             .values()
             .filter(|e| snap_to_geometry && targets.edges && !is_hidden(e.id))
-            .map(|e| {
-                let (a, b) = model.points(e);
-                ((a + b) * 0.5, Inference::Midpoint)
-            }),
-    );
-    if snap_to_geometry && targets.face_centers {
+            .flat_map(|e| [e.a, e.b])
+            .collect();
+        candidates.extend(
+            visible_vertices
+                .iter()
+                .map(|id| (model.vertices[id].position, Inference::Endpoint)),
+        );
         candidates.extend(
             model
-                .faces
+                .edges
                 .values()
-                .filter(|face| !is_hidden(face.id))
-                .filter_map(|face| {
-                    model
-                        .face_center(face)
-                        .map(|center| (center, Inference::FaceCenter))
+                .filter(|e| snap_to_geometry && targets.edges && !is_hidden(e.id))
+                .map(|e| {
+                    let (a, b) = model.points(e);
+                    ((a + b) * 0.5, Inference::Midpoint)
                 }),
         );
+        if snap_to_geometry && targets.face_centers {
+            candidates.extend(
+                model
+                    .faces
+                    .values()
+                    .filter(|face| !is_hidden(face.id))
+                    .filter_map(|face| {
+                        model
+                            .face_center(face)
+                            .map(|center| (center, Inference::FaceCenter))
+                    }),
+            );
+        }
     }
     let nearby = candidates
         .into_iter()
@@ -840,9 +921,17 @@ pub fn infer_with_constraint(
     let constraint = start.zip(axis_lock.or(local_axis.map(|target| target.axis)));
     let locked = start.zip(lock);
     if snap_to_geometry {
-        let on_edge = model
-            .edges
-            .values()
+        let edges: Vec<_> = if let Some(indexed) = &indexed {
+            indexed
+                .edges
+                .iter()
+                .filter_map(|id| model.edges.get(id))
+                .collect()
+        } else {
+            model.edges.values().collect()
+        };
+        let on_edge = edges
+            .into_iter()
             .filter(|edge| targets.edges && !is_hidden(edge.id))
             .filter_map(|edge| {
                 let (a, b) = model.points(edge);
@@ -920,9 +1009,17 @@ pub fn infer_with_constraint(
             return Some(snap);
         }
         if let Some((start, axis)) = constraint {
-            let on_face = model
-                .faces
-                .values()
+            let candidates: Vec<_> = if let Some(indexed) = &indexed {
+                indexed
+                    .faces
+                    .iter()
+                    .filter_map(|id| model.faces.get(id))
+                    .collect()
+            } else {
+                model.faces.values().collect()
+            };
+            let on_face = candidates
+                .into_iter()
                 .filter(|face| targets.faces && !is_hidden(face.id))
                 .filter_map(|face| {
                     let plane = crate::faces::plane(model, &face.vertices)?;

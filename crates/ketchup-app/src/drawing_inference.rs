@@ -64,7 +64,9 @@ impl KetchupApp {
         } else {
             self.single_axis_lock()
         };
-        if !(self.tool.is_drawing() || self.tool.is_measuring() || self.tool == Tool::GrainDirection)
+        if !(self.tool.is_drawing()
+            || self.tool.is_measuring()
+            || self.tool == Tool::GrainDirection)
             || self.paste_preview.is_some()
             || !self.doc.snap_to_axes
         {
@@ -74,7 +76,9 @@ impl KetchupApp {
         let Some(base) = self.snap else {
             return;
         };
-        if matches!(base.kind, Inference::OnGuide | Inference::GuidePoint) { return; }
+        if matches!(base.kind, Inference::OnGuide | Inference::GuidePoint) {
+            return;
+        }
         if matches!(self.tool, Tool::Line | Tool::GrainDirection)
             && let Some(start) = self.trace_start()
         {
@@ -146,15 +150,28 @@ impl KetchupApp {
                     && self.reference_edge_contains(r.edge, source.point)
             });
             self.drawing_reference = existing.or_else(|| {
-                self.doc
-                    .model
-                    .edges
-                    .keys()
-                    .find(|&&id| self.reference_edge_contains(id, source.point))
-                    .map(|&edge| DrawingReference {
-                        edge,
-                        point: source.point,
-                    })
+                let nearby = self.picking_cache.reference_edges(
+                    &self.face_cache,
+                    &self.entity_cache,
+                    &self.doc.camera,
+                    dv(self.viewport.size()),
+                    source.point,
+                );
+                let edge = if let Some(ids) = nearby {
+                    ids.into_iter()
+                        .find(|&id| self.reference_edge_contains(id, source.point))
+                } else {
+                    self.doc
+                        .model
+                        .edges
+                        .keys()
+                        .copied()
+                        .find(|&id| self.reference_edge_contains(id, source.point))
+                };
+                edge.map(|edge| DrawingReference {
+                    edge,
+                    point: source.point,
+                })
             });
         }
         let Some(reference) = self.drawing_reference else {
@@ -210,7 +227,11 @@ impl KetchupApp {
                     .flatten()
             })
             .or_else(|| self.measurement_plane())
-            .or_else(|| start.zip(self.grain_plane()).filter(|_| self.lock.is_none() && base.kind == Inference::Plane))
+            .or_else(|| {
+                start
+                    .zip(self.grain_plane())
+                    .filter(|_| self.lock.is_none() && base.kind == Inference::Plane)
+            })
             .or_else(|| surface.map(|(id, _, _)| (base.point, self.face_cache.get(id).normal)));
         if let Some((start, axis)) = start.zip(lock) {
             // The cursor selects the reference, not the inferred endpoint: the

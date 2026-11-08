@@ -45,6 +45,8 @@ fn main() -> eframe::Result {
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
+    // The inspector worker imports this same module for pure geometry exports.
+    if web_sys::window().is_none() { return; }
     use eframe::wasm_bindgen::JsCast;
     wasm_bindgen_futures::spawn_local(async {
         let document = web_sys::window()

@@ -27,6 +27,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", type=Path, required=True)
     parser.add_argument("--binary", type=Path, default=Path("target/release/ketchup-app"))
+    parser.add_argument("--preferences", type=Path, help="Copy an existing desktop app.ron into the isolated benchmark")
     parser.add_argument("--profile", action="store_true", help="Collect detailed CPU scopes (adds timing overhead)")
     parser.add_argument("--edit-joinery", nargs="?", const="auto", metavar="CONNECTION_ID",
                         help="Open the Wood Joinery editor for a saved joint (defaults to the first)")
@@ -45,6 +46,8 @@ def main():
     data.mkdir(exist_ok=True)
     original_hash = hashlib.sha256(project.read_bytes()).hexdigest()
     shutil.copyfile(project, data / "model.json")
+    if args.preferences:
+        shutil.copyfile(args.preferences.expanduser().resolve(), data / "preferences.ron")
     environment = dict(os.environ, KETCHUP_DATA_DIR=str(data),
                        KETCHUP_VIEWPORT_BENCHMARK=str(output / "frames.json"),
                        KETCHUP_BENCH_SECONDS=str(args.seconds), KETCHUP_BENCH_PROFILE="1" if args.profile else "0")
@@ -64,6 +67,10 @@ def main():
                 "binary": str(binary),
                 "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
                 "sample_seconds_per_stage": args.seconds, "edit_joinery": args.edit_joinery}
+    if args.preferences:
+        metadata["preferences"] = str(args.preferences.expanduser().resolve())
+        metadata["preferences_sha256"] = hashlib.sha256(
+            args.preferences.expanduser().read_bytes()).hexdigest()
     (output / "run.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print("| Viewport workload | FPS | Frame p95 (ms) | CPU mean (ms) |")
     print("| --- | ---: | ---: | ---: |")

@@ -155,13 +155,20 @@ impl KetchupApp {
             return;
         }
         self.prepare_picking();
+        let size = dv(self.viewport.size());
+        self.picking_cache.prepare_snapping(
+            &self.doc.model,
+            &self.face_cache,
+            &self.entity_cache,
+            &self.doc.camera,
+            size,
+        );
         let points = self
             .measurement
             .as_ref()
             .filter(|m| !m.complete)
             .map(|m| m.points.as_slice())
             .unwrap_or(&[]);
-        let size = dv(self.viewport.size());
         let cursor = dv(pos - self.viewport.min);
         self.snap = self.infer_snap(
             pos,
@@ -288,9 +295,13 @@ impl KetchupApp {
         };
         let size = dv(self.viewport.size());
         let surface_normal = self
-            .doc
-            .model
-            .nearest_face(self.doc.camera.ray(dv(pos - self.viewport.min), size))
+            .picking_cache
+            .nearest(
+                &self.face_cache,
+                &self.entity_cache,
+                self.doc.camera.ray(dv(pos - self.viewport.min), size),
+                false,
+            )
             .and_then(|(id, _, _)| {
                 ketchup_core::faces::plane(&self.doc.model, &self.doc.model.faces[&id].vertices)
             })
@@ -318,7 +329,10 @@ impl KetchupApp {
             .first()
             .is_some_and(|p| p.distance(snap.point) < 1e-7)
         {
-            self.say(ctx, tr!("measurement_tools.choose_a_point_away_from_the_measurement_origin"));
+            self.say(
+                ctx,
+                tr!("measurement_tools.choose_a_point_away_from_the_measurement_origin"),
+            );
             return;
         }
         m.points.push(snap.point);

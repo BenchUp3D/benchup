@@ -1286,6 +1286,9 @@ impl KetchupApp {
     }
 
     pub(super) fn surface_treatment_info(&mut self, ui: &mut egui::Ui) {
+        // Unassigned imported assemblies have no wood treatment to display.
+        // Avoid constructing a parent entry for every piece of mesh geometry.
+        if self.doc.model.objects.values().all(|object| object.stock_material_id.is_none() && object.stock_material.is_none()) {return;}
         let wood: WoodMaterials = self
             .general_settings
             .stock

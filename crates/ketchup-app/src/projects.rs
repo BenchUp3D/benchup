@@ -180,6 +180,7 @@ impl KetchupApp {
             self.snap_to_edge || self.snap_to_face || self.snap_to_face_center;
         self.set_tool(Tool::Select);
         egui::DragAndDrop::clear_payload(ctx);
+        storage::invalidate_selection_source();
         self.doc = doc;
         self.viewports
             .reframe_project(&self.doc.camera, &self.doc.viewport_cameras);

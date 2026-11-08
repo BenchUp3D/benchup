@@ -302,6 +302,10 @@ impl Layout {
 }
 
 impl Workspace {
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn resident_builds(&self) -> usize {
+        self.scene_caches.values().map(renderer::SceneCache::resident_builds).sum()
+    }
     fn name(&self, id: u64) -> String {
         self.names.get(&id).cloned().unwrap_or_else(|| {
             if id == 0 {

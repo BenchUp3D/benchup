@@ -129,6 +129,11 @@ fn joint_in_view(model: &Model, connection: &Connection) -> bool {
 }
 
 impl GeometryCache {
+    pub(super) fn clear_removed_connections(&mut self) {
+        if self.source.as_ref().is_some_and(|source| !source.connections.is_empty()) {
+            *self = Self::default();
+        }
+    }
     /// Keep one in-flight machining job during a gesture. Completed previews
     /// are adopted in order; the next job uses the newest pointer position,
     /// rather than queuing every intermediate position. Exact picking and the
