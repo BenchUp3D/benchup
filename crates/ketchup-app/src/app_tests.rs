@@ -2,6 +2,131 @@ use super::*;
 use crate::test_ui::ContextExt as _;
 use eframe::App;
 
+#[test]
+fn grain_tool_anchors_on_a_part_and_uses_the_axis_locked_preview() {
+    let mut h = Harness::new();
+    let model = &mut h.app.doc.model;
+    properties_outline(model, &[DVec3::ZERO, DVec3::X * 4., DVec3::new(4., 4., 0.), DVec3::Y * 4.]);
+    let part = model.make_object(&model.selectable_entities(), false, "Part").unwrap();
+    model.add_edge(DVec3::Y * 5., DVec3::new(4., 5., 0.)).unwrap();
+    h.app.doc.camera.set_standard_view(ketchup_core::StandardView::Top);
+    h.app.fit(&h.ctx);
+    h.app.selected = BTreeSet::from([part]);
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    h.click(text_position(&output, "Set Direction"));
+    assert_eq!(h.app.tool, Tool::GrainDirection);
+
+    h.click(h.at(DVec3::new(2., 5., 0.)));
+    assert!(h.app.grain_anchor.is_none());
+    h.click(h.at(DVec3::new(2., 2., 0.)));
+    let anchor = h.app.grain_anchor.as_ref().unwrap();
+    assert_eq!(anchor.part, part);
+    assert_eq!(anchor.point, DVec3::new(2., 2., 0.));
+    assert_eq!(h.app.doc.model.objects[&part].grain_axis(), None);
+
+    h.key(Key::ArrowRight);
+    let end = h.at(DVec3::new(3.5, 3.2, 0.));
+    h.frame(vec![egui::Event::PointerMoved(end)], egui::Modifiers::NONE);
+    assert_eq!(h.app.grain_preview(), Some((part, DVec3::X)));
+    assert_eq!(h.app.doc.model.objects[&part].grain_axis(), None);
+    h.click(end);
+    assert_eq!(h.app.doc.model.objects[&part].grain_axis(), Some(DVec3::X));
+    assert!(h.app.grain_anchor.is_none());
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    h.click(text_position(&output, "Clear"));
+    assert_eq!(h.app.doc.model.objects[&part].grain_axis(), None);
+    h.app.undo(&h.ctx, false);
+    assert_eq!(h.app.doc.model.objects[&part].grain_axis(), Some(DVec3::X));
+    h.app.undo(&h.ctx, false);
+    assert_eq!(h.app.doc.model.objects[&part].grain_axis(), None);
+}
+
+#[test]
+fn grain_tool_previews_and_edits_multiple_selected_parts_in_one_step() {
+    let mut h = Harness::new();
+    let model = &mut h.app.doc.model;
+    let edge = model.add_edge(DVec3::ZERO, DVec3::X * 4.).unwrap();
+    let first = model.make_object(&BTreeSet::from([edge]), true, "First").unwrap();
+    let copy = model.copy_entities(&BTreeSet::from([first]));
+    let pivot = DVec3::X * 6.;
+    let peer = *model.paste_entities(&copy, pivot).first().unwrap();
+    model.rotate_selection(&BTreeSet::from([peer]), pivot, DVec3::Z, 90.).unwrap();
+    let edge = model.add_edge(DVec3::Y * 6., DVec3::new(4., 6., 0.)).unwrap();
+    let group = model.make_object(&BTreeSet::from([edge]), false, "Separate").unwrap();
+    let loose = model.add_edge(DVec3::Y * 8., DVec3::new(4., 8., 0.)).unwrap();
+    let selection = BTreeSet::from([first, peer, group, loose]);
+    h.app.doc.camera.set_standard_view(ketchup_core::StandardView::Top);
+    h.app.fit(&h.ctx);
+    h.app.selected = selection.clone();
+
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    h.click(text_position(&output, "Set Direction"));
+    h.click(h.at(DVec3::new(2., 0., 0.)));
+    assert_eq!(h.app.selected, selection);
+    h.key(Key::ArrowRight);
+    let end = h.at(DVec3::new(3.5, 1., 0.));
+    h.frame(vec![egui::Event::PointerMoved(end)], egui::Modifiers::NONE);
+    let preview = h.app.grain_preview_axes();
+    assert_eq!(preview.len(), 3);
+    assert_eq!(preview[&first], DVec3::X);
+    assert_eq!(preview[&group], DVec3::X);
+    assert!(preview[&peer].abs_diff_eq(DVec3::Y, 1e-9));
+
+    h.click(end);
+    assert_eq!(h.app.selected, selection);
+    let assigned = h.app.doc.model.clone();
+    for (part, axis) in preview {
+        assert!(assigned.objects[&part].world_grain_axis().unwrap().abs_diff_eq(axis, 1e-9));
+    }
+    assert_eq!(h.app.doc.history.position(), 1);
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    h.click(text_position(&output, "Clear"));
+    assert!(h.app.doc.model.objects.values().all(|part| part.grain_axis().is_none()));
+    assert_eq!(h.app.doc.history.position(), 2);
+    h.app.undo(&h.ctx, false);
+    assert_eq!(h.app.doc.model, assigned);
+    h.app.undo(&h.ctx, false);
+    assert!(h.app.doc.model.objects.values().all(|part| part.grain_axis().is_none()));
+}
+
+#[test]
+fn view_menu_toggles_grain_visibility_without_editing_the_model() {
+    let mut h = Harness::new();
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    assert!(h.app.doc.display.grain_direction);
+    h.click(text_position(&output, "View"));
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    h.click(menu_text_position(&output, "Show Grain Direction"));
+    assert!(!h.app.doc.display.grain_direction);
+    assert!(!h.app.project.modified);
+    assert!(h.app.doc.history.is_empty());
+}
+
+#[test]
+fn grain_tool_can_anchor_on_an_edge_of_another_part_and_cancel() {
+    let mut h = Harness::new();
+    let model = &mut h.app.doc.model;
+    let edge = model.add_edge(DVec3::ZERO, DVec3::X * 4.).unwrap();
+    let first = model.make_object(&BTreeSet::from([edge]), false, "First").unwrap();
+    let edge = model.add_edge(DVec3::Y * 2., DVec3::new(4., 2., 0.)).unwrap();
+    let second = model.make_object(&BTreeSet::from([edge]), false, "Second").unwrap();
+    h.app.doc.camera.set_standard_view(ketchup_core::StandardView::Top);
+    h.app.fit(&h.ctx);
+    h.app.selected = BTreeSet::from([first]);
+    h.app.set_tool(Tool::GrainDirection);
+    h.frame(vec![], egui::Modifiers::NONE);
+
+    h.click(h.at(DVec3::new(2., 2., 0.)));
+    let anchor = h.app.grain_anchor.as_ref().unwrap();
+    assert_eq!(anchor.part, second);
+    assert_eq!(anchor.point, DVec3::new(2., 2., 0.));
+    assert_eq!(h.app.selected, BTreeSet::from([second]));
+    h.key(Key::Escape);
+    assert!(h.app.grain_anchor.is_none());
+    assert_eq!(h.app.tool, Tool::GrainDirection);
+    assert!(h.app.doc.history.is_empty());
+}
+
 #[path = "construction_guide_tests.rs"]
 mod construction_guides;
 #[path = "axis_lock_tests.rs"]

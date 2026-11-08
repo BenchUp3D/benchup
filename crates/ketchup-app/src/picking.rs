@@ -349,6 +349,27 @@ impl PickingCache {
                 return Some(id);
             }
         }
+        if let Some((edge, _)) = self.pick_edge(model, faces, entities, camera, size, pixel, radius) {
+            return entities.get(edge).context;
+        }
+        if include_faces {
+            self.nearest(faces, entities, camera.ray(pixel, size), false)
+                .and_then(|(id, _, _)| entities.get(id).context)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn pick_edge(
+        &mut self,
+        model: &Model,
+        faces: &FaceCache,
+        entities: &EntityCache,
+        camera: &Camera,
+        size: DVec2,
+        pixel: DVec2,
+        radius: f64,
+    ) -> Option<(u64, DVec3)> {
         let view = camera.view(size);
         let ray = view.ray(pixel);
         self.edges.update(model, camera, size);
@@ -369,15 +390,10 @@ impl PickingCache {
             let point_ray = view.ray(projected);
             let obstruction = self.nearest(faces, entities, point_ray, false);
             if obstruction.is_none_or(|(_, t, _)| t + 1e-5 >= point.distance(point_ray.origin)) {
-                return entities.get(edge.id).context;
+                return Some((id, point));
             }
         }
-        if include_faces {
-            self.nearest(faces, entities, ray, false)
-                .and_then(|(id, _, _)| entities.get(id).context)
-        } else {
-            None
-        }
+        None
     }
 }
 

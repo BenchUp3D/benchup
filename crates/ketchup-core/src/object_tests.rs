@@ -135,6 +135,7 @@ fn drawing_on_a_hidden_grouped_import_preserves_geometry_and_undo() {
                 kind: ObjectKind::Group,
                 entities,
                 transform: None,
+                grain_axis: None,
                 definition_entities: Default::default(),
             },
         );
@@ -157,6 +158,7 @@ fn drawing_on_a_hidden_grouped_import_preserves_geometry_and_undo() {
             kind: ObjectKind::Group,
             entities: groups,
             transform: None,
+            grain_axis: None,
             definition_entities: Default::default(),
         },
     );

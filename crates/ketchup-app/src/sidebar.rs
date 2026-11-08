@@ -1714,6 +1714,34 @@ mod preference_tests {
     }
 
     #[test]
+    fn grain_direction_visibility_and_tool_restore_without_model_edits() {
+        let old: DisplaySettings = serde_json::from_str("{}").unwrap();
+        assert!(old.grain_direction);
+        let ctx = egui::Context::default();
+        let mut storage = SavedPreferences::default();
+        let mut app = KetchupApp::with_document(Document::default(), None, true);
+        app.set_tool(Tool::GrainDirection);
+        for enabled in [true, false] {
+            app.doc.display.grain_direction = enabled;
+            storage.flushed = false;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            assert!(app.dirty_since.is_none());
+            let mut restored = KetchupApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+            assert_eq!(restored.tool, Tool::GrainDirection);
+            assert_eq!(restored.doc.display.grain_direction, enabled);
+            let mut project = Document::default();
+            project.display.grain_direction = !enabled;
+            restored.replace_project(project, None, &ctx);
+            assert_eq!(restored.doc.display.grain_direction, enabled);
+            restored.new_model(&ctx);
+            assert_eq!(restored.doc.display.grain_direction, enabled);
+        }
+    }
+
+    #[test]
     fn grid_and_wood_joinery_save_without_model_edits_and_default_on() {
         let old: DisplaySettings = serde_json::from_str("{}").unwrap();
         assert!(old.grid);
@@ -4687,6 +4715,7 @@ impl KetchupApp {
         if before != self.doc.display {
             self.changed(ui.ctx());
         }
+        Self::menu_checkbox(ui, &mut self.doc.display.grain_direction, tr!("grain_direction.show"));
         // Group emphasis is an application preference and does not modify the project.
         if Self::menu_checkbox(ui, &mut self.doc.display.group_emphasis, tr!("sidebar.emphasize_group"))
             .on_hover_text(tr!("sidebar.emphasize_the_group_component_currently_being_edited_and"))
@@ -4699,7 +4728,7 @@ impl KetchupApp {
     }
 
     fn display_contents(&mut self, ui: &mut egui::Ui) {
-        let before = self.doc.display.clone();
+        let mut before = self.doc.display.clone();
         let d = &mut self.doc.display;
         ui.text_label(RichText::new(tr!("sidebar.face_style")).strong());
         face_style_picker(ui, &mut d.face_style);
@@ -4770,6 +4799,7 @@ impl KetchupApp {
         inspector_section(ui, tr!("sidebar.environment"), "display_environment", false, |ui| {
             crate::environment::controls(ui, d);
         });
+        ui.checkbox(&mut d.grain_direction, tr!("grain_direction.show"));
         if ui
             .add_sized(
                 egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
@@ -4782,6 +4812,7 @@ impl KetchupApp {
                 ..DisplaySettings::default()
             };
         }
+        before.grain_direction = self.doc.display.grain_direction;
         if before != self.doc.display {
             self.changed(ui.ctx());
         }

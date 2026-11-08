@@ -34,7 +34,7 @@ impl KetchupApp {
             .iter()
             .copied()
             .filter(move |guide| {
-                self.tool == Tool::Line
+                matches!(self.tool, Tool::Line | Tool::GrainDirection)
                     && point.is_some_and(|point| {
                         (point - guide.origin).cross(guide.axis.vector()).length() < 1e-6
                     })
@@ -64,7 +64,7 @@ impl KetchupApp {
         } else {
             self.single_axis_lock()
         };
-        if !(self.tool.is_drawing() || self.tool.is_measuring())
+        if !(self.tool.is_drawing() || self.tool.is_measuring() || self.tool == Tool::GrainDirection)
             || self.paste_preview.is_some()
             || !self.doc.snap_to_axes
         {
@@ -75,8 +75,8 @@ impl KetchupApp {
             return;
         };
         if matches!(base.kind, Inference::OnGuide | Inference::GuidePoint) { return; }
-        if self.tool == Tool::Line
-            && let Some(start) = self.line_start
+        if matches!(self.tool, Tool::Line | Tool::GrainDirection)
+            && let Some(start) = self.trace_start()
         {
             let inference = ketchup_core::inference::infer_axis_alignment_with_constraint(
                 &self.doc.model,
@@ -177,7 +177,7 @@ impl KetchupApp {
         if geometry(base) {
             return;
         }
-        let start = self.line_start.or_else(|| {
+        let start = self.trace_start().or_else(|| {
             self.measurement
                 .as_ref()
                 .filter(|m| !m.complete)?
@@ -210,6 +210,7 @@ impl KetchupApp {
                     .flatten()
             })
             .or_else(|| self.measurement_plane())
+            .or_else(|| start.zip(self.grain_plane()).filter(|_| self.lock.is_none() && base.kind == Inference::Plane))
             .or_else(|| surface.map(|(id, _, _)| (base.point, self.face_cache.get(id).normal)));
         if let Some((start, axis)) = start.zip(lock) {
             // The cursor selects the reference, not the inferred endpoint: the

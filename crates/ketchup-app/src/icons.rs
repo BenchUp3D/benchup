@@ -239,6 +239,7 @@ fn paint_tool(p: &egui::Painter, rect: Rect, tool: Tool, colors: ToolPalette) {
         | Tool::Scale
         | Tool::Offset
         | Tool::Paint
+        | Tool::GrainDirection
         | Tool::Flip
         | Tool::Dimensions
         | Tool::Text => blue,
@@ -546,6 +547,11 @@ fn paint_tool(p: &egui::Painter, rect: Rect, tool: Tool, colors: ToolPalette) {
             p.line_segment([xy(-0.4, 0.6), xy(0.4, 0.6)], Stroke::new(1.65, outline));
             for x in [-0.8, 0.8] {
                 p.circle_filled(xy(x, -0.3), 2., red);
+            }
+        }
+        Tool::GrainDirection => {
+            for y in [-0.55, 0., 0.55] {
+                p.line_segment([xy(-0.85, y + 0.2), xy(0.85, y - 0.2)], stroke);
             }
         }
         Tool::Orbit => {

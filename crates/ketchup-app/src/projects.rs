@@ -173,6 +173,7 @@ impl KetchupApp {
             }
         }
         doc.display.group_emphasis = self.doc.display.group_emphasis;
+        doc.display.grain_direction = self.doc.display.grain_direction;
         // Snapping targets are app preferences, including when an older project
         // carries the former geometry master switch in its document.
         doc.snap_to_geometry =

@@ -403,6 +403,11 @@ pub(super) fn snap_with_geometry(
 impl KetchupApp {
     pub(super) fn apply_grid_snap(&mut self) {
         if self.snap_to_grid {
+            let model = if self.tool == Tool::GrainDirection && self.grain_uses_evaluated_geometry() {
+                self.joinery_geometry.result.as_ref().map_or(&self.doc.model, |result| &result.model)
+            } else {
+                &self.doc.model
+            };
             let plane = self
                 .drawing
                 .as_ref()
@@ -415,7 +420,7 @@ impl KetchupApp {
                 .or_else(|| self.measurement_plane().map(|(_, normal)| normal));
             self.snap = self.snap.map(|target| {
                 let start = self
-                    .line_start
+                    .trace_start()
                     .or_else(|| self.drawing.as_ref().map(|drawing| drawing.origin))
                     .or_else(|| self.measurement.as_ref()?.points.first().copied());
                 let constraint =
@@ -425,9 +430,13 @@ impl KetchupApp {
                 snap_with_geometry(
                     target,
                     configured_spacing(&self.doc.camera, &self.doc.display),
-                    plane,
+                    plane.or_else(|| {
+                        (target.kind == Inference::Plane && constraint.is_none())
+                            .then(|| self.grain_plane())
+                            .flatten()
+                    }),
                     movement_axis(target.point, start, constraint, self.doc.snap_to_axes),
-                    &self.doc.model,
+                    model,
                     None,
                 )
             });

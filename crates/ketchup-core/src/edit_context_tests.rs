@@ -33,6 +33,45 @@ fn first_face(model: &Model, parent: u64) -> u64 {
 }
 
 #[test]
+fn grain_round_trips_and_is_shared_by_transformed_component_instances() {
+    let mut doc = Document::default();
+    rectangle(&mut doc.model);
+    let original = object(&mut doc.model, true, "Panel");
+    let stale_clipboard = doc.model.copy_entities(&BTreeSet::from([original]));
+    let old = serde_json::to_value(&doc).unwrap();
+    assert!(old["model"]["objects"][original.to_string()].get("grain_axis").is_none());
+    let mut doc = Document::from_json(&old.to_string()).unwrap();
+    assert_eq!(doc.model.objects[&original].grain_axis(), None);
+
+    let peer = *doc.model.paste_entities(&stale_clipboard, DVec3::X * 10.).first().unwrap();
+    doc.model.rotate_selection(&BTreeSet::from([peer]), DVec3::ZERO, DVec3::Z, 90.).unwrap();
+    let before = doc.model.clone();
+    doc.model.set_grain_direction(peer, Some(-DVec3::Y)).unwrap();
+    assert!(doc.model.objects[&original].world_grain_axis().unwrap().abs_diff_eq(DVec3::X, 1e-9));
+    assert!(doc.model.objects[&peer].world_grain_axis().unwrap().abs_diff_eq(DVec3::Y, 1e-9));
+    let assigned = doc.model.clone();
+    doc.model.set_grain_direction(peer, Some(DVec3::Y)).unwrap();
+    assert_eq!(doc.model, assigned);
+    doc.history.record("Assign Grain Direction", before, &doc.model);
+
+    let mut restored = Document::from_json(&serde_json::to_string(&doc).unwrap()).unwrap();
+    assert_eq!(restored.model.objects[&original].grain_axis(), doc.model.objects[&original].grain_axis());
+    assert!(restored.history.undo(&mut restored.model));
+    assert!(restored.model.objects.values().all(|part| part.grain_axis().is_none()));
+    assert!(restored.history.redo(&mut restored.model));
+    let before_paste = restored.model.clone();
+    let pasted = *restored.model.paste_entities(&stale_clipboard, DVec3::Z).first().unwrap();
+    assert_eq!(restored.model.objects[&pasted].grain_axis(), restored.model.objects[&original].grain_axis());
+    restored.history.record("Paste", before_paste, &restored.model);
+    let before = restored.model.clone();
+    restored.model.set_grain_direction(peer, None).unwrap();
+    assert!(restored.model.objects.values().all(|part| part.grain_axis().is_none()));
+    restored.history.record("Clear Grain Direction", before.clone(), &restored.model);
+    assert!(restored.history.undo(&mut restored.model));
+    assert_eq!(restored.model, before);
+}
+
+#[test]
 fn nested_scopes_select_only_immediate_children_and_keep_new_geometry_inside() {
     let mut model = Model::default();
     rectangle(&mut model);

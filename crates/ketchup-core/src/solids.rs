@@ -675,6 +675,7 @@ pub(crate) fn output(
             name: name.into(),
             kind: ObjectKind::Group,
             transform: Some(Default::default()),
+            grain_axis: None,
             definition_entities: BTreeMap::new(),
             entities,
         },

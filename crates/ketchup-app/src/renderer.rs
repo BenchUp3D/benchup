@@ -1043,6 +1043,170 @@ impl Mesh {
         self.surface_line(a, b, width, color, extensions, endpoints, &[]);
     }
 
+    pub(crate) fn surface_grain(
+        &mut self,
+        face: &CachedFace,
+        axis: DVec3,
+        width: f64,
+        color: Color32,
+    ) {
+        let Some(plane) = face.plane else { return };
+        let tangent = axis - plane.normal * plane.normal.dot(axis);
+        let end_grain = tangent.length_squared() < 1e-8;
+        let along = if end_grain {
+            plane.u
+        } else {
+            // Reversing an unoriented axis must not mirror the pattern.
+            let u = tangent.dot(plane.u);
+            let v = tangent.dot(plane.v);
+            let sign = if u.abs() >= v.abs() { u } else { v };
+            tangent.normalize() * sign.signum()
+        };
+        let across = plane.normal.cross(along);
+        // Anchor the pattern inside the face even when the outline's mean
+        // falls in a hole or outside a concave boundary.
+        let anchor = if face.contains_point(face.center) {
+            face.center
+        } else {
+            let Some(triangle) = face.triangles.iter().max_by(|[a, b, c], [d, e, f]| {
+                (*b - *a)
+                    .cross(*c - *a)
+                    .length_squared()
+                    .total_cmp(&(*e - *d).cross(*f - *d).length_squared())
+            }) else {
+                return;
+            };
+            triangle.iter().sum::<DVec3>() / 3.
+        };
+        let project = |point: DVec3| {
+            let delta = point - anchor;
+            DVec2::new(delta.dot(along), delta.dot(across))
+        };
+        let (lo, hi) = face
+            .positions
+            .iter()
+            .map(|&p| project(p))
+            .fold((DVec2::ZERO, DVec2::ZERO), |(lo, hi), point| {
+                (lo.min(point), hi.max(point))
+            });
+        let spacing = (hi - lo).max_element() / 8.;
+        if !spacing.is_finite() || spacing <= 0. {
+            return;
+        }
+        // Project the fixed marks once. Expand only their thickness in screen
+        // space, then clip that footprint to the visible surface.
+        let dot: [DVec2; 8] = std::array::from_fn(|i| {
+            DVec2::from_angle(i as f64 * std::f64::consts::FRAC_PI_4) * (width * 0.65)
+        });
+        let marks: Vec<_> = grain_layout(lo / spacing, hi / spacing, end_grain)
+            .into_iter()
+            .filter_map(|(center, half_length)| {
+                let world = anchor + (along * center.x + across * center.y) * spacing;
+                let (outline, start, normal) = if end_grain {
+                    let center = self.view.project(world)?;
+                    (
+                        dot.map(|offset| center + offset).to_vec(),
+                        center,
+                        DVec2::ZERO,
+                    )
+                } else {
+                    let half = along * (half_length * spacing);
+                    let (a, b) = self.view.segment(world - half, world + half)?;
+                    let direction = (b - a).try_normalize()?;
+                    let normal = DVec2::new(-direction.y, direction.x);
+                    let fringe = (normal.x.abs() + normal.y.abs()) / self.pixels_per_point;
+                    let normal = normal * ((width + fringe) * 0.5);
+                    (
+                        vec![a - normal, b - normal, b + normal, a + normal],
+                        a,
+                        normal,
+                    )
+                };
+                let (min, max) = outline
+                    .iter()
+                    .copied()
+                    .fold((outline[0], outline[0]), |(min, max), point| {
+                        (min.min(point), max.max(point))
+                    });
+                Some((outline, start, normal, min, max))
+            })
+            .collect();
+        for &triangle in &face.triangles {
+            let (cut, len) = self.display.section_triangle(triangle);
+            for i in 1..len.saturating_sub(1) {
+                let triangle = [cut[0], cut[i], cut[i + 1]];
+                let color = self.fog_color(color, triangle.iter().sum::<DVec3>() / 3.);
+                for projected in self.view.triangle_depth(triangle) {
+                    let Some(gradient) = depth_gradient(projected) else {
+                        continue;
+                    };
+                    let origin = projected[0];
+                    for region in self.visible_stroke_polygons(
+                        projected.map(DVec3::truncate).to_vec(),
+                        origin,
+                        gradient,
+                    ) {
+                        let (min, max) = region.iter().copied().fold(
+                            (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+                            |(lo, hi), point| (lo.min(point), hi.max(point)),
+                        );
+                        let area = region
+                            .windows(2)
+                            .map(|edge| (edge[0] - region[0]).perp_dot(edge[1] - region[0]))
+                            .sum::<f64>();
+                        if !area.is_finite() || area.abs() <= 1e-12 {
+                            continue;
+                        }
+                        let mut footprint = Vec::new();
+                        let mut clipped = Vec::new();
+                        for (outline, start, normal, mark_min, mark_max) in &marks {
+                            if !mark_max.cmpge(min).all() || !mark_min.cmple(max).all() {
+                                continue;
+                            }
+                            footprint.clear();
+                            footprint.extend_from_slice(outline);
+                            for (&a, &b) in region.iter().zip(region.iter().cycle().skip(1)) {
+                                clip_polygon_into(
+                                    &footprint,
+                                    |p| area.signum() * (b - a).perp_dot(p - a),
+                                    &mut clipped,
+                                );
+                                std::mem::swap(&mut footprint, &mut clipped);
+                                if footprint.is_empty() {
+                                    break;
+                                }
+                            }
+                            if footprint.is_empty() {
+                                continue;
+                            }
+                            self.emit_stroke_polygon(
+                                &footprint, origin, gradient, *start, *normal, color,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stroke_triangles(&self) -> Vec<[DVec2; 3]> {
+        self.indices
+            .chunks_exact(3)
+            .enumerate()
+            .filter(|(i, _)| {
+                let index = (*i * 3) as u32;
+                !self.triangle_ranges.iter().any(|range| range.contains(&index))
+            })
+            .map(|(_, indices)| {
+                [indices[0], indices[1], indices[2]].map(|index| {
+                    let [x, y, _] = self.vertices[index as usize].position;
+                    DVec2::new(1. + f64::from(x), 1. - f64::from(y)) * self.size * 0.5
+                })
+            })
+            .collect()
+    }
+
     fn surface_line(
         &mut self,
         a: DVec3,
@@ -1292,6 +1456,7 @@ impl Mesh {
         dash_axis: Option<DVec2>,
     ) {
         let base = self.vertices.len() as u32;
+        let normal_squared = n.length_squared();
         for &p in polygon {
             let depth = origin.z + gradient.dot(p - origin.truncate());
             self.vertices.push(Vertex {
@@ -1301,7 +1466,12 @@ impl Mesh {
                     (depth as f32).next_down().max(0.),
                 ],
                 color: color.to_array(),
-                lateral: ((p - a).dot(n) / n.length_squared()) as f32,
+                // Filled surface marks have no screen-space stroke normal.
+                lateral: if normal_squared == 0. {
+                    0.
+                } else {
+                    ((p - a).dot(n) / normal_squared) as f32
+                },
                 shadow_color: [0; 4],
                 dash_phase: dash_axis.map_or(-1., |axis| (p - a).dot(axis).max(0.) as f32),
             });
@@ -2608,6 +2778,56 @@ fn annotation_stroke_footprint(a: DVec2, b: DVec2, radius: f64) -> Vec<DVec2> {
     vec![a - along - normal, b + along - normal, b + along + normal, a - along + normal]
 }
 
+/// A bounded pattern in face coordinates. Variation depends only on the row
+/// and column so clipping and orbiting always reveal the same marks.
+fn grain_layout(min: DVec2, max: DVec2, end_grain: bool) -> Vec<(DVec2, f64)> {
+    let across = if end_grain { 1. } else { 0.66 };
+    let row_jitter = if end_grain { 0. } else { 0.13 };
+    let first = ((min.y - row_jitter) / across).ceil() as i64;
+    let last = ((max.y + row_jitter) / across).floor() as i64;
+    let mut marks = Vec::new();
+    for row in first..=last {
+        let (pitch, offset, y) = if end_grain {
+            (1., 0., row as f64)
+        } else if row == 0 {
+            (1.35, 0., 0.)
+        } else {
+            (
+                1.35 + 0.09 * grain_variation(row, 11),
+                0.54 * grain_variation(row, 29),
+                row as f64 * across + row_jitter * grain_variation(row, 47),
+            )
+        };
+        let margin = if end_grain { 0. } else { 0.52 };
+        let first = ((min.x - offset - margin) / pitch).ceil() as i64;
+        let last = ((max.x - offset + margin) / pitch).floor() as i64;
+        for column in first..=last {
+            let (jitter, half_length) = if end_grain {
+                (0., 0.)
+            } else {
+                let jitter = if row == 0 && column == 0 {
+                    0.
+                } else {
+                    0.06 * grain_variation(column, row)
+                };
+                (jitter, 0.40 + 0.06 * grain_variation(column + 31, row))
+            };
+            marks.push((
+                DVec2::new(column as f64 * pitch + offset + jitter, y),
+                half_length,
+            ));
+        }
+    }
+    marks
+}
+
+fn grain_variation(column: i64, row: i64) -> f64 {
+    let key = (column as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ (row as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    let mixed = (key ^ (key >> 30)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    f64::from(((mixed ^ (mixed >> 31)) >> 48) as u16) / 32767.5 - 1.
+}
+
 fn clip_polygon(polygon: &[DVec2], side: impl Fn(DVec2) -> f64) -> Vec<DVec2> {
     if polygon.len() < 3 {
         return Vec::new();
@@ -3479,6 +3699,36 @@ impl CachedFace {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn grain_rows_are_staggered_and_closer_across_than_along_the_grain() {
+        use super::*;
+
+        let marks = grain_layout(DVec2::splat(-4.), DVec2::splat(4.), false);
+        let mut rows = Vec::new();
+        for &(center, _) in &marks {
+            if rows.last().is_none_or(|last: &DVec2| last.y != center.y) {
+                rows.push(center);
+            }
+        }
+        let row_gaps: Vec<_> = rows.windows(2).map(|pair| pair[1].y - pair[0].y).collect();
+        assert!(row_gaps.iter().all(|&gap| (0.39..0.93).contains(&gap)));
+        assert!(
+            row_gaps
+                .windows(2)
+                .any(|pair| (pair[0] - pair[1]).abs() > 0.03)
+        );
+        assert!(
+            rows.windows(2)
+                .any(|pair| (pair[0].x - pair[1].x).abs() > 0.2)
+        );
+        for pair in marks.windows(2) {
+            let [(a, half_a), (b, half_b)] = [pair[0], pair[1]];
+            if a.y == b.y {
+                assert!(b.x - a.x - half_a - half_b > 0.2);
+            }
+        }
+    }
+
     #[test]
     fn group_marker_geometry_is_shared_across_views_and_replaced_after_model_changes() {
         use super::*;

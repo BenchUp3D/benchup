@@ -92,6 +92,7 @@ pub enum Tool {
     Text,
     Erase,
     Orbit,
+    GrainDirection,
 }
 
 impl Tool {
@@ -126,7 +127,7 @@ impl Tool {
     pub fn is_drawing(self) -> bool {
         Self::DRAWING.contains(&self)
     }
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Select,
         Self::Line,
         Self::Rectangle,
@@ -151,6 +152,7 @@ impl Tool {
         Self::Dimensions,
         Self::Erase,
         Self::Orbit,
+        Self::GrainDirection,
     ];
     pub const RAIL: [Self; 12] = [
         Self::Select,
@@ -192,6 +194,7 @@ impl Tool {
             Self::Text => tr!("tools.text"),
             Self::Erase => tr!("tools.erase"),
             Self::Orbit => tr!("tools.orbit"),
+            Self::GrainDirection => tr!("tools.grain_direction"),
         }
     }
     pub fn shortcut(self) -> &'static str {
@@ -217,7 +220,7 @@ impl Tool {
             Self::TapeMeasure => "T",
             Self::Protractor => "A",
             Self::Dimensions => "I",
-            Self::Text => "",
+            Self::Text | Self::GrainDirection => "",
             Self::Erase => "E",
             Self::Orbit => "O",
         }
@@ -274,6 +277,7 @@ impl Tool {
             }
             Self::Text => tr!("tools.click_an_object_then_click_to_place_its"),
             Self::Orbit => tr!("tools.drag_to_orbit_hold_shift_to_pan_scroll"),
+            Self::GrainDirection => tr!("tools.place_the_grain_anchor"),
         }
     }
 }

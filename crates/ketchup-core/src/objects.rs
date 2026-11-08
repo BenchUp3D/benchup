@@ -41,6 +41,9 @@ pub struct Object {
     pub outliner_order: Option<u64>,
     #[serde(default)]
     pub transform: Option<crate::InstanceTransform>,
+    /// Unoriented axis in the object's local frame, shared by linked instances.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) grain_axis: Option<DVec3>,
     pub kind: ObjectKind,
     pub entities: BTreeSet<u64>,
     /// Stable definition entity -> this instance's entity, retained by copies.
@@ -50,6 +53,14 @@ pub struct Object {
 }
 
 impl Object {
+    pub fn grain_axis(&self) -> Option<DVec3> {
+        self.grain_axis
+    }
+
+    pub fn world_grain_axis(&self) -> Option<DVec3> {
+        (self.transform.unwrap_or_default().linear() * self.grain_axis?).try_normalize()
+    }
+
     pub fn surface_treatment_override(&self) -> Option<&crate::surface_treatment::Settings> {
         // Preserve non-default configurations saved before the override flag existed.
         (self.surface_treatment_customized
@@ -59,6 +70,51 @@ impl Object {
 }
 
 impl Model {
+    /// Assign an unoriented direction measured in world coordinates.
+    pub fn set_grain_direction(
+        &mut self,
+        id: u64,
+        direction: Option<DVec3>,
+    ) -> Result<(), &'static str> {
+        let object = self
+            .objects
+            .get(&id)
+            .filter(|_| self.entity_in_context(id) == Some(id) && !self.is_locked(id))
+            .ok_or(tr!("core.objects.select_an_unlocked_part"))?;
+        let axis = direction
+            .map(|direction| -> Result<DVec3, &'static str> {
+                let local = object.transform.unwrap_or_default().linear().inverse() * direction;
+                let axis = local
+                    .try_normalize()
+                    .ok_or(tr!("core.objects.invalid_grain_direction"))?;
+                let pivot = axis.abs().max_position();
+                let axis = if axis[pivot] < 0. { -axis } else { axis };
+                // Picking a parallel edge on a transformed copy is the same edit.
+                Ok(object
+                    .grain_axis
+                    .filter(|previous| previous.dot(axis).abs() >= 1. - 1e-12)
+                    .unwrap_or(axis))
+            })
+            .transpose()?;
+        if object.grain_axis == axis {
+            return Ok(());
+        }
+        if matches!(object.kind, ObjectKind::Component { .. }) {
+            let kind = object.kind.clone();
+            for peer in self.objects.values_mut().filter(|peer| peer.kind == kind) {
+                peer.grain_axis = axis;
+            }
+        } else if self.edit_context.is_some() {
+            self.edit_in_context(|contents| {
+                contents.objects.get_mut(&id).unwrap().grain_axis = axis;
+                Ok(())
+            })?;
+        } else {
+            self.objects.get_mut(&id).unwrap().grain_axis = axis;
+        }
+        Ok(())
+    }
+
     pub fn object_stock_material<'a>(&'a self, object: &'a Object) -> Option<&'a StockMaterial> {
         if let Some(id) = object.stock_material_id {
             self.stock_materials.get(&id)
@@ -636,6 +692,7 @@ impl Model {
                 stock_material_id: None,
                 outliner_order: None,
                 transform: Some(crate::InstanceTransform::default()),
+                grain_axis: None,
                 name: if name.trim().is_empty() {
                     if component { tr!("core.objects.component") } else { tr!("core.objects.group") }.into()
                 } else {
@@ -715,6 +772,7 @@ impl Model {
             if *id != object.id
                 || object.name.len() > 1024
                 || object.transform.is_some_and(|t| !t.valid())
+                || object.grain_axis.is_some_and(|axis| !axis.is_normalized())
             {
                 return Err(tr!("core.objects.invalid_object"));
             }

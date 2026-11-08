@@ -59,6 +59,8 @@ mod section_gizmo;
 mod finish_settings;
 #[path = "grid.rs"]
 mod grid;
+#[path = "grain_direction.rs"]
+mod grain_direction;
 #[path = "measurement_tools.rs"]
 mod measurement_tools;
 #[path = "move_tool.rs"]
@@ -176,6 +178,7 @@ enum GestureKind {
         paused: bool,
     },
     Modeling,
+    GrainDirection,
     Solid,
     Measure,
     Paste,
@@ -335,6 +338,7 @@ pub struct KetchupApp {
     outliner_cache: sidebar::OutlinerCache,
     focus_outliner_search: bool,
     line_start: Option<DVec3>,
+    grain_anchor: Option<grain_direction::Anchor>,
     line_group: Option<u64>,
     snap: Option<Snap>,
     snap_to_grid: bool,
@@ -507,6 +511,7 @@ impl KetchupApp {
             outliner_cache: Default::default(),
             focus_outliner_search: false,
             line_start: None,
+            grain_anchor: None,
             line_group: None,
             snap: None,
             snap_to_grid: false,
@@ -629,6 +634,7 @@ impl KetchupApp {
         }
         self.modeling = None;
         self.line_start = None;
+        self.grain_anchor = None;
         self.line_group = None;
         self.snap = None;
         self.reset_axis_locks_after_action();
@@ -731,6 +737,7 @@ impl KetchupApp {
         self.gesture = None;
         self.paste_preview = None;
         self.line_start = None;
+        self.grain_anchor = None;
         self.line_group = None;
         self.snap = None;
         self.length_input.clear();
@@ -936,6 +943,7 @@ impl KetchupApp {
         self.drawing = None;
         self.gesture = None;
         self.line_start = None;
+        self.grain_anchor = None;
         self.line_group = None;
         self.snap = None;
         self.reset_axis_locks_after_action();
@@ -2040,6 +2048,15 @@ impl KetchupApp {
             }
         }
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            if self.tool == Tool::GrainDirection {
+                if self.grain_anchor.is_some() {
+                    self.stop_drawing();
+                    self.hover = None;
+                } else {
+                    self.set_tool(Tool::Select);
+                }
+                return;
+            }
             if self.joinery.open && self.object_creation.is_none()
                 && self.object_rename.is_none() && self.viewports.renaming.is_none()
                 && self.text_editor.is_none()
@@ -2260,6 +2277,7 @@ impl KetchupApp {
                         }
                         Key::ArrowRight | Key::ArrowLeft | Key::ArrowUp
                             if self.tool.is_drawing()
+                                || self.tool == Tool::GrainDirection
                                 || matches!(self.tool, Tool::Move | Tool::Rotate | Tool::Scale | Tool::PushPull | Tool::Offset)
                                 || self.tool.is_measuring() =>
                         {
@@ -2814,6 +2832,8 @@ impl KetchupApp {
                         self.measurement_status()
                     } else if self.tool == Tool::Paint {
                         self.paint_instructions()
+                    } else if self.grain_anchor.is_some() {
+                        tr!("grain_direction.click_to_confirm")
                     } else if self.tool == Tool::Line && self.line_start.is_some() {
                         tr!("app.click_to_finish_type_length_enter_esc_to")
                     } else if self.drawing.is_some() && self.tool == Tool::Rectangle {
@@ -3318,6 +3338,7 @@ impl KetchupApp {
         self.solid_inspector(ui);
         self.measurement_inspector(ui);
         self.text_entity_info(ui);
+        self.grain_direction_inspector(ui);
         if self.selected.is_empty() {
             crate::empty_state::EmptyState::new(tr!("app.nothing_selected"),
                 tr!("app.select_an_entity_to_see_its_details")).show(ui);
@@ -3721,6 +3742,9 @@ impl KetchupApp {
         if self.tool == Tool::Orbit || self.navigating() || selecting_box {
             self.hover = None;
             self.flip_hover = None;
+            if self.tool == Tool::GrainDirection {
+                self.snap = None;
+            }
             return;
         }
         if self.modeling.is_some() && matches!(self.tool, Tool::Move | Tool::Rotate | Tool::Scale) {
@@ -3738,6 +3762,10 @@ impl KetchupApp {
         }
         let local = dv(pos - self.viewport.min);
         let size = dv(self.viewport.size());
+        if self.tool == Tool::GrainDirection && self.paste_preview.is_none() {
+            self.update_grain_pointer(pos);
+            return;
+        }
         self.hover = if self.tool == Tool::Erase {
             self.erase_target(pos)
         } else if let Some(face) = self.selected_modeling_face().filter(|face| {
@@ -3840,13 +3868,16 @@ impl KetchupApp {
         if !self.doc.snap_to_axes {
             return None;
         }
-        let delta = self.snap?.point - self.line_start?;
+        let delta = self.snap?.point - self.trace_start()?;
         if delta.length() < 1e-7 {
             return None;
         }
         [Axis::X, Axis::Y, Axis::Z]
             .into_iter()
             .find(|axis| delta.cross(axis.vector()).length() < 1e-7)
+    }
+    fn trace_start(&self) -> Option<DVec3> {
+        self.line_start.or(self.grain_anchor.as_ref().map(|anchor| anchor.point))
     }
     fn orbit_center(&mut self) -> DVec3 {
         // Match the renderer's inherited object/tag visibility, including the
@@ -3910,7 +3941,8 @@ impl KetchupApp {
     }
 
     fn drawing_orbit_modifier(&self, modifiers: egui::Modifiers) -> bool {
-        self.tool.is_drawing() && (modifiers.ctrl || modifiers.command || modifiers.mac_cmd)
+        (self.tool.is_drawing() || self.tool == Tool::GrainDirection)
+            && (modifiers.ctrl || modifiers.command || modifiers.mac_cmd)
     }
 
     fn update_drawing_orbit(&mut self, modifiers: egui::Modifiers) {
@@ -3920,7 +3952,7 @@ impl KetchupApp {
             self.drawing_orbit_pivot = None;
             if let Some(gesture) = &mut self.gesture {
                 // An interrupted point click must not place geometry on release.
-                if down && matches!(gesture.kind, GestureKind::Line | GestureKind::Shape) {
+                if down && matches!(gesture.kind, GestureKind::Line | GestureKind::Shape | GestureKind::GrainDirection) {
                     gesture.kind = GestureKind::DrawingNavigate;
                 }
                 if down && let GestureKind::Freehand { paused } = &mut gesture.kind {
@@ -3931,6 +3963,9 @@ impl KetchupApp {
         if down {
             self.hover = None;
             self.flip_hover = None;
+            if self.tool == Tool::GrainDirection {
+                self.snap = None;
+            }
         }
     }
 
@@ -4025,6 +4060,9 @@ impl KetchupApp {
             }
             self.gesture = None;
             self.section_drag = None;
+            if self.tool == Tool::GrainDirection {
+                self.snap = None;
+            }
             return;
         }
         let events = ctx.input(|i| i.events.clone());
@@ -4039,6 +4077,9 @@ impl KetchupApp {
             self.gesture = None;
             self.section_drag = None;
             self.hover = None;
+            if self.tool == Tool::GrainDirection {
+                self.snap = None;
+            }
             return;
         }
         if response.enabled() && self.joint_marker_under_pointer(ctx, response.rect) {
@@ -4150,6 +4191,7 @@ impl KetchupApp {
                                 | Tool::Protractor
                                 | Tool::Dimensions
                                 | Tool::Text => GestureKind::Measure,
+                                Tool::GrainDirection => GestureKind::GrainDirection,
                                 Tool::Flip
                                 | Tool::OuterShell
                                 | Tool::Union
@@ -4355,6 +4397,12 @@ impl KetchupApp {
                             {
                                 self.measurement_click(pos, ctx);
                             }
+                            GestureKind::GrainDirection
+                                if self.viewport.contains(pos)
+                                    && gesture.start.distance(pos) < 5. =>
+                            {
+                                self.grain_click(pos, ctx);
+                            }
                             GestureKind::Line
                                 if self.viewport.contains(pos)
                                     && gesture.start.distance(pos) < 5. =>
@@ -4442,6 +4490,9 @@ impl KetchupApp {
         if !response.contains_pointer() || over_compass || compass_drag || over_section {
             self.hover = None;
             self.flip_hover = None;
+            if self.tool == Tool::GrainDirection {
+                self.snap = None;
+            }
         } else if response.hovered() && refresh_pointer {
             if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
                 self.update_pointer(pos);
@@ -4606,6 +4657,7 @@ impl KetchupApp {
         let key = (self.modeling.is_none()
             && self.drawing.is_none()
             && self.line_start.is_none()
+            && self.grain_anchor.is_none()
             && self.paste_preview.is_none()
             && self.measurement.is_none()
             && self.text_editor.is_none()
@@ -4864,6 +4916,12 @@ impl KetchupApp {
                 display,
                 &faces,
             );
+            let grain_preview = self.history_preview.is_none()
+                .then(|| self.grain_preview_axes())
+                .unwrap_or_default();
+            grain_direction::paint(
+                &mut mesh, model, &face_draws, display, &grain_preview,
+            );
             #[cfg(not(target_arch = "wasm32"))]
             drop(face_profile);
             let profiles = {
@@ -4967,7 +5025,7 @@ impl KetchupApp {
                 drop(style_profile);
                 mesh.draw_edges(&edge_draws, display.extensions, display.endpoints);
             }
-            if let (Some(start), Some(snap)) = (self.line_start, self.line_preview_snap()) {
+            if let (Some(start), Some(snap)) = (self.trace_start(), self.line_preview_snap()) {
                 let color = self
                     .preview_alignment()
                     .or_else(|| self.active_drawing_guide().map(|g| g.axis))
@@ -5122,18 +5180,18 @@ impl KetchupApp {
             .active_drawing_guide()
             .map(|g| (g.origin, g.axis))
             .or_else(|| {
-                if !self.tool.is_drawing() {
+                if !self.tool.is_drawing() && self.tool != Tool::GrainDirection {
                     return None;
                 }
                 match self.line_preview_snap()?.kind {
                     Inference::OnAxis(axis) => Some((DVec3::ZERO, axis)),
                     Inference::Axis(axis) => self
-                        .line_start
+                        .trace_start()
                         .or_else(|| self.drawing.as_ref().map(|d| d.origin))
                         .map(|origin| (origin, axis)),
                     _ => self
                         .preview_alignment()
-                        .zip(self.line_start)
+                        .zip(self.trace_start())
                         .map(|(axis, start)| (start, axis)),
                 }
             });
@@ -5212,8 +5270,10 @@ impl KetchupApp {
         let modeling_start = self.modeling.as_ref()
             .filter(|_| matches!(self.tool, Tool::Move | Tool::Rotate | Tool::Scale | Tool::Offset | Tool::PushPull))
             .map(|edit| edit.anchor);
-        if self.tool.is_drawing() || self.tool == Tool::Text || modeling_anchor || modeling_start.is_some() {
-            if let Some(start) = self.line_start.or(self.drawing.as_ref().map(|d| d.origin)).or_else(|| {
+        if self.tool.is_drawing() || matches!(self.tool, Tool::Text | Tool::GrainDirection)
+            || modeling_anchor || modeling_start.is_some()
+        {
+            if let Some(start) = self.trace_start().or(self.drawing.as_ref().map(|d| d.origin)).or_else(|| {
                 (self.tool == Tool::Text).then(|| self.measurement.as_ref()?.points.first().copied()).flatten()
             }).or(modeling_start).filter(|_| !modeling_anchor) {
                 if let Some(point) = screen(start) {
@@ -5271,7 +5331,9 @@ impl KetchupApp {
                             p.circle_stroke(point, 4., Stroke::new(1.5, color));
                         }
                     }
-                    let label = if modeling_anchor {
+                    let label = if modeling_anchor
+                        || (self.tool == Tool::GrainDirection && self.grain_anchor.is_none())
+                    {
                         snap.kind.label().into()
                     } else if let Some(normal) = self.plane_lock() {
                         tr!("app.plane_locked", match normal {
@@ -5512,6 +5574,7 @@ impl KetchupApp {
     }
     fn drawing_lock_buttons(&mut self, ui: &mut egui::Ui) {
         let enabled = self.tool.is_drawing()
+            || self.tool == Tool::GrainDirection
             || matches!(self.tool, Tool::Move | Tool::Rotate | Tool::Scale | Tool::PushPull | Tool::Offset)
             || self.tool.is_measuring();
         let colors = Palette::for_ui(ui);

@@ -405,6 +405,7 @@ impl Model {
                 }
                 let object = self.objects.get_mut(&peer).unwrap();
                 object.entities = entities;
+                object.grain_axis = instance.grain_axis;
                 object.definition_entities = instance
                     .definition_entities
                     .iter()
@@ -458,6 +459,7 @@ impl Model {
             let (entities, remap) = copy.paste_mapped(&contents, DVec3::ZERO, false);
             let object = copy.objects.get_mut(&id).unwrap();
             object.entities = entities;
+            object.grain_axis = reference.grain_axis;
             object.definition_entities = reference
                 .definition_entities
                 .iter()

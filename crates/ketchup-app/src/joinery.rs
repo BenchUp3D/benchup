@@ -200,17 +200,12 @@ impl GeometryCache {
         pixel: ketchup_core::DVec2,
         include_faces: bool,
     ) -> Option<u64> {
-        self.update(source);
-        let model = &self.result.as_ref().unwrap().model;
-        self.faces.update(model);
-        self.entities.update(model);
-        self.picking.set_display(display);
-        self.picking.update(&self.faces);
-        self.picking
+        let (model, faces, entities, picking) = self.evaluated_picking(source, display);
+        picking
             .pick(
                 model,
-                &self.faces,
-                &self.entities,
+                faces,
+                entities,
                 camera,
                 size,
                 pixel,
@@ -218,6 +213,20 @@ impl GeometryCache {
                 include_faces,
             )
             .filter(|id| source.contains_entity(id))
+    }
+
+    pub(super) fn evaluated_picking(
+        &mut self,
+        source: &Model,
+        display: &ketchup_core::DisplaySettings,
+    ) -> (&Model, &renderer::FaceCache, &renderer::EntityCache, &mut crate::picking::PickingCache) {
+        self.update(source);
+        let model = &self.result.as_ref().unwrap().model;
+        self.faces.update(model);
+        self.entities.update(model);
+        self.picking.set_display(display);
+        self.picking.update(&self.faces);
+        (model, &self.faces, &self.entities, &mut self.picking)
     }
     fn source_errors(&mut self, source: &Model) -> &[(u64, String)] {
         self.update(source);
