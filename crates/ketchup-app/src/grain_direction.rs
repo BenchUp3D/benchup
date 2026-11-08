@@ -412,14 +412,101 @@ pub(super) fn paint(
 mod tests {
     use super::*;
 
+    fn contains(triangles: &[[DVec2; 3]], point: DVec2) -> bool {
+        triangles.iter().any(|&[a, b, c]| {
+            let area = (b - a).perp_dot(c - a);
+            area.abs() > 1e-6
+                && [(a, b), (b, c), (c, a)]
+                    .into_iter()
+                    .all(|(a, b)| (b - a).perp_dot(point - a) * area.signum() >= -1e-7)
+        })
+    }
+
+    #[test]
+    fn grain_density_and_dash_length_are_independent_of_face_size() {
+        let size = DVec2::new(800., 650.);
+        let mut camera = Camera {
+            distance: 2.,
+            projection: ketchup_core::Projection::Parallel,
+            ..Camera::default()
+        };
+        camera.set_standard_view(ketchup_core::StandardView::Top);
+        let view = camera.view(size);
+        // Vary each dimension independently as well as scaling the whole face.
+        for (width, height) in [(0.4, 0.3), (0.8, 0.3), (0.4, 0.6), (1.6, 1.2)] {
+            let mut model = Model::default();
+            let corners = [
+                DVec3::new(-width, -height, 0.) * 0.5,
+                DVec3::new(width, -height, 0.) * 0.5,
+                DVec3::new(width, height, 0.) * 0.5,
+                DVec3::new(-width, height, 0.) * 0.5,
+            ];
+            for i in 0..4 {
+                model.ensure_edge(corners[i], corners[(i + 1) % 4]).unwrap();
+            }
+            let part = model
+                .make_object(&model.selectable_entities(), false, "Board")
+                .unwrap();
+            let mut cache = renderer::FaceCache::default();
+            cache.update(&model);
+            for axis in [DVec3::X, -DVec3::X, DVec3::Z] {
+                model.set_grain_direction(part, Some(axis)).unwrap();
+                let faces: Vec<_> = model
+                    .faces
+                    .values()
+                    .map(|face| renderer::FaceDraw {
+                        face,
+                        cached: cache.get(face.id),
+                        color: Color32::WHITE,
+                        shadow: None,
+                    })
+                    .collect();
+                for preview in [false, true] {
+                    let display = DisplaySettings {
+                        grain_direction: !preview,
+                        ..DisplaySettings::default()
+                    };
+                    let mut mesh = renderer::Mesh::new(&camera, size);
+                    mesh.draw_faces(&faces);
+                    mesh.set_entity(None);
+                    let axes = if preview {
+                        BTreeMap::from([(part, axis)])
+                    } else {
+                        BTreeMap::new()
+                    };
+                    paint(&mut mesh, &model, &faces, &display, &axes);
+                    let strokes = mesh.stroke_triangles();
+                    let samples = if axis.z == 0. {
+                        // The center dash stays short, and adjacent dashes keep
+                        // their pitch when the face grows in either direction.
+                        [(0., true), (0.02, true), (0.06, false), (0.135, true)]
+                    } else {
+                        // End-grain dots use the same fixed model-space scale.
+                        [(0., true), (0.05, false), (0.1, true), (0.15, false)]
+                    };
+                    for (offset, covered) in samples {
+                        for sign in [-1., 1.] {
+                            let point = view.project(DVec3::X * (offset * sign)).unwrap();
+                            assert_eq!(
+                                contains(&strokes, point), covered,
+                                "face {width} x {height}, axis {axis:?}, preview {preview}, offset {}",
+                                offset * sign
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn grain_stays_anchored_and_thin_while_orbiting_and_zooming() {
         let mut model = Model::default();
         let corners = [
             DVec3::ZERO,
-            DVec3::X * 4.,
-            DVec3::new(4., 3., 0.),
-            DVec3::Y * 3.,
+            DVec3::X * 0.8,
+            DVec3::new(0.8, 0.6, 0.),
+            DVec3::Y * 0.6,
         ];
         for i in 0..corners.len() {
             model
@@ -442,32 +529,23 @@ mod tests {
             mesh.surface_grain(face, axis, 0.85, Color32::BLACK);
             mesh.stroke_triangles()
         };
-        let contains = |triangles: &[[DVec2; 3]], point: DVec2| {
-            triangles.iter().any(|&[a, b, c]| {
-                let area = (b - a).perp_dot(c - a);
-                area.abs() > 1e-6
-                    && [(a, b), (b, c), (c, a)]
-                        .into_iter()
-                        .all(|(a, b)| (b - a).perp_dot(point - a) * area.signum() >= -1e-7)
-            })
-        };
         let mut camera = Camera {
             target: face.center,
-            distance: 12.,
+            distance: 2.4,
             ..Camera::default()
         };
-        for (yaw, pitch, distance) in [(0.1, 1.1, 12.), (1.2, 0.65, 12.), (-0.8, 0.95, 9.)] {
+        for (yaw, pitch, distance) in [(0.1, 1.1, 2.4), (1.2, 0.65, 2.4), (-0.8, 0.95, 1.8)] {
             camera.yaw = yaw;
             camera.pitch = pitch;
             camera.distance = distance;
             let view = camera.view(size);
             let strokes = render(&camera, DVec3::X);
             for (offset, covered) in [
-                (-0.3, false),
-                (-0.12, true),
+                (-0.06, false),
+                (-0.024, true),
                 (0., true),
-                (0.12, true),
-                (0.3, false),
+                (0.024, true),
+                (0.06, false),
             ] {
                 let point = view.project(face.center + DVec3::X * offset).unwrap();
                 assert_eq!(contains(&strokes, point), covered);
@@ -476,12 +554,12 @@ mod tests {
             assert!(contains(&dots, view.project(face.center).unwrap()));
             assert!(!contains(
                 &dots,
-                view.project(face.center + DVec3::X * 0.25).unwrap()
+                view.project(face.center + DVec3::X * 0.05).unwrap()
             ));
         }
 
         camera.set_standard_view(ketchup_core::StandardView::Top);
-        for distance in [3., 12., 24.] {
+        for distance in [0.6, 2.4, 4.8] {
             camera.distance = distance;
             let strokes = render(&camera, DVec3::X);
             let view = camera.view(size);
@@ -499,8 +577,8 @@ mod tests {
     #[test]
     fn assigned_and_preview_grain_repeat_on_each_visible_face() {
         let mut model = Model::default();
-        for along in [-DVec3::X * 4., -DVec3::Z * 4.] {
-            let corners = [DVec3::ZERO, along, along + DVec3::Y * 4., DVec3::Y * 4.];
+        for along in [-DVec3::X * 0.8, -DVec3::Z * 0.8] {
+            let corners = [DVec3::ZERO, along, along + DVec3::Y * 0.8, DVec3::Y * 0.8];
             for i in 0..4 {
                 model.ensure_edge(corners[i], corners[(i + 1) % 4]).unwrap();
             }
@@ -510,10 +588,10 @@ mod tests {
             .unwrap();
         model.set_grain_direction(part, Some(DVec3::X)).unwrap();
         let camera = Camera {
-            target: DVec3::new(-1.5, 2., -1.5),
+            target: DVec3::new(-0.3, 0.4, -0.3),
             yaw: 0.,
             pitch: 0.55,
-            distance: 14.,
+            distance: 2.8,
             projection: ketchup_core::Projection::Parallel,
             ..Camera::default()
         };
@@ -538,7 +616,7 @@ mod tests {
                 grain_direction: show,
                 section_cuts: section,
                 section_axes: [true, false, false],
-                section_offsets: [-1., 0.],
+                section_offsets: [-0.2, 0.],
                 ..DisplaySettings::default()
             };
             let mut mesh = renderer::Mesh::new(&camera, size);
@@ -553,7 +631,7 @@ mod tests {
                         for triangle in &face.cached.triangles {
                             mesh.world_triangle(
                                 &camera,
-                                triangle.map(|p| p + toward_eye),
+                                triangle.map(|p| p + toward_eye * 0.2),
                                 Color32::WHITE,
                             );
                         }
@@ -585,8 +663,8 @@ mod tests {
                 let [a, b, c] = triangle.map(|p| p.y);
                 a.max(b).max(c) - a.min(b).min(c)
             };
-            let side_unit = (view.project(-DVec3::X).unwrap().y - seam).abs();
-            let end_unit = (view.project(-DVec3::Z).unwrap().y - seam).abs();
+            let side_unit = (view.project(-DVec3::X * 0.2).unwrap().y - seam).abs();
+            let end_unit = (view.project(-DVec3::Z * 0.2).unwrap().y - seam).abs();
             assert!(
                 side.iter()
                     .any(|triangle| height(triangle) > 0.35 * side_unit)
@@ -599,7 +677,7 @@ mod tests {
         }
 
         let cut = render(true, &no_preview, true, false);
-        let cut_y = view.project(-DVec3::X).unwrap().y;
+        let cut_y = view.project(-DVec3::X * 0.2).unwrap().y;
         assert!(!cut.is_empty());
         assert!(cut.iter().flatten().all(|p| p.y <= cut_y + 1e-3));
 

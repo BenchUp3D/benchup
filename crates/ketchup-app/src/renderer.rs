@@ -1089,8 +1089,10 @@ impl Mesh {
             .fold((DVec2::ZERO, DVec2::ZERO), |(lo, hi), point| {
                 (lo.min(point), hi.max(point))
             });
-        let spacing = (hi - lo).max_element() / 8.;
-        if !spacing.is_finite() || spacing <= 0. {
+        // Geometry is in metres. Keep the same physical pattern scale on
+        // every face: larger faces reveal more marks instead of stretching them.
+        let spacing = 0.1;
+        if !lo.is_finite() || !hi.is_finite() {
             return;
         }
         // Project the fixed marks once. Expand only their thickness in screen
