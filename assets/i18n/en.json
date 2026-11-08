@@ -1050,6 +1050,8 @@
   "precision.use_length_units_mm_cm_m_km_in": "Use length units mm, cm, m, km, in, ft, or yd",
   "project_files.allow_pop_ups_for_ketchup3d_then_generate_the": "Allow pop-ups for KetchUp3D, then generate the PDF again.",
   "project_files.already_exists_select_that_file_in_the_save": "{} already exists. Select that .{extension} file in the save dialog to replace it.",
+  "project_files.could_not_compress_project": "Could not compress project: {error}",
+  "project_files.could_not_decompress_project": "Could not decompress project: {error}",
   "project_files.cutting_plan": "cutting plan",
   "project_files.estimates": "{name} - estimates",
   "project_files.export_geometry": "Export geometry",

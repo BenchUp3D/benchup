@@ -26,8 +26,70 @@ fn ketchup_files_round_trip_complete_projects_and_replace_existing_files() {
             decode(&std::fs::read(&path).unwrap()).unwrap().name,
             doc.name
         );
-        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), index + 1);
+        assert_eq!(
+            std::fs::read_dir(directory.path()).unwrap().count(),
+            index + 1
+        );
     }
+}
+
+#[test]
+fn compressed_and_plain_projects_preserve_the_document_and_undo_redo_history() {
+    let mut doc = Document {
+        name: "House – étage 🏠".into(),
+        snap_to_axes: false,
+        snap_to_geometry: false,
+        ..Default::default()
+    };
+    for (y, label) in [(0., "First line"), (2., "Second line")] {
+        let before = doc.model.clone();
+        let edge = doc
+            .model
+            .add_edge(DVec3::Y * y, DVec3::Y * y + DVec3::X)
+            .unwrap();
+        doc.history.record(label, before, &doc.model);
+        if y == 0. {
+            doc.selection.insert(edge);
+        }
+    }
+    assert!(doc.history.undo(&mut doc.model));
+    doc.camera.yaw += 0.4;
+    doc.viewport_cameras.insert(1, doc.camera.clone());
+    doc.display.grid = false;
+    let json = serde_json::to_string(&doc).unwrap();
+    let compressed = encode(&json).unwrap();
+    assert!(compressed.starts_with(&[0x1f, 0x8b, 0x08]));
+    assert!(compressed.len() < json.len());
+    for bytes in [json.as_bytes(), compressed.as_slice()] {
+        let mut restored = decode(bytes).unwrap();
+        assert_eq!(restored, doc);
+        assert_eq!(restored.history.undo_label(), Some("First line"));
+        assert_eq!(restored.history.redo_label(), Some("Second line"));
+        assert!(restored.history.undo(&mut restored.model));
+        assert!(restored.model.edges.is_empty());
+        assert!(restored.history.redo(&mut restored.model));
+        assert!(restored.history.redo(&mut restored.model));
+        assert_eq!(restored.model.edges.len(), 2);
+    }
+}
+
+#[test]
+fn corrupt_or_incomplete_compressed_projects_are_rejected() {
+    let compressed = encode(&serde_json::to_string(&Document::default()).unwrap()).unwrap();
+    for length in [2, 10, compressed.len() / 2, compressed.len() - 1] {
+        assert!(
+            decode(&compressed[..length]).is_err(),
+            "Truncated at {length}"
+        );
+    }
+    let mut corrupt = compressed.clone();
+    let checksum = corrupt.len() - 8;
+    corrupt[checksum] ^= 1;
+    assert!(decode(&corrupt).is_err());
+    let mut trailing = compressed;
+    trailing.extend_from_slice(b"unexpected trailing data");
+    assert!(decode(&trailing).is_err());
+    assert!(decode(&encode("not json").unwrap()).is_err());
 }
 
 #[test]
@@ -37,9 +99,11 @@ fn invalid_project_files_are_rejected() {
     let mut json = serde_json::to_value(Document::default()).unwrap();
     json["version"] = 999.into();
     assert!(decode(&serde_json::to_vec(&json).unwrap()).is_err());
+    assert!(decode(&encode(&json.to_string()).unwrap()).is_err());
     json["version"] = 2.into();
     json["camera"]["distance"] = (-1).into();
     assert!(decode(&serde_json::to_vec(&json).unwrap()).is_err());
+    assert!(decode(&encode(&json.to_string()).unwrap()).is_err());
 }
 
 #[test]
@@ -56,7 +120,12 @@ fn save_to_opened_path_writes_without_showing_a_picker() {
     let directory = tempfile::tempdir().unwrap();
     for extension in PROJECT_EXTENSIONS {
         let path = directory.path().join(format!("saved.{extension}"));
-        let doc = Document::default();
+        let mut doc = Document::default();
+        let before = doc.model.clone();
+        doc.model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+        doc.history.record("Line", before, &doc.model);
+        // Saving over a plain JSON project upgrades its encoding atomically.
+        std::fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
         let pending = save(
             &eframe::egui::Context::default(),
             Some(path.clone()),
@@ -71,10 +140,14 @@ fn save_to_opened_path_writes_without_showing_a_picker() {
             Outcome::Saved(Some(destination)) => assert_eq!(destination, path),
             outcome => panic!("Unexpected save result: {outcome:?}"),
         }
-        assert_eq!(
-            decode(&std::fs::read(&path).unwrap()).unwrap().name,
-            doc.name
-        );
+        let saved = std::fs::read(&path).unwrap();
+        assert!(saved.starts_with(&[0x1f, 0x8b, 0x08]));
+        assert_eq!(decode(&saved).unwrap(), doc);
+        let mut json = String::new();
+        MultiGzDecoder::new(saved.as_slice())
+            .read_to_string(&mut json)
+            .unwrap();
+        assert_eq!(json, serde_json::to_string(&doc).unwrap());
     }
 }
 
@@ -118,16 +191,21 @@ fn project_file_names_and_extensions_are_portable() {
 fn opening_either_extension_uses_the_file_stem_and_defaults_save_as_to_k3d() {
     let directory = tempfile::tempdir().unwrap();
     let doc = Document::default();
+    let json = serde_json::to_string(&doc).unwrap();
+    let compressed = encode(&json).unwrap();
     for extension in ["k3d", "K3D", "ketchup", "KETCHUP"] {
         let path = directory.path().join(format!("My house.{extension}"));
-        write(&path, &serde_json::to_vec(&doc).unwrap()).unwrap();
-        let Outcome::Opened(mut restored, Some(opened_path)) = read_project(path.clone()).unwrap()
-        else {
-            panic!("Expected an opened project");
-        };
-        assert_eq!(opened_path, path);
-        set_document_name(&mut restored, &opened_path);
-        assert_eq!(restored.name, "My house");
-        assert_eq!(file_name(&restored.name), "My house.k3d");
+        for bytes in [json.as_bytes(), compressed.as_slice()] {
+            write(&path, bytes).unwrap();
+            let Outcome::Opened(mut restored, Some(opened_path)) =
+                read_project(path.clone()).unwrap()
+            else {
+                panic!("Expected an opened project");
+            };
+            assert_eq!(opened_path, path);
+            set_document_name(&mut restored, &opened_path);
+            assert_eq!(restored.name, "My house");
+            assert_eq!(file_name(&restored.name), "My house.k3d");
+        }
     }
 }

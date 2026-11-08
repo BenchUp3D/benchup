@@ -1,8 +1,13 @@
 //! Portable project files are separate from the local recovery/autosave document.
 use ketchup_core::tr;
 use crate::cutting_plan::{CutReport, CuttingPlan};
+use flate2::{Compression, read::MultiGzDecoder, write::GzEncoder};
 use ketchup_core::Document;
-use std::{path::PathBuf, sync::mpsc};
+use std::{
+    io::{Read, Write},
+    path::PathBuf,
+    sync::mpsc,
+};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "project_file_tests.rs"]
@@ -84,7 +89,27 @@ fn exchange_name(name: &str, extension: &str) -> String {
     }
 }
 
+/// Project files use gzip-compressed JSON; recovery and save snapshots stay JSON.
+pub(crate) fn encode(json: &str) -> Result<Vec<u8>, String> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(json.as_bytes())
+        .and_then(|_| encoder.finish())
+        .map_err(|error| tr!("project_files.could_not_compress_project", error = error))
+}
+
 pub fn decode(bytes: &[u8]) -> Result<Document, String> {
+    // Detect the content rather than the extension so both project extensions
+    // accept compressed files and older, plain JSON files unchanged.
+    let mut decompressed = Vec::new();
+    let bytes: &[u8] = if bytes.starts_with(&[0x1f, 0x8b]) {
+        MultiGzDecoder::new(bytes)
+            .read_to_end(&mut decompressed)
+            .map_err(|error| tr!("project_files.could_not_decompress_project", error = error))?;
+        &decompressed
+    } else {
+        bytes
+    };
     let json = std::str::from_utf8(bytes).map_err(|_| tr!("project_files.the_project_is_not_utf_8_text"))?;
     Document::from_json(json)
 }
@@ -175,7 +200,7 @@ pub fn save(
             };
             project_path(path)?
         };
-        write(&path, contents.as_bytes())?;
+        write(&path, &encode(&contents)?)?;
         Ok(Outcome::Saved(Some(path)))
     })
 }
@@ -258,39 +283,46 @@ pub fn save(
         "name, contents, description",
         include_str!("project_save.js"),
     );
-    // Open the picker before spawning the async task, while the save action
-    // still has the browser's user activation.
+    // This future starts on the next microtask. Open the picker synchronously
+    // before compression can consume the browser's transient user activation.
+    let contents = wasm_bindgen_futures::future_to_promise(async move {
+        let bytes = encode(&contents)
+            .map_err(|error| eframe::wasm_bindgen::JsValue::from_str(&error))?;
+        Ok(js_sys::Uint8Array::from(bytes.as_slice()).into())
+    });
     let result = launch.call3(
         &eframe::wasm_bindgen::JsValue::NULL,
         &eframe::wasm_bindgen::JsValue::from_str(&name),
-        &eframe::wasm_bindgen::JsValue::from_str(&contents),
+        &contents,
         &eframe::wasm_bindgen::JsValue::from_str(tr!("project_files.ketchup3d_project")),
     );
-    match result {
-        Ok(value) if !value.is_null() => {
-            let ctx = ctx.clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                let result = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&value))
-                    .await
-                    .map(|value| match value.as_string() {
-                        // Browsers expose the chosen filename, not its full path.
-                        Some(name) => Outcome::Saved(Some(PathBuf::from(name))),
-                        None => Outcome::Cancelled,
-                    })
-                    .map_err(browser_save_error);
-                let _ = sender.send(result);
-                ctx.request_repaint();
-            });
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = async {
+            match result {
+                Ok(value) if !value.is_null() => {
+                    wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&value))
+                        .await
+                        .map(|value| match value.as_string() {
+                            // Browsers expose the chosen filename, not its full path.
+                            Some(name) => Outcome::Saved(Some(PathBuf::from(name))),
+                            None => Outcome::Cancelled,
+                        })
+                }
+                result => {
+                    result?;
+                    let value = wasm_bindgen_futures::JsFuture::from(contents).await?;
+                    let bytes = js_sys::Uint8Array::new(&value).to_vec();
+                    download_bytes(&name, &bytes, "application/gzip")?;
+                    Ok(Outcome::Saved(None))
+                }
+            }
         }
-        result => {
-            let result = result
-                .and_then(|_| download(&name, &contents))
-                .map(|_| Outcome::Saved(None))
-                .map_err(browser_save_error);
-            let _ = sender.send(result);
-            ctx.request_repaint();
-        }
-    }
+        .await
+        .map_err(browser_save_error);
+        let _ = sender.send(result);
+        ctx.request_repaint();
+    });
     receiver
 }
 
@@ -301,19 +333,6 @@ fn browser_save_error(error: eframe::wasm_bindgen::JsValue) -> String {
         .and_then(|message| message.as_string())
         .or_else(|| error.as_string())
         .unwrap_or_else(|| tr!("project_files.the_browser_could_not_save_this_project").into())
-}
-
-#[cfg(target_arch = "wasm32")]
-fn download(name: &str, contents: &str) -> Result<(), eframe::wasm_bindgen::JsValue> {
-    download_bytes(
-        name,
-        contents.as_bytes(),
-        if name.ends_with(".obj") {
-            "text/plain"
-        } else {
-            "application/json"
-        },
-    )
 }
 
 #[cfg(target_arch = "wasm32")]

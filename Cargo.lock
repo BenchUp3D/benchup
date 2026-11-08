@@ -1888,6 +1888,7 @@ dependencies = [
  "cc",
  "directories",
  "eframe",
+ "flate2",
  "glam",
  "image",
  "js-sys",

@@ -3,6 +3,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const {gzipSync, gunzipSync} = require('node:zlib');
 
 const launchSave = new Function('window', 'name', 'contents', 'description', fs.readFileSync(
     path.join(__dirname, '../crates/ketchup-app/src/project_save.js'), 'utf8',
@@ -10,6 +11,8 @@ const launchSave = new Function('window', 'name', 'contents', 'description', fs.
 const catalog = require('../assets/i18n/en.json');
 const save = (window, name, contents) =>
     launchSave(window, name, contents, catalog['project_files.ketchup3d_project']);
+const projectJson = '{"name":"House"}';
+const compressedProject = new Uint8Array(gzipSync(projectJson));
 
 test('save prompts immediately and reports the chosen name only after committing the file', async () => {
     const events = [];
@@ -21,14 +24,15 @@ test('save prompts immediately and reports the chosen name only after committing
             assert.equal(options.suggestedName, 'House.k3d');
             assert.equal(options.id, 'ketchup-project-save');
             assert.equal(options.types[0].description, 'KetchUp3D project');
-            assert.deepEqual(options.types[0].accept, {'application/json': ['.k3d', '.ketchup']});
+            assert.deepEqual(options.types[0].accept, {'application/gzip': ['.k3d', '.ketchup']});
             return Promise.resolve({
                 name: 'New house.k3d',
                 async createWritable() {
                     events.push('create');
                     return {
                         async write(contents) {
-                            assert.equal(contents, '{"name":"House"}');
+                            assert.deepEqual(contents, compressedProject);
+                            assert.equal(gunzipSync(contents).toString(), projectJson);
                             events.push('write');
                         },
                         async close() { events.push('close'); await closed; },
@@ -38,7 +42,7 @@ test('save prompts immediately and reports the chosen name only after committing
             });
         },
     };
-    const pending = save(window, 'House.k3d', '{"name":"House"}');
+    const pending = save(window, 'House.k3d', Promise.resolve(compressedProject));
     assert.deepEqual(events, ['picker'], 'Open within the user action, before yielding');
     let completed = false;
     pending.then(() => { completed = true; });
@@ -112,7 +116,7 @@ test('saving to either supported extension reports the chosen name unchanged', a
         const result = await save({
             async showSaveFilePicker(options) {
                 assert.equal(options.suggestedName, 'House.k3d');
-                assert.deepEqual(options.types[0].accept, {'application/json': ['.k3d', '.ketchup']});
+                assert.deepEqual(options.types[0].accept, {'application/gzip': ['.k3d', '.ketchup']});
                 assert.equal(options.id, 'ketchup-project-save');
                 return {
                     name: chosenName,
@@ -125,8 +129,61 @@ test('saving to either supported extension reports the chosen name unchanged', a
                     },
                 };
             },
-        }, 'House.k3d', '{"name":"House"}');
+        }, 'House.k3d', compressedProject);
         assert.equal(result, chosenName);
-        assert.deepEqual(events, ['{"name":"House"}', 'committed']);
+        assert.deepEqual(events, [compressedProject, 'committed']);
+    }
+});
+
+test('the picker opens before compression finishes and writing waits for binary bytes', async () => {
+    const events = [];
+    let finishCompression;
+    const contents = new Promise(resolve => { finishCompression = resolve; });
+    const pending = save({
+        showSaveFilePicker() {
+            events.push('picker');
+            return Promise.resolve({
+                name: 'House.k3d',
+                async createWritable() {
+                    events.push('create');
+                    return {
+                        async write(bytes) {
+                            assert.deepEqual(bytes, compressedProject);
+                            events.push('write');
+                        },
+                        async close() { events.push('close'); },
+                    };
+                },
+            });
+        },
+    }, 'House.k3d', contents);
+    assert.deepEqual(events, ['picker']);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(events, ['picker'], 'Do not open a writable file before compression succeeds');
+    finishCompression(compressedProject);
+    assert.equal(await pending, 'House.k3d');
+    assert.deepEqual(events, ['picker', 'create', 'write', 'close']);
+});
+
+test('compression errors leave the selected file untouched', async () => {
+    const error = new Error('Compression failed');
+    await assert.rejects(save({
+        async showSaveFilePicker() {
+            return {
+                async createWritable() { assert.fail('Do not open a writable file after compression fails'); },
+            };
+        },
+    }, 'House.k3d', Promise.reject(error)), candidate => candidate === error);
+});
+
+test('cancellation and picker errors handle a rejected compression payload', async () => {
+    for (const name of ['AbortError', 'NotAllowedError']) {
+        const pickerError = Object.assign(new Error('Picker failed'), {name});
+        const pending = save({
+            async showSaveFilePicker() { throw pickerError; },
+        }, 'House.k3d', Promise.reject(new Error('Compression failed')));
+        if (name === 'AbortError') assert.equal(await pending, null);
+        else await assert.rejects(pending, candidate => candidate === pickerError);
+        await new Promise(resolve => setImmediate(resolve));
     }
 });

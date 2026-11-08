@@ -194,16 +194,19 @@ fn opening_a_saved_project_restores_undo_and_redo_in_the_app() {
         doc.history.record(label, before, &doc.model);
     }
     assert!(doc.history.undo(&mut doc.model));
-    let bytes = serde_json::to_vec(&doc).unwrap();
-    let mut app = KetchupApp::with_document(Document::default(), None, true);
-    app.replace_project(crate::project_files::decode(&bytes).unwrap(), None, &ctx);
-    assert_eq!(app.doc.history.undo_label(), Some("First line"));
-    assert_eq!(app.doc.history.redo_label(), Some("Second line"));
-    app.undo(&ctx, false);
-    assert!(app.doc.model.edges.is_empty());
-    app.undo(&ctx, true);
-    app.undo(&ctx, true);
-    assert_eq!(app.doc.model.edges.len(), 2);
+    let json = serde_json::to_string(&doc).unwrap();
+    let compressed = crate::project_files::encode(&json).unwrap();
+    for bytes in [json.as_bytes(), compressed.as_slice()] {
+        let mut app = KetchupApp::with_document(Document::default(), None, true);
+        app.replace_project(crate::project_files::decode(bytes).unwrap(), None, &ctx);
+        assert_eq!(app.doc.history.undo_label(), Some("First line"));
+        assert_eq!(app.doc.history.redo_label(), Some("Second line"));
+        app.undo(&ctx, false);
+        assert!(app.doc.model.edges.is_empty());
+        app.undo(&ctx, true);
+        app.undo(&ctx, true);
+        assert_eq!(app.doc.model.edges.len(), 2);
+    }
 }
 
 #[test]
