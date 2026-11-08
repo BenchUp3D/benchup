@@ -48,6 +48,101 @@ fn wood_area(model: &Model, selected: &BTreeSet<u64>) -> f64 {
 }
 
 #[test]
+fn whole_project_joinery_counts_records_and_adds_only_active_work_to_the_report() {
+    use ketchup_core::{connections::Connection, joinery::JointSettings};
+
+    let mut doc = Document::default();
+    let [first, second, third] = [0., 10., 20.].map(|offset| {
+        let face = rectangle(&mut doc.model, DVec3::X * offset);
+        doc.model
+            .make_object(&BTreeSet::from([face]), false, "Board")
+            .unwrap()
+    });
+    assign_wood(&mut doc.model, first);
+    let half_lap = ConnectionOperation::Joinery(JointSettings {
+        kind: JointKind::HalfLap,
+        ..Default::default()
+    });
+    let dovetail = ConnectionOperation::Joinery(JointSettings {
+        kind: JointKind::Dovetail,
+        dovetails: 4,
+        ..Default::default()
+    });
+    // Seed saved operations directly. Their estimate does not evaluate geometry.
+    for (index, (members, operation)) in [
+        ([first, second], half_lap.clone()),
+        ([second, third], half_lap),
+        ([first, third], dovetail),
+        (
+            [first, second],
+            ConnectionOperation::Fasteners(Default::default()),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        doc.model.connections.insert(
+            1000 + index as u64,
+            Connection {
+                members,
+                entry_face: None,
+                operation,
+            },
+        );
+    }
+
+    let mut app = KetchupApp::with_document(doc, None, true);
+    app.general_settings.stock = wood_catalog();
+    app.time_estimates.stain.enabled = true;
+    app.time_estimates.stain.minutes_per_m2 = 2.;
+    app.time_estimates.stain.drying_hours = 1.;
+    app.joinery_rates.set_minutes(JointKind::HalfLap, 10.);
+
+    let whole_project = app.time_estimate_report();
+    assert_eq!(
+        whole_project.joinery,
+        [
+            ["Half lap", "2", "10", "0 h 20 min"].map(str::to_owned),
+            ["Dovetail", "1", "25", "0 h 25 min"].map(str::to_owned),
+        ]
+    );
+    assert_eq!(
+        whole_project.tasks[0],
+        ["Joinery (whole project)", "0 h 45 min", "0 h 0 min"].map(str::to_owned)
+    );
+    assert_eq!(
+        whole_project.totals,
+        ["1 h 57 min", "0 h 57 min", "1 h 0 min"].map(str::to_owned)
+    );
+    assert_eq!(&whole_project.summary[1..], &whole_project.totals[1..]);
+
+    app.selected = BTreeSet::from([second]);
+    app.doc.model.edit_context = Some(first);
+    app.doc.model.hidden.insert(third);
+    let joinery_only = app.time_estimate_report();
+    assert_eq!(joinery_only.joinery, whole_project.joinery);
+    assert_eq!(joinery_only.tasks.as_slice(), &whole_project.tasks[..1]);
+    assert_eq!(
+        joinery_only.totals,
+        ["0 h 45 min", "0 h 45 min", "0 h 0 min"].map(str::to_owned)
+    );
+    assert!(
+        crate::estimate_pdf::render(&joinery_only)
+            .unwrap()
+            .starts_with(b"%PDF-")
+    );
+
+    app.doc
+        .model
+        .connections
+        .retain(|_, connection| matches!(connection.operation, ConnectionOperation::Fasteners(_)));
+    let no_joints = app.time_estimate_report();
+    assert!(no_joints.joinery.is_empty());
+    assert!(no_joints.tasks.is_empty());
+    assert_eq!(no_joints.totals, ["0 h 0 min"; 3].map(str::to_owned));
+}
+
+#[test]
 fn cost_table_keeps_long_cells_inside_columns_and_wrapped_rows_apart() {
     for width in [200., 280., 420., 640.] {
         let ctx = egui::Context::default();

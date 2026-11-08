@@ -44,6 +44,7 @@ pub(super) struct InspectorPreferences {
     snapping: Option<SnappingPreferences>,
     cutting_plan: CuttingPlanPreferences,
     time_estimates: time_estimates::Settings,
+    joinery_rates: time_estimates::JoineryRates,
     finish_product_filters: std::collections::BTreeMap<String, String>,
     stock_material_filter: String,
     wood_type_filters: std::collections::BTreeMap<String, String>,
@@ -82,6 +83,7 @@ impl Default for InspectorPreferences {
             snapping: None,
             cutting_plan: CuttingPlanPreferences::default(),
             time_estimates: Default::default(),
+            joinery_rates: Default::default(),
             finish_product_filters: Default::default(),
             stock_material_filter: String::new(),
             wood_type_filters: Default::default(),
@@ -495,6 +497,8 @@ impl KetchupApp {
         self.project.export_stl = preferences.export_stl;
         self.time_estimates = preferences.time_estimates.clone();
         self.time_estimates.sanitize();
+        self.joinery_rates = preferences.joinery_rates.clone();
+        self.joinery_rates.sanitize();
         self.finish_product_filters = preferences.finish_product_filters.clone();
         self.stock_material_filter = preferences.stock_material_filter.clone();
         self.wood_type_filters = preferences.wood_type_filters.clone();
@@ -601,6 +605,7 @@ impl KetchupApp {
                 selection: self.project.cutting_plan_selection_preference,
             },
             time_estimates: self.time_estimates.clone(),
+            joinery_rates: self.joinery_rates.clone(),
             finish_product_filters: self.finish_product_filters.clone(),
             stock_material_filter: self.stock_material_filter.clone(),
             wood_type_filters: self.wood_type_filters.clone(),
@@ -2968,6 +2973,8 @@ mod preference_tests {
 
     #[test]
     fn time_estimate_controls_save_immediately_and_restore_without_a_model_edit() {
+        use ketchup_core::joinery::JointKind;
+
         let ctx = egui::Context::default();
         let mut app = KetchupApp::with_document(Document::default(), None, true);
         let model = app.doc.model.clone();
@@ -2979,6 +2986,8 @@ mod preference_tests {
             step.minutes_per_m2 = 7. + i as f64;
         }
         app.time_estimates.sanding_after_varnish = vec![false, true, false, true, false, true];
+        app.joinery_rates.set_minutes(JointKind::Dovetail, 31.5);
+        app.joinery_rates.set_minutes(JointKind::Rabbet, 0.);
         for (step, product) in [
             &mut app.time_estimates.pre_stain,
             &mut app.time_estimates.stain,
@@ -3004,6 +3013,7 @@ mod preference_tests {
             ("time_estimates_stain", true),
             ("time_estimates_varnish", false),
             ("time_estimates_material_cost", true),
+            (time_estimates::JOINERY_SECTION_KEY, false),
         ];
         for (key, open) in subsections {
             set_section_open(&ctx, key, open);
@@ -3018,6 +3028,9 @@ mod preference_tests {
         let mut restored = KetchupApp::with_document(Document::default(), None, true);
         restored.restore_inspector_preferences(&restored_ctx, Some(&storage));
         assert_eq!(restored.time_estimates, app.time_estimates);
+        assert_eq!(restored.joinery_rates.minutes(JointKind::Dovetail), 31.5);
+        assert_eq!(restored.joinery_rates.minutes(JointKind::Rabbet), 0.);
+        assert_eq!(restored.joinery_rates.minutes(JointKind::HalfLap), 8.);
         assert_eq!(
             restored.general_settings.stock.finishes,
             app.general_settings.stock.finishes
@@ -3042,6 +3055,10 @@ mod preference_tests {
         });
         let old: InspectorPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(old.time_estimates, time_estimates::Settings::default());
+        assert_eq!(
+            JointKind::ALL.map(|kind| old.joinery_rates.minutes(kind)),
+            [15., 8., 8., 5., 25., 15.],
+        );
     }
 
     #[test]

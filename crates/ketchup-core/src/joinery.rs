@@ -19,7 +19,7 @@ use trimming::trim_excess;
 mod angle_tests;
 
 const EPS: f64 = 1e-7;
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum JointKind {
     #[default]
     MortiseTenon,

@@ -13,6 +13,7 @@ pub(crate) struct Report {
     pub notes: Vec<String>,
     pub costs: Vec<Group>,
     pub tasks: Vec<[String; 3]>,
+    pub joinery: Vec<[String; 4]>,
     pub totals: [String; 3],
     pub currency: String,
 }
@@ -384,6 +385,7 @@ pub(crate) fn render(report: &Report) -> Result<Vec<u8>, String> {
     text.extend(report.notes.iter().map(String::as_str));
     text.extend(report.totals.iter().map(String::as_str));
     text.extend(report.tasks.iter().flatten().map(String::as_str));
+    text.extend(report.joinery.iter().flatten().map(String::as_str));
     for group in &report.costs {
         text.push(&group.title);
         text.extend(group.rows.iter().flatten().map(String::as_str));
@@ -521,7 +523,26 @@ pub(crate) fn render(report: &Report) -> Result<Vec<u8>, String> {
         true,
     );
     pdf.y -= 16.;
-    pdf.note("Includes final drying. Objects dry together between steps. Time covers sanding and finishing only; labor is not priced.");
+    pdf.note("Includes final drying. Objects dry together between steps.");
+    pdf.ensure(125.);
+    pdf.y -= 16.;
+    let title = "Joinery (whole project)";
+    pdf.heading(title);
+    if report.joinery.is_empty() {
+        pdf.note("No configured wood joints.");
+    } else {
+        let headers = [
+            "Joint".into(),
+            "Count".into(),
+            "Minutes / joint".into(),
+            "Hands-on".into(),
+        ];
+        let widths = [245., 65., 100., 101.];
+        pdf.table_header(&headers, &widths);
+        for (index, row) in report.joinery.iter().enumerate() {
+            pdf.table_row(row, &widths, &headers, title, index % 2 == 0);
+        }
+    }
     pdf.finish(data, fallback_data)
 }
 

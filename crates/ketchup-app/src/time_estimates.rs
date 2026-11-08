@@ -1,8 +1,9 @@
-//! Finishing estimates use actual model surfaces and reusable, user-adjustable rates.
+//! Stock, finishing, and whole-project joinery estimates.
 use super::*;
 use crate::inspector_table::{Column, InspectorTable, product_cell_text};
 use ketchup_core::Model;
-use std::collections::BTreeSet;
+use ketchup_core::{connections::ConnectionOperation, joinery::JointKind};
+use std::collections::{BTreeMap, BTreeSet};
 
 // Research checked 2026-10-29. These are planning assumptions, not universal benchmarks.
 // Sanding: Teri Masaschi, 8–10 seconds/foot of travel:
@@ -26,6 +27,72 @@ type WoodMaterials =
     std::collections::BTreeMap<ketchup_core::MaterialId, ketchup_core::StockMaterial>;
 
 pub(super) use ketchup_core::surface_treatment::{Duration, Settings, Step};
+
+pub(super) const JOINERY_SECTION_KEY: &str = "time_estimates_joinery";
+const JOINERY_SCOPE: &str =
+    "Counts all configured wood joints, regardless of selection, visibility, or editing context.";
+const JOINERY_ALLOWANCE_NOTE: &str = "Allowances cover layout, cutting, and fitting both parts of each joint. Defaults assume shop power tools and jigs. Actual time varies by tooling and workflow.";
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(super) struct JoineryRates(BTreeMap<JointKind, f64>);
+
+impl JoineryRates {
+    // Planning allowances for a small shop using power tools and jigs. Simple
+    // profiles take less time than joints with multiple cuts and more fitting.
+    fn default_minutes(kind: JointKind) -> f64 {
+        match kind {
+            JointKind::MortiseTenon => 15.,
+            JointKind::HalfLap => 8.,
+            JointKind::TongueGroove => 8.,
+            JointKind::Rabbet => 5.,
+            JointKind::Dovetail => 25.,
+            JointKind::Finger => 15.,
+        }
+    }
+
+    pub(super) fn minutes(&self, kind: JointKind) -> f64 {
+        self.0
+            .get(&kind)
+            .copied()
+            .unwrap_or_else(|| Self::default_minutes(kind))
+    }
+
+    pub(super) fn set_minutes(&mut self, kind: JointKind, minutes: f64) {
+        if minutes.is_finite() && minutes >= 0. {
+            self.0.insert(kind, minutes);
+        }
+    }
+
+    pub(super) fn sanitize(&mut self) {
+        self.0
+            .retain(|_, minutes| minutes.is_finite() && *minutes >= 0.);
+    }
+}
+
+struct JoineryRow {
+    kind: JointKind,
+    count: usize,
+    minutes_per_joint: f64,
+}
+
+impl JoineryRow {
+    fn work_minutes(&self) -> f64 {
+        self.count as f64 * self.minutes_per_joint
+    }
+}
+
+struct TimeBreakdown {
+    finishing: Vec<(String, Duration, usize)>,
+    joinery: [JoineryRow; JointKind::ALL.len()],
+    joinery_work: f64,
+    duration: Duration,
+}
+
+impl TimeBreakdown {
+    fn has_joints(&self) -> bool {
+        self.joinery.iter().any(|row| row.count > 0)
+    }
+}
 
 // Model collections allow direct edits, so compare a source snapshot rather than
 // relying on edit notifications. Scrolling only compares inputs; it never repeats
@@ -276,6 +343,45 @@ fn object_tasks(
     tasks
 }
 
+fn time_breakdown(
+    model: &Model,
+    areas: &BTreeMap<u64, f64>,
+    settings: &Settings,
+    rates: &JoineryRates,
+) -> TimeBreakdown {
+    let mut counts = BTreeMap::new();
+    // The persisted relation is the unit of work, even if it has multiple cuts
+    // or shares a member with other joints.
+    for connection in model.connections.values() {
+        if let ConnectionOperation::Joinery(settings) = &connection.operation {
+            *counts.entry(settings.kind).or_insert(0) += 1;
+        }
+    }
+    let joinery = JointKind::ALL.map(|kind| JoineryRow {
+        kind,
+        count: counts.get(&kind).copied().unwrap_or_default(),
+        minutes_per_joint: rates.minutes(kind),
+    });
+    let joinery_work = joinery.iter().map(JoineryRow::work_minutes).sum();
+    let finishing = object_tasks(model, areas, settings);
+    let duration = finishing.iter().fold(
+        Duration {
+            work: joinery_work,
+            wait: 0.,
+        },
+        |total, (_, task, _)| Duration {
+            work: total.work + task.work,
+            wait: total.wait + task.wait,
+        },
+    );
+    TimeBreakdown {
+        finishing,
+        joinery,
+        joinery_work,
+        duration,
+    }
+}
+
 #[derive(Debug)]
 struct FinishCost {
     product_id: Option<ketchup_core::MaterialId>,
@@ -440,6 +546,66 @@ fn format_minutes(minutes: f64) -> String {
     }
     let rounded = minutes.round() as u64;
     format!("{} h {} min", rounded / 60, rounded % 60)
+}
+
+fn joinery_controls(ui: &mut egui::Ui, rows: &[JoineryRow], rates: &mut JoineryRates) {
+    sidebar::inspector_section(
+        ui,
+        "Joinery · Whole project",
+        JOINERY_SECTION_KEY,
+        true,
+        |ui| {
+            ui.text_weak(JOINERY_SCOPE);
+            let mut table = InspectorTable::new(
+                ui.available_width(),
+                [
+                    Column::flex(0.35),
+                    Column::flex(0.15),
+                    Column::flex(0.25),
+                    Column::flex(0.25),
+                ],
+            )
+            .striped();
+            table.row(ui, "joinery_headers", |column, ui| {
+                ui.text_label(
+                    RichText::new(["Joint", "Count", "Min / joint", "Hands-on"][column]).strong(),
+                );
+            });
+            for row in rows {
+                table.row(ui, row.kind, |column, ui| match column {
+                    0 => {
+                        ui.text_label(row.kind.label());
+                    }
+                    1 => {
+                        ui.text_label(row.count.to_string());
+                    }
+                    2 => {
+                        let mut minutes = row.minutes_per_joint;
+                        if ui
+                            .add_sized(
+                                [ui.available_width(), ui.spacing().interact_size.y],
+                                egui::DragValue::new(&mut minutes)
+                                    .speed(0.5)
+                                    .range(0.0..=f64::MAX),
+                            )
+                            .on_hover_text(format!(
+                                "Default allowance is {} minutes per joint.",
+                                JoineryRates::default_minutes(row.kind)
+                            ))
+                            .changed()
+                        {
+                            rates.set_minutes(row.kind, minutes);
+                            ui.ctx().request_repaint();
+                        }
+                    }
+                    _ => {
+                        ui.text_label(format_minutes(row.work_minutes()));
+                    }
+                });
+            }
+            ui.text_weak(JOINERY_ALLOWANCE_NOTE);
+        },
+    );
 }
 
 fn rate_input(ui: &mut egui::Ui, rate: &mut f64) {
@@ -716,32 +882,53 @@ impl KetchupApp {
             &self.general_settings.stock,
         );
         let areas = &self.estimate_cache.area.as_ref().unwrap().1;
-        let tasks = object_tasks(&self.doc.model, areas, &self.time_estimates);
+        let time = time_breakdown(
+            &self.doc.model,
+            areas,
+            &self.time_estimates,
+            &self.joinery_rates,
+        );
         let finishes = finishing_costs(
             &self.doc.model,
             areas,
             &self.time_estimates,
             &self.general_settings.stock.finishes,
         );
-        let duration = tasks
-            .iter()
-            .fold(Duration::default(), |total, (_, task, _)| Duration {
-                work: total.work + task.work,
-                wait: total.wait + task.wait,
-            });
+        let duration = &time.duration;
         let catalog = &self.general_settings.stock;
         let mut total: f64 = finishes.iter().filter_map(|cost| cost.amount).sum();
         let mut partial = finishes.iter().any(|cost| cost.amount.is_none());
         let mut report = Report {
             name: self.doc.name.clone(),
             currency: currency::code(&catalog.currency).into(),
-            tasks: tasks
-                .iter()
-                .map(|(title, duration, count)| {
+            tasks: time
+                .has_joints()
+                .then(|| {
+                    [
+                        "Joinery (whole project)".into(),
+                        format_minutes(time.joinery_work),
+                        format_minutes(0.),
+                    ]
+                })
+                .into_iter()
+                .chain(time.finishing.iter().map(|(title, duration, count)| {
                     [
                         format!("{title} ({count} objects)"),
                         format_minutes(duration.work),
                         format_minutes(duration.wait),
+                    ]
+                }))
+                .collect(),
+            joinery: time
+                .joinery
+                .iter()
+                .filter(|row| row.count > 0)
+                .map(|row| {
+                    [
+                        row.kind.label().into(),
+                        row.count.to_string(),
+                        row.minutes_per_joint.to_string(),
+                        format_minutes(row.work_minutes()),
                     ]
                 })
                 .collect(),
@@ -754,6 +941,9 @@ impl KetchupApp {
         };
         report.notes.push(format!("{} - {} wood surfaces. Finishing applies only to objects assigned a material from Settings > Material > Wood.",
             self.doc.display.units.format_area(area), if self.selected.is_empty() { "Visible" } else { "Selected" }));
+        report.notes.push(format!(
+            "Joinery (whole project). {JOINERY_SCOPE} {JOINERY_ALLOWANCE_NOTE}"
+        ));
         report.notes.push(format!("Kerf {} - Rotation {}. Stock uses each part's full bounding box, including cutting waste; notches and cutouts do not reduce the blank.",
             self.doc.display.units.format_length(self.project.cutting_plan_layout.kerf_mm / 1000.),
             if self.project.cutting_plan_layout.allow_rotation { "on" } else { "off" }));
@@ -887,7 +1077,7 @@ impl KetchupApp {
             report.notes.push(
                 "No visible surfaces with assigned wood materials in the current scope.".into(),
             );
-        } else if tasks.is_empty() {
+        } else if time.finishing.is_empty() {
             report.notes.push("No treatment tasks enabled. Choose sanding grits or finishes for objects in Materials.".into());
         }
         report.summary = [
@@ -1232,18 +1422,23 @@ impl KetchupApp {
             &self.selected,
             &self.general_settings.stock,
         );
-        if self.doc.model.edges.is_empty() && self.doc.model.faces.is_empty()
-            && self.doc.model.objects.is_empty()
-        {
-            crate::empty_state::EmptyState::new("No estimates yet",
-                "Draw or import objects, then assign materials to estimate time and cost.").show(ui);
-            return;
-        }
-        let tasks = object_tasks(
+        let time = time_breakdown(
             &self.doc.model,
             &self.estimate_cache.area.as_ref().unwrap().1,
             &self.time_estimates,
+            &self.joinery_rates,
         );
+        if self.doc.model.connections.is_empty()
+            && self.doc.model.edges.is_empty()
+            && self.doc.model.faces.is_empty()
+            && self.doc.model.objects.is_empty()
+        {
+            crate::empty_state::EmptyState::new("No estimates yet",
+                "Draw or import parts to estimate time and cost.").show(ui);
+            ui.add_space(8.);
+            joinery_controls(ui, &time.joinery, &mut self.joinery_rates);
+            return;
+        }
         let finish_costs = finishing_costs(
             &self.doc.model,
             &self.estimate_cache.area.as_ref().unwrap().1,
@@ -1252,12 +1447,7 @@ impl KetchupApp {
         );
         let finish_total: f64 = finish_costs.iter().filter_map(|cost| cost.amount).sum();
         let finish_partial = finish_costs.iter().any(|cost| cost.amount.is_none());
-        let duration = tasks
-            .iter()
-            .fold(Duration::default(), |total, (_, task, _)| Duration {
-                work: total.work + task.work,
-                wait: total.wait + task.wait,
-            });
+        let duration = &time.duration;
         let catalog = &self.general_settings.stock;
         let material_summary = match self.estimate_cache.materials(
             &self.doc.model,
@@ -1353,9 +1543,11 @@ impl KetchupApp {
         );
         ui.add_space(8.);
         ui.text_label(
-            RichText::new("Time covers sanding and finishing, including final drying.")
-                .small()
-                .color(colors.muted),
+            RichText::new(
+                "Time includes whole-project joinery, sanding, finishing, and final drying.",
+            )
+            .small()
+            .color(colors.muted),
         );
         ui.add_space(8.);
         ui.separator();
@@ -1385,10 +1577,11 @@ impl KetchupApp {
                     crate::empty_state::EmptyState::new("No surfaces to estimate",
                         if self.selected.is_empty() { "No visible surfaces with assigned wood materials." }
                         else { "Select faces or groups with assigned wood materials." }).show(ui);
-                } else if tasks.is_empty() {
+                } else if time.finishing.is_empty() {
                     crate::empty_state::EmptyState::new("No finishing tasks",
                         "Choose sanding grits or finishes for objects in Materials.").show(ui);
-                } else {
+                }
+                if time.has_joints() || !time.finishing.is_empty() {
                     ui.text_label(
                         RichText::new("Sequential total")
                             .small()
@@ -1407,7 +1600,17 @@ impl KetchupApp {
                     )
                     .striped();
                     table.header(ui, ["Task", "Hands-on", "Drying / Waiting"]);
-                    for (index, (title, task, _)) in tasks.iter().enumerate() {
+                    if time.has_joints() {
+                        let values = [
+                            "Joinery (whole project)".into(),
+                            format_minutes(time.joinery_work),
+                            "-".into(),
+                        ];
+                        table.row(ui, "joinery_total", |column, ui| {
+                            ui.text_label(RichText::new(&values[column]).small());
+                        });
+                    }
+                    for (index, (title, task, _)) in time.finishing.iter().enumerate() {
                         table.row(ui, ("task", index), |column, ui| {
                             if column == 0 {
                                 ui.text_label(
@@ -1458,6 +1661,8 @@ impl KetchupApp {
             });
         ui.add_space(8.);
         self.material_cost_estimate_contents(ui);
+        ui.add_space(8.);
+        joinery_controls(ui, &time.joinery, &mut self.joinery_rates);
     }
 }
 
