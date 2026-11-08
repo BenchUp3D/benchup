@@ -149,6 +149,7 @@ impl KetchupApp {
                 tr!("shortcuts.modeling"),
                 &[
                     tool_row(Tool::PushPull, tr!("shortcuts.push_pull_a_face")),
+                    (tr!("shortcuts.push_pull_new_faces"), tr!("move_tool.ctrl")),
                     tool_row(Tool::Scale, tr!("shortcuts.scale_geometry")),
                     tool_row(Tool::Offset, tr!("shortcuts.offset_a_face")),
                     tool_row(Tool::Move, tr!("shortcuts.move_geometry")),

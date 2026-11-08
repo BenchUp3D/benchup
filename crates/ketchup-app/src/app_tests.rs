@@ -268,6 +268,8 @@ mod rotate_tool;
 mod scale_tool;
 #[path = "offset_tool_tests.rs"]
 mod offset_tool;
+#[path = "push_pull_tool_tests.rs"]
+mod push_pull_tool;
 #[path = "modeling_anchor_tests.rs"]
 mod modeling_anchors;
 

@@ -90,6 +90,133 @@ fn directional_push_pull_preserves_displacement_and_stretches_existing_caps() {
 }
 
 #[test]
+fn new_face_push_pull_preserves_existing_geometry_and_adds_a_layer() {
+    for delta in [DVec3::Z, -DVec3::Z * 0.5, DVec3::new(1., 2., 1.)] {
+        let mut model = Model::default();
+        let face = rectangle(&mut model, DVec3::ZERO, DVec3::new(4., 3., 0.));
+        let color = [182, 53, 81];
+        model.paint_face(face, color).unwrap();
+        let starting_cap = model.push_pull_along(face, DVec3::Z * 2.).unwrap();
+        let before = model.clone();
+        let cap = model
+            .push_pull_along_with_new_faces(starting_cap, delta)
+            .unwrap();
+
+        assert_ne!(cap, starting_cap);
+        assert_eq!(
+            (model.vertices.len(), model.edges.len(), model.faces.len()),
+            (12, 20, 11),
+        );
+        for (id, vertex) in &before.vertices {
+            assert_eq!(&model.vertices[id], vertex);
+        }
+        for (id, edge) in &before.edges {
+            assert_eq!(&model.edges[id], edge);
+        }
+        for (id, face) in &before.faces {
+            assert_eq!(&model.faces[id], face);
+        }
+        for id in &before.faces[&starting_cap].vertices {
+            let expected = before.vertices[id].position + delta;
+            assert!(
+                model.faces[&cap]
+                    .vertices
+                    .iter()
+                    .any(|id| { model.vertices[id].position.distance(expected) < 1e-7 })
+            );
+        }
+        assert_eq!(model.face_colors.len(), 11);
+        assert!(model.face_colors.values().all(|c| *c == color));
+        model.validate().unwrap();
+        let after = model.clone();
+        let mut history = History::default();
+        history.record("Push/Pull", before.clone(), &model);
+        assert!(history.undo(&mut model));
+        assert_eq!(model, before);
+        assert!(history.redo(&mut model));
+        assert_eq!(model, after);
+    }
+}
+
+#[test]
+fn new_face_push_pull_preserves_coplanar_starting_faces_and_holes() {
+    for holed in [false, true] {
+        let mut model = Model::default();
+        let outer = rectangle(&mut model, DVec3::ZERO, DVec3::new(6., 6., 0.));
+        let inner = rectangle(&mut model, DVec3::new(2., 2., 0.), DVec3::new(4., 4., 0.));
+        let face = if holed { outer } else { inner };
+        model.paint_face(face, [31, 66, 99]).unwrap();
+        let before = model.clone();
+        let cap = model
+            .push_pull_along_with_new_faces(face, -DVec3::Z)
+            .unwrap();
+
+        assert_eq!(model.faces[&cap].holes.len(), usize::from(holed));
+        assert_eq!(
+            model.face_area(&model.faces[&cap]),
+            before.face_area(&before.faces[&face])
+        );
+        assert_eq!(
+            model.faces.len(),
+            before.faces.len() + if holed { 9 } else { 5 }
+        );
+        for (id, original) in &before.faces {
+            assert_eq!(&model.faces[id], original);
+        }
+        for (id, original) in &before.vertices {
+            assert_eq!(&model.vertices[id], original);
+        }
+        for id in model
+            .faces
+            .keys()
+            .filter(|id| !before.faces.contains_key(id))
+        {
+            assert_eq!(model.face_colors[id], [31, 66, 99]);
+        }
+        model.validate().unwrap();
+    }
+}
+
+#[test]
+fn new_face_push_pull_updates_component_instances_in_the_editing_context() {
+    let mut model = Model::default();
+    let face = rectangle(&mut model, DVec3::ZERO, DVec3::new(4., 3., 0.));
+    let face = model.push_pull_along(face, DVec3::Z * 2.).unwrap();
+    let component = model
+        .make_object(&model.selectable_entities(), true, "Block")
+        .unwrap();
+    let clipboard = model.copy_entities(&BTreeSet::from([component]));
+    let peer = *model
+        .paste_entities(&clipboard, DVec3::X * 10.)
+        .first()
+        .unwrap();
+    assert!(model.enter_object(component));
+    let before = model.object_contents(component).unwrap();
+    let peer_before = model.object_contents(peer).unwrap();
+
+    let cap = model
+        .push_pull_along_with_new_faces(face, DVec3::Z)
+        .unwrap();
+
+    assert_eq!(model.edit_context, Some(component));
+    for (id, original) in [(component, before), (peer, peer_before)] {
+        let contents = model.object_contents(id).unwrap();
+        assert_eq!(contents.faces.len(), 11);
+        for (id, vertex) in &original.vertices {
+            assert_eq!(&contents.vertices[id], vertex);
+        }
+        // Synchronization regenerates peer face IDs but preserves their rings.
+        for face in original.faces.values() {
+            assert!(contents.faces.values().any(|updated| {
+                updated.vertices == face.vertices && updated.holes == face.holes
+            }));
+        }
+    }
+    assert_eq!(model.parent(cap), Some(component));
+    model.validate().unwrap();
+}
+
+#[test]
 fn directional_push_pull_rejects_parallel_and_invalid_displacements_atomically() {
     let mut model = Model::default();
     let face = rectangle(&mut model, DVec3::ZERO, DVec3::new(4., 3., 0.));
@@ -102,8 +229,15 @@ fn directional_push_pull_rejects_parallel_and_invalid_displacements_atomically()
         DVec3::Z * f64::INFINITY,
         DVec3::Z * 1e8,
     ] {
-        assert!(model.push_pull_along(face, delta).is_err());
-        assert_eq!(model, before);
+        for new_faces in [false, true] {
+            let result = if new_faces {
+                model.push_pull_along_with_new_faces(face, delta)
+            } else {
+                model.push_pull_along(face, delta)
+            };
+            assert!(result.is_err());
+            assert_eq!(model, before);
+        }
     }
 }
 

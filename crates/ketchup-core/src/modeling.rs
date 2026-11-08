@@ -442,8 +442,29 @@ impl Model {
     /// Extrude a face by a world-space displacement, including oblique pulls
     /// along a locked axis. A displacement within the face cannot form a solid.
     pub fn push_pull_along(&mut self, face_id: u64, delta: DVec3) -> Result<u64, &'static str> {
+        self.extrude_face(face_id, delta, false)
+    }
+
+    /// Add a new cap and walls while preserving the starting face and its
+    /// adjoining geometry, even when pulling an existing solid's cap.
+    pub fn push_pull_along_with_new_faces(
+        &mut self,
+        face_id: u64,
+        delta: DVec3,
+    ) -> Result<u64, &'static str> {
+        self.extrude_face(face_id, delta, true)
+    }
+
+    fn extrude_face(
+        &mut self,
+        face_id: u64,
+        delta: DVec3,
+        keep_starting_face: bool,
+    ) -> Result<u64, &'static str> {
         if self.edit_context.is_some() {
-            return self.edit_in_context(|model| model.push_pull_along(face_id, delta));
+            return self.edit_in_context(|model| {
+                model.extrude_face(face_id, delta, keep_starting_face)
+            });
         }
         self.editable_surface(face_id)?;
         let distance = delta.length();
@@ -477,7 +498,7 @@ impl Model {
                     })
                 })
         };
-        if boundary.iter().all(|&(a, b)| {
+        if !keep_starting_face && boundary.iter().all(|&(a, b)| {
             self.faces.values().any(|other| {
                 other.id != face_id
                     && self.parent(other.id).is_none()
@@ -497,7 +518,7 @@ impl Model {
                     .is_some_and(|p| p.normal.cross(normal).length() <= EPS)
                 && boundary.iter().any(|&(a, b)| shares_edge(other, a, b))
         });
-        if joined_surface {
+        if joined_surface && !keep_starting_face {
             // The surrounding surface already supplies the opening's boundary.
             // Leaving this face behind would cover the recess and add an internal cap.
             next.erase(&BTreeSet::from([face_id]));

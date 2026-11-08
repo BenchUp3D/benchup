@@ -221,6 +221,7 @@ struct Modeling {
     guides: Vec<AxisGuide>,
     value: f64,
     copy: bool,
+    keep_starting_face: bool,
     preview: Option<Model>,
     move_snap: Option<ketchup_core::inference::MoveSnapCache>,
     snap_excluded: BTreeSet<u64>,
@@ -356,6 +357,8 @@ pub struct KetchupApp {
     second_lock: Option<Axis>,
     length_input: String,
     modeling: Option<Modeling>,
+    push_pull_new_faces: bool,
+    push_pull_modifier_down: bool,
     move_copy: bool,
     move_modifier_down: bool,
     last_move_copy: Option<MoveCopy>,
@@ -530,6 +533,8 @@ impl KetchupApp {
             second_lock: None,
             length_input: String::new(),
             modeling: None,
+            push_pull_new_faces: false,
+            push_pull_modifier_down: false,
             move_copy: false,
             move_modifier_down: false,
             last_move_copy: None,
@@ -1529,6 +1534,7 @@ impl KetchupApp {
             guides: vec![],
             value: if self.tool == Tool::Scale { 1. } else { 0. },
             copy: self.tool == Tool::Move && self.move_copy,
+            keep_starting_face: self.tool == Tool::PushPull && self.push_pull_new_faces,
             preview: None,
             move_snap: matches!(self.tool, Tool::Move | Tool::Rotate | Tool::Scale)
                 .then(|| {
@@ -1870,7 +1876,11 @@ impl KetchupApp {
                 let face_id = face.id;
                 let context = model.edit_context;
                 model.edit_context = model.parent(face_id);
-                model.push_pull_along(face_id, edit.direction * value)?;
+                if edit.keep_starting_face {
+                    model.push_pull_along_with_new_faces(face_id, edit.direction * value)?;
+                } else {
+                    model.push_pull_along(face_id, edit.direction * value)?;
+                }
                 model.edit_context = context;
             }
             Tool::Offset => {
@@ -1985,7 +1995,36 @@ impl KetchupApp {
         }
     }
 
+    fn push_pull_modifier(
+        &mut self,
+        ctx: &egui::Context,
+        modifiers: egui::Modifiers,
+        shortcuts: bool,
+    ) {
+        let pressed = modifiers.ctrl && !self.push_pull_modifier_down;
+        self.push_pull_modifier_down = modifiers.ctrl;
+        if !pressed
+            || shortcuts
+            || !ctx.input(|i| i.focused)
+            || self.tool != Tool::PushPull
+            || self.paste_preview.is_some()
+        {
+            return;
+        }
+        self.push_pull_new_faces = !self.push_pull_new_faces;
+        if let Some(edit) = self.modeling.as_mut() {
+            edit.keep_starting_face = self.push_pull_new_faces;
+            let pointer = edit.pointer;
+            self.update_modeling(pointer);
+        }
+        ctx.request_repaint();
+    }
+
     fn keyboard(&mut self, ctx: &egui::Context) {
+        // Track Ctrl through dialogs and shortcut early returns. When modeling
+        // input is allowed, replay modifier events from the previous state.
+        let pull_modifier_was_down = self.push_pull_modifier_down;
+        self.push_pull_modifier_down = ctx.input(|i| i.modifiers.ctrl);
         // Walk owns movement keys, including Space and Ctrl, before modeling
         // shortcuts can select tools, edit geometry, or open project dialogs.
         if self.tool == Tool::Walk {
@@ -2176,7 +2215,7 @@ impl KetchupApp {
             egui::Event::Copy | egui::Event::Cut | egui::Event::Paste(_) => true,
             egui::Event::Key { key, pressed: true, modifiers, .. } => {
                 // Web backends emit physical modifier keys as Key events too.
-                // Ctrl itself is the Move/Copy toggle, not a Ctrl shortcut.
+                // Ctrl itself toggles modeling modes, rather than a shortcut.
                 (modifiers.ctrl || modifiers.mac_cmd)
                     && !matches!(key,
                         Key::ControlLeft | Key::ControlRight
@@ -2186,9 +2225,11 @@ impl KetchupApp {
             }
             _ => false,
         });
+        self.push_pull_modifier_down = pull_modifier_was_down;
         for event in events {
             match event {
                 egui::Event::ModifiersChanged(modifiers) => {
+                    self.push_pull_modifier(ctx, modifiers, shortcuts);
                     self.move_modifier(ctx, modifiers, shortcuts);
                     self.guide_modifier(ctx, modifiers, shortcuts);
                 }
@@ -2227,7 +2268,16 @@ impl KetchupApp {
                     ..
                 } => {
                     let command = modifiers.command || modifiers.ctrl;
-                    if command {
+                    let pull_input = self.tool == Tool::PushPull
+                        && self.modeling.is_some()
+                        && modifiers.ctrl
+                        && !modifiers.mac_cmd
+                        && matches!(
+                            key,
+                            Key::Enter | Key::Backspace | Key::ArrowRight
+                                | Key::ArrowLeft | Key::ArrowUp | Key::ArrowDown
+                        );
+                    if command && !pull_input {
                         match key {
                             Key::Z => self.undo(ctx, modifiers.shift),
                             Key::Y => self.undo(ctx, true),
@@ -2323,6 +2373,7 @@ impl KetchupApp {
                 _ => {}
             }
         }
+        self.push_pull_modifier_down = ctx.input(|i| i.modifiers.ctrl);
     }
 
     fn icon_button(
@@ -2828,6 +2879,8 @@ impl KetchupApp {
                         }
                     } else if self.paste_preview.is_some() {
                         tr!("app.click_to_place_the_copy_escape_to_cancel")
+                    } else if self.tool == Tool::PushPull && self.push_pull_new_faces {
+                        tr!("app.push_pull_new_faces_status")
                     } else if self.tool == Tool::Rotate {
                         self.rotation_status()
                     } else if self.tool == Tool::Move {
@@ -5473,6 +5526,8 @@ impl KetchupApp {
                         "app.click_to_confirm_esc_to_cancel_3",
                         if self.tool == Tool::Move {
                             if edit.copy { tr!("app.copy") } else { tr!("app.move") }
+                        } else if self.tool == Tool::PushPull && edit.keep_starting_face {
+                            tr!("app.new_faces")
                         } else {
                             ""
                         },

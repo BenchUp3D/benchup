@@ -114,6 +114,7 @@ struct ToolPreferences {
     measurement: Tool,
     solid: Tool,
     polygon_sides: usize,
+    push_pull_new_faces: bool,
     move_copy: bool,
     create_guides: bool,
     walk_sitting: bool,
@@ -165,6 +166,40 @@ mod guide_preference_tests {
     }
 
     #[test]
+    fn push_pull_face_mode_defaults_and_saves_immediately_without_a_model_edit() {
+        for json in ["{}", r#"{"tools":{}}"#] {
+            let old: InspectorPreferences = serde_json::from_str(json).unwrap();
+            assert!(!old.tools.push_pull_new_faces);
+        }
+        let ctx = egui::Context::default();
+        let mut app = KetchupApp::with_document(Document::default(), None, true);
+        let mut storage = Storage::default();
+        app.set_tool(Tool::PushPull);
+        for mode in [true, false] {
+            app.push_pull_new_faces = mode;
+            app.push_pull_modifier_down = true;
+            storage.flushed = false;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            assert!(app.dirty_since.is_none());
+
+            let mut restored = KetchupApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+            assert_eq!(restored.tool, Tool::PushPull);
+            assert_eq!(restored.push_pull_new_faces, mode);
+            assert!(!restored.push_pull_modifier_down);
+            assert!(restored.modeling.is_none());
+            restored.set_tool(Tool::Select);
+            restored.set_tool(Tool::PushPull);
+            assert_eq!(restored.push_pull_new_faces, mode);
+            restored.replace_project(Document::default(), None, &ctx);
+            assert_eq!(restored.push_pull_new_faces, mode);
+            assert!(!restored.project.modified);
+        }
+    }
+
+    #[test]
     fn guide_mode_defaults_and_saves_immediately_without_a_model_edit() {
         let older: ToolPreferences = serde_json::from_str(r#"{"measurement":"tape_measure"}"#).unwrap();
         assert!(older.create_guides);
@@ -198,6 +233,7 @@ impl Default for ToolPreferences {
             measurement: Tool::Dimensions,
             solid: Tool::Union,
             polygon_sides: 6,
+            push_pull_new_faces: false,
             move_copy: false,
             create_guides: true,
             walk_sitting: false,
@@ -215,6 +251,7 @@ impl ToolPreferences {
             measurement: app.measurement_tool,
             solid: app.solid_tool,
             polygon_sides: app.polygon_sides,
+            push_pull_new_faces: app.push_pull_new_faces,
             move_copy: app.move_copy,
             create_guides: app.create_guides,
             walk_sitting: app.walk.sitting,
@@ -244,6 +281,7 @@ impl ToolPreferences {
         // This resets transient state without executing the tool (solid tools
         // can otherwise act immediately on selected geometry).
         app.set_tool(self.active);
+        app.push_pull_new_faces = self.push_pull_new_faces;
         app.move_copy = self.move_copy;
         app.create_guides = self.create_guides;
         app.walk.sitting = self.walk_sitting;
