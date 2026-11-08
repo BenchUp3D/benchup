@@ -324,11 +324,12 @@ fn paint_tool(p: &egui::Painter, rect: Rect, tool: Tool, colors: ToolPalette) {
                 face,
                 stroke,
             ));
-            p.arrow(
-                xy(0., 0.35),
-                egui::vec2(0., -r * 1.35),
-                Stroke::new(2., red),
-            );
+            p.line_segment([xy(0., 0.44), xy(0., -0.59)], Stroke::new(2.1, red));
+            p.add(egui::Shape::convex_polygon(
+                vec![xy(0., -1.12), xy(-0.46, -0.53), xy(0.46, -0.53)],
+                red,
+                Stroke::NONE,
+            ));
         }
         Tool::Flip => {
             p.line_segment([xy(0., -1.), xy(0., 1.)], Stroke::new(1.2, outline));
@@ -420,19 +421,38 @@ fn paint_tool(p: &egui::Painter, rect: Rect, tool: Tool, colors: ToolPalette) {
             }
         }
         Tool::Move => {
-            for (x, y) in [(1., 0.), (-1., 0.), (0., 1.), (0., -1.)] {
-                p.arrow(c, egui::vec2(x * r, y * r), stroke);
+            p.line_segment([xy(-0.64, 0.), xy(0.64, 0.)], stroke);
+            p.line_segment([xy(0., -0.64), xy(0., 0.64)], stroke);
+            for direction in [egui::Vec2::X, egui::Vec2::Y, -egui::Vec2::X, -egui::Vec2::Y] {
+                let base = c + direction * (r * 0.57);
+                let half_width = egui::vec2(-direction.y, direction.x) * (r * 0.34);
+                p.add(egui::Shape::convex_polygon(
+                    vec![c + direction * r, base + half_width, base - half_width],
+                    color,
+                    Stroke::NONE,
+                ));
             }
         }
         Tool::Rotate => {
-            let points: Vec<_> = (0..=28).map(|i| {
-                let angle = -2.5 + i as f32 * 5. / 28.;
-                xy(angle.cos() * 0.85, angle.sin() * 0.85)
-            }).collect();
-            let tip = points[28];
+            let start_angle = -2.5;
+            let end_angle: f32 = 2.2;
+            let points: Vec<_> = (0..=28)
+                .map(|i| {
+                    let angle = egui::lerp(start_angle..=end_angle, i as f32 / 28.);
+                    xy(angle.cos() * 0.85, angle.sin() * 0.85)
+                })
+                .collect();
+            let end = points[28];
+            let (sin, cos) = end_angle.sin_cos();
+            let tangent = egui::vec2(-sin, cos);
+            let half_width = egui::vec2(cos, sin) * (r * 0.32);
+            let base = end - tangent * (r * 0.05);
             p.add(egui::Shape::line(points, stroke));
-            p.arrow(tip - egui::vec2(-2.5_f32.sin(), 2.5_f32.cos()) * 4.,
-                egui::vec2(-2.5_f32.sin(), 2.5_f32.cos()) * 4., stroke);
+            p.add(egui::Shape::convex_polygon(
+                vec![end + tangent * (r * 0.47), base + half_width, base - half_width],
+                color,
+                Stroke::NONE,
+            ));
             p.circle_filled(c, 2., red);
         }
         Tool::Paint => {
