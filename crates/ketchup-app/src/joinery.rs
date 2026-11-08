@@ -754,7 +754,8 @@ impl KetchupApp {
                                 &mut self.joinery_dialog.orientations, self.joinery_dialog.diagnostics.revision, true);
                         });
                         if eligible && self.refresh_joint_preview() { ctx.request_repaint(); }
-                        if ui.add_enabled(eligible, egui::Button::new(tr!("common.apply"))
+                        if ui.add_enabled(eligible, Self::menu_item_button(
+                            ui, tr!("joinery.create_joinery"), Some("connections/wood_joinery"))
                             .min_size(egui::vec2(ui.available_width(), ui.spacing().interact_size.y))).clicked() {
                             self.apply_joint_preview(&ctx);
                         }

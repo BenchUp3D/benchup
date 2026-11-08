@@ -865,6 +865,7 @@
   "joinery.board_z": "Board Z",
   "joinery.create_a_dynamic_relation_moving_either_board_updates": "Create a dynamic relation. Moving either board updates the joint automatically.",
   "joinery.create_dynamic_wood_joint": "Create dynamic wood joint",
+  "joinery.create_joinery": "Create joinery",
   "joinery.degree_symbol": "°",
   "joinery.delete_joint": "Delete joint",
   "joinery.depth_width": "Depth {axis_prefix}{} / Width {axis_prefix}{}",
