@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 use super::*;
 use crate::inspector_table::inspector_field;
 use ketchup_core::connections::{
@@ -43,34 +44,34 @@ pub(super) enum PickTarget {
 }
 
 fn fields(ui: &mut egui::Ui, settings: &mut FastenerSettings) {
-    inspector_field(ui, "fastener_kind", "Fastener", |ui| {
+    inspector_field(ui, "fastener_kind", tr!("fasteners.fastener"), |ui| {
         egui::ComboBox::from_id_salt("kind")
             .selected_text(settings.kind.label())
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut settings.kind, FastenerKind::Screw, "Screw");
-                ui.selectable_value(&mut settings.kind, FastenerKind::Nail, "Nail");
+                ui.selectable_value(&mut settings.kind, FastenerKind::Screw, tr!("fasteners.screw"));
+                ui.selectable_value(&mut settings.kind, FastenerKind::Nail, tr!("fasteners.nail"));
                 ui.selectable_value(
                     &mut settings.kind,
                     FastenerKind::InclinedScrew,
-                    "Angled screw",
+                    tr!("fasteners.angled_screw"),
                 );
             })
             .response
     });
-    inspector_field(ui, "fastener_pattern", "Pattern", |ui| {
+    inspector_field(ui, "fastener_pattern", tr!("fasteners.pattern"), |ui| {
         egui::ComboBox::from_id_salt("pattern")
             .selected_text(match settings.pattern {
-                Pattern::Single => "Single",
-                Pattern::Row => "Row",
-                Pattern::DoubleRow => "Two rows",
-                Pattern::Grid => "Grid",
+                Pattern::Single => tr!("fasteners.single"),
+                Pattern::Row => tr!("fasteners.row"),
+                Pattern::DoubleRow => tr!("fasteners.two_rows"),
+                Pattern::Grid => tr!("fasteners.grid"),
             })
             .show_ui(ui, |ui| {
                 for (value, label) in [
-                    (Pattern::Single, "Single"),
-                    (Pattern::Row, "Row"),
-                    (Pattern::DoubleRow, "Two rows"),
-                    (Pattern::Grid, "Grid"),
+                    (Pattern::Single, tr!("fasteners.single")),
+                    (Pattern::Row, tr!("fasteners.row")),
+                    (Pattern::DoubleRow, tr!("fasteners.two_rows")),
+                    (Pattern::Grid, tr!("fasteners.grid")),
                 ] {
                     ui.selectable_value(&mut settings.pattern, value, label);
                 }
@@ -78,13 +79,13 @@ fn fields(ui: &mut egui::Ui, settings: &mut FastenerSettings) {
             .response
     });
     if settings.pattern != Pattern::Single {
-        inspector_field(ui, "fastener_count", "Count per row", |ui| {
+        inspector_field(ui, "fastener_count", tr!("fasteners.count_per_row"), |ui| {
             ui.add(egui::DragValue::new(&mut settings.count).range(1..=100))
         });
         millimetres(
             ui,
             "spacing",
-            "Spacing (0 = auto)",
+            tr!("fasteners.spacing_0_auto"),
             &mut settings.spacing,
             0.,
             10000.,
@@ -92,14 +93,14 @@ fn fields(ui: &mut egui::Ui, settings: &mut FastenerSettings) {
     }
     if matches!(settings.pattern, Pattern::Grid | Pattern::DoubleRow) {
         if settings.pattern == Pattern::Grid {
-            inspector_field(ui, "rows", "Rows", |ui| {
+            inspector_field(ui, "rows", tr!("fasteners.rows"), |ui| {
                 ui.add(egui::DragValue::new(&mut settings.rows).range(1..=100))
             });
         }
         millimetres(
             ui,
             "row_spacing",
-            "Row spacing (0 = auto)",
+            tr!("fasteners.row_spacing_0_auto"),
             &mut settings.row_spacing,
             0.,
             10000.,
@@ -108,7 +109,7 @@ fn fields(ui: &mut egui::Ui, settings: &mut FastenerSettings) {
     millimetres(
         ui,
         "diameter",
-        "Preview diameter",
+        tr!("fasteners.preview_diameter"),
         &mut settings.diameter,
         0.1,
         100.,
@@ -116,7 +117,7 @@ fn fields(ui: &mut egui::Ui, settings: &mut FastenerSettings) {
     millimetres(
         ui,
         "length",
-        "Length (0 = geometry)",
+        tr!("fasteners.length_0_geometry"),
         &mut settings.length,
         0.,
         10000.,
@@ -124,13 +125,13 @@ fn fields(ui: &mut egui::Ui, settings: &mut FastenerSettings) {
     millimetres(
         ui,
         "clearance",
-        "Geometric clearance",
+        tr!("fasteners.geometric_clearance"),
         &mut settings.clearance,
         0.,
         1000.,
     );
     if settings.kind == FastenerKind::InclinedScrew {
-        inspector_field(ui, "inclination", "Angle from face normal", |ui| {
+        inspector_field(ui, "inclination", tr!("fasteners.angle_from_face_normal"), |ui| {
             ui.add(
                 egui::DragValue::new(&mut settings.angle_degrees)
                     .range(0. ..=60.)
@@ -138,7 +139,7 @@ fn fields(ui: &mut egui::Ui, settings: &mut FastenerSettings) {
             )
         });
         ui.text_weak(
-            "Angled axis only; the pocket recess and Kreg jig settings are not simulated.",
+            tr!("fasteners.angled_axis_only_the_pocket_recess_and_kreg"),
         );
     }
 }
@@ -161,7 +162,7 @@ impl KetchupApp {
     pub(super) fn fastener_contents(&mut self, ui: &mut egui::Ui) {
         let Some(members) = self.fastener_dialog.members else {
             ui.text_weak(
-                "Select exactly two objects and reopen Automatic Fasteners from the Edit menu.",
+                tr!("fasteners.select_exactly_two_objects_and_reopen_automatic_fasteners"),
             );
             return;
         };
@@ -172,33 +173,33 @@ impl KetchupApp {
         let mut objects = members.to_vec();
         ui.checkbox(
             &mut self.doc.display.fasteners,
-            "Show fasteners through the model",
+            tr!("fasteners.show_fasteners_through_the_model"),
         );
 
         ui.checkbox(
             &mut self.doc.display.fastener_preview,
-            "Preview before creating",
+            tr!("fasteners.preview_before_creating"),
         );
         if ui
-            .checkbox(&mut self.fasteners.reverse, "Swap the selected parts")
+            .checkbox(&mut self.fasteners.reverse, tr!("fasteners.swap_the_selected_parts"))
             .changed()
         {
             self.fastener_dialog.entry_face = None;
         }
         if ui
-            .add_enabled(eligible, egui::Button::new("Pick entry face in viewport…"))
+            .add_enabled(eligible, egui::Button::new(tr!("fasteners.pick_entry_face_in_viewport")))
             .clicked()
         {
             self.fastener_dialog.picking = Some(PickTarget::Draft);
             self.doc.display.fastener_face_handles = true;
         }
-        if ui.button("Automatic entry face").clicked() {
+        if ui.button(tr!("fasteners.automatic_entry_face")).clicked() {
             self.fastener_dialog.entry_face = None;
         }
         if let Some(face) = self.fastener_dialog.entry_face {
-            ui.text_label(format!("Entry face #{face}"));
+            ui.text_label(tr!("fasteners.entry_face", face = face));
         }
-        ui.text_weak("Select exactly two touching, closed solid parts. The head enters the first part. Transparent lines show the shaft and tip through the model.");
+        ui.text_weak(tr!("fasteners.select_exactly_two_touching_closed_solid_parts_the"));
         ui.push_id("draft", |ui| fields(ui, &mut self.fasteners.settings));
         if self.fasteners.reverse {
             objects.reverse();
@@ -218,8 +219,8 @@ impl KetchupApp {
                     .model
                     .object_stock_material(object)
                     .map(|m| m.name.as_str())
-                    .unwrap_or("No material assigned");
-                ui.text_label(format!("Part {}: {} · {material}", index + 1, object.name));
+                    .unwrap_or(tr!("fasteners.no_material_assigned"));
+                ui.text_label(tr!("fasteners.part", index + 1, object.name, material = material));
             }
             let evaluation = connection.evaluate(&self.doc.model);
             for error in &evaluation.errors {
@@ -233,14 +234,14 @@ impl KetchupApp {
             {
                 ui.colored_label(Color32::YELLOW, warning);
             }
-            ui.text_label(format!(
-                "Preview: {} fasteners",
-                evaluation.placements.len()
+            ui.text_label(tr!(
+                "fasteners.preview_fasteners",
+                count = evaluation.placements.len()
             ));
             if ui
                 .add_enabled(
                     evaluation.errors.is_empty() && !evaluation.placements.is_empty() && eligible,
-                    egui::Button::new("Create fasteners"),
+                    egui::Button::new(tr!("fasteners.create_fasteners")),
                 )
                 .clicked()
             {
@@ -248,16 +249,16 @@ impl KetchupApp {
             }
         }
         ui.separator();
-        ui.text_weak("Geometric sizing: automatic length passes through the first part and halfway into the available depth of the second. The initial diameter is an editable example. Material suitability, pilot drilling, thread type and strength are not specified; consult the product manufacturer.");
+        ui.text_weak(tr!("fasteners.geometric_sizing_automatic_length_passes_through_the_first"));
         ui.hyperlink_to(
-            "Kreg screw selector (thicknesses and materials)",
+            tr!("fasteners.kreg_screw_selector_thicknesses_and_materials"),
             "https://www.kregtool.com/screw-selector/",
         );
         ui.hyperlink_to(
-            "Simpson Strong-Tie technical guides",
+            tr!("fasteners.simpson_strong_tie_technical_guides"),
             "https://www.strongtie.com/resources/literature/fastening-systems-technical-supplement",
         );
-        ui.text_weak("For cut joints, choose Wood Joinery from the Tools menu. Fasteners do not modify geometry.");
+        ui.text_weak(tr!("fasteners.for_cut_joints_choose_wood_joinery_from_the"));
         let connections: Vec<_> = self
             .doc
             .model
@@ -275,25 +276,25 @@ impl KetchupApp {
                         .objects
                         .get(&id)
                         .map(|o| o.name.clone())
-                        .unwrap_or_else(|| format!("Missing part #{id}"))
+                        .unwrap_or_else(|| tr!("fasteners.missing_part", id = id))
                 });
-                ui.text_label(format!("#{id}: {} → {}", names[0], names[1]));
+                ui.text_label(tr!("fasteners.connection_direction", names[0], names[1], id = id));
                 let original = connection.clone();
                 let locked = !self.fastener_pair_eligible(ui.ctx(), connection.members);
                 let mut remove = false;
                 ui.add_enabled_ui(!locked, |ui| {
                     ui.horizontal(|ui| {
-                        if ui.button("Reverse direction").clicked() {
+                        if ui.button(tr!("fasteners.reverse_direction")).clicked() {
                             connection.members.swap(0, 1);
                             connection.entry_face = None;
                         }
-                        if ui.button("Auto face").clicked() {
+                        if ui.button(tr!("fasteners.auto_face")).clicked() {
                             connection.entry_face = None;
                         }
-                        remove = ui.button("Delete").clicked();
+                        remove = ui.button(tr!("common.delete")).clicked();
                     });
                     ui.horizontal(|ui| {
-                        if ui.button("Pick entry face in viewport…").clicked() {
+                        if ui.button(tr!("fasteners.pick_entry_face_in_viewport")).clicked() {
                             self.fastener_dialog.picking = Some(PickTarget::Connection(id));
                             self.doc.display.fastener_face_handles = true;
                         }
@@ -303,16 +304,16 @@ impl KetchupApp {
                         .selected_text(
                             connection
                                 .entry_face
-                                .map(|id| format!("Face #{id}"))
-                                .unwrap_or_else(|| "Automatic face".into()),
+                                .map(|id| tr!("fasteners.face", id = id))
+                                .unwrap_or_else(|| tr!("fasteners.automatic_face").into()),
                         )
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut connection.entry_face, None, "Automatic");
+                            ui.selectable_value(&mut connection.entry_face, None, tr!("fasteners.automatic"));
                             for id in faces {
                                 ui.selectable_value(
                                     &mut connection.entry_face,
                                     Some(id),
-                                    format!("Face #{id}"),
+                                    tr!("fasteners.face", id = id),
                                 );
                             }
                         });
@@ -332,15 +333,15 @@ impl KetchupApp {
                     ui.colored_label(Color32::YELLOW, warning);
                 }
                 let ConnectionOperation::Fasteners(settings) = &connection.operation else { return; };
-                ui.text_label(format!(
-                    "Hardware: {} × {}, Ø {:.1} mm",
+                ui.text_label(tr!(
+                    "fasteners.hardware_mm",
                     evaluation.placements.len(),
                     settings.kind.label(),
                     settings.diameter * 1000.
                 ));
                 for (index, p) in evaluation.placements.iter().enumerate().take(8) {
-                    ui.text_weak(format!(
-                        "{}: length {:.1} · first part {:.1} · penetration {:.1} mm",
+                    ui.text_weak(tr!(
+                        "fasteners.length_first_part_penetration_mm",
                         index + 1,
                         p.head.distance(p.tip) * 1000.,
                         p.first_depth * 1000.,
@@ -348,7 +349,7 @@ impl KetchupApp {
                     ));
                 }
                 if evaluation.placements.len() > 8 {
-                    ui.text_weak("Dimensions shown for the first eight fasteners.");
+                    ui.text_weak(tr!("fasteners.dimensions_shown_for_the_first_eight_fasteners"));
                 }
                 if remove || original != connection {
                     self.commit_fastener_change(
@@ -391,17 +392,18 @@ impl KetchupApp {
             return;
         }
         ui.separator();
-        ui.text_label("Hardware list (preview dimensions)");
+        ui.text_label(tr!("fasteners.hardware_list_preview_dimensions"));
         let mut table =
             InspectorTable::new(ui.available_width(), [Column::flex(2.), Column::flex(1.)]);
-        table.header(ui, ["Type · Ø × length mm", "Quantity"]);
+        table.header(ui, [tr!("fasteners.type_length_mm"), tr!("fasteners.quantity")]);
         for ((kind, diameter, length), quantity) in items {
             table.row(ui, (kind.clone(), diameter, length), |column, ui| {
                 if column == 0 {
-                    ui.text_label(format!(
-                        "{kind} · {:.1} × {:.1}",
+                    ui.text_label(tr!(
+                        "fasteners.hardware_dimensions",
                         diameter as f64 / 1000.,
-                        length as f64 / 1000.
+                        length as f64 / 1000.,
+                        kind = kind,
                     ));
                 } else {
                     ui.text_label(quantity.to_string());
@@ -409,9 +411,9 @@ impl KetchupApp {
             });
         }
         if invalid > 0 {
-            ui.colored_label(Color32::LIGHT_RED,format!("{invalid} invalid connections: quantities are incomplete. Resolve errors before purchasing."));
+            ui.colored_label(Color32::LIGHT_RED,tr!("fasteners.invalid_connections", count = invalid));
         }
-        ui.text_weak("Review geometric warnings before purchasing. Structural strength has not been verified.");
+        ui.text_weak(tr!("fasteners.review_geometric_warnings_before_purchasing_structural_strength_has"));
     }
     pub(super) fn paint_fasteners(&self, p: &egui::Painter, rect: Rect, model: &Model) {
         if !self.doc.display.fasteners {
@@ -475,7 +477,7 @@ impl KetchupApp {
                         p.text(
                             point,
                             Align2::LEFT_BOTTOM,
-                            "⚠ Invalid fastener connection",
+                            tr!("fasteners.invalid_fastener_connection"),
                             FontId::proportional(12.),
                             Color32::LIGHT_RED,
                         );
@@ -542,7 +544,7 @@ impl KetchupApp {
                     Rect::from_center_size(point, egui::vec2(42., 24.)),
                     egui::Button::new(format!("{face}")).small(),
                 )
-                .on_hover_text("Use this entry face");
+                .on_hover_text(tr!("fasteners.use_this_entry_face"));
             if response.clicked() && eligible {
                 match target {
                     PickTarget::Draft => self.fastener_dialog.entry_face = Some(face),
@@ -565,15 +567,15 @@ impl KetchupApp {
     pub(super) fn fastener_pair_block_reason(&self, ctx: &egui::Context, members: [u64; 2]) -> &'static str {
         let pair = BTreeSet::from(members);
         if self.selected != pair {
-            "Select both objects belonging to this joint to edit or remove it."
+            tr!("fasteners.select_both_objects_belonging_to_this_joint_to")
         } else if self.doc.model.selection_protected(&pair) {
-            "Unlock both objects before editing or removing their joint."
+            tr!("fasteners.unlock_both_objects_before_editing_or_removing_their")
         } else if !members.iter().all(|id| self.doc.model.objects.contains_key(id)
             && self.doc.model.entity_in_context(*id) == Some(*id)
             && !self.doc.model.is_hidden(*id)) {
-            "Both objects must be visible and selectable in the current editing context."
+            tr!("fasteners.both_objects_must_be_visible_and_selectable_in")
         } else if self.project.blocked() || self.screenshot.open || self.history_preview.is_some() {
-            "Finish the current dialog or history preview before editing this joint."
+            tr!("fasteners.finish_the_current_dialog_or_history_preview_before")
         } else {
             self.shared_edit_block_reason(ctx)
         }
@@ -628,14 +630,14 @@ impl KetchupApp {
         {
             self.say(
                 ctx,
-                "The object pair is no longer editable. No fasteners were created.",
+                tr!("fasteners.the_object_pair_is_no_longer_editable_no"),
             );
             return false;
         }
         let before = self.doc.model.clone();
         match self.doc.model.add_connection(connection) {
             Ok(_) => {
-                self.finish_edit("Create fasteners", before, ctx);
+                self.finish_edit(tr!("fasteners.create_fasteners"), before, ctx);
                 true
             }
             Err(error) => {
@@ -665,7 +667,7 @@ impl KetchupApp {
                         .is_none_or(|face| c.entry_faces(&self.doc.model).contains(&face))
             });
         if !valid {
-            self.say(ctx,"The objects, permissions or connection changed. Reopen Automatic Fasteners before editing.");
+            self.say(ctx,tr!("fasteners.the_objects_permissions_or_connection_changed_reopen_automatic"));
             return false;
         }
         let before = self.doc.model.clone();
@@ -674,7 +676,7 @@ impl KetchupApp {
         } else {
             self.doc.model.connections.remove(&id);
         }
-        self.finish_edit("Edit fasteners", before, ctx);
+        self.finish_edit(tr!("fasteners.edit_fasteners"), before, ctx);
         true
     }
     pub(super) fn connection_sidebar_selection(&mut self, ctx: &egui::Context) {
@@ -716,11 +718,11 @@ impl KetchupApp {
                 .content_margin(18)
                 .auto_shrink([false, false]),
         ).show(ui, |ui| {
-            sidebar::inspector_section(ui, "Automatic Fasteners", "connections/fasteners", true, |ui| {
-        ui.text_weak("Changes apply immediately. Change the selection to return to the inspector.");
+            sidebar::inspector_section(ui, tr!("fasteners.automatic_fasteners"), "connections/fasteners", true, |ui| {
+        ui.text_weak(tr!("fasteners.changes_apply_immediately_change_the_selection_to_return"));
             if self.fastener_dialog.picking.is_some() {
-                ui.text_label("Click a numbered entry-face handle in the viewport.");
-                if ui.button("Back to Automatic Fasteners").clicked()
+                ui.text_label(tr!("fasteners.click_a_numbered_entry_face_handle_in_the"));
+                if ui.button(tr!("fasteners.back_to_automatic_fasteners")).clicked()
                     || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
                 {
                     self.fastener_dialog.picking = None;

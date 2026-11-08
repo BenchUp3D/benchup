@@ -21,7 +21,7 @@ where
     {
         type Value = BTreeMap<K, V>;
         fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("a map or an empty legacy array")
+            formatter.write_str(tr!("core.document.a_map_or_an_empty_legacy_array"))
         }
         fn visit_map<M: serde::de::MapAccess<'de>>(self, map: M) -> Result<Self::Value, M::Error> {
             Deserialize::deserialize(serde::de::value::MapAccessDeserializer::new(map))
@@ -32,7 +32,7 @@ where
         ) -> Result<Self::Value, S::Error> {
             if sequence.next_element::<serde::de::IgnoredAny>()?.is_some() {
                 return Err(serde::de::Error::custom(
-                    "expected a map; only empty legacy arrays are supported",
+                    tr!("core.document.expected_a_map_only_empty_legacy_arrays_are"),
                 ));
             }
             Ok(BTreeMap::new())
@@ -180,19 +180,31 @@ impl Model {
         }
     }
     pub fn add_edge(&mut self, start: DVec3, end: DVec3) -> Result<u64, &'static str> {
+        self.draw_edge(start, end, false)
+    }
+    /// Draw an edge, accepting a boundary already present in the drawing.
+    pub fn ensure_edge(&mut self, start: DVec3, end: DVec3) -> Result<u64, &'static str> {
+        self.draw_edge(start, end, true)
+    }
+    fn draw_edge(
+        &mut self,
+        start: DVec3,
+        end: DVec3,
+        allow_existing: bool,
+    ) -> Result<u64, &'static str> {
         if self.edit_context.is_some() {
-            return self.edit_in_context(|model| model.add_edge(start, end));
+            return self.edit_in_context(|model| model.draw_edge(start, end, allow_existing));
         }
         if !start.is_finite() || !end.is_finite() {
-            return Err("Coordinates must be finite");
+            return Err(tr!("core.document.coordinates_must_be_finite"));
         }
         // Keep newly drawn geometry within the same limits enforced on reload.
         // Reject before allocating vertices or splitting an existing edge.
         if start.abs().max_element() > 1e10 || end.abs().max_element() > 1e10 {
-            return Err("Coordinates must be within ten billion meters of the origin");
+            return Err(tr!("core.document.coordinates_must_be_within_ten_billion_meters_of"));
         }
         if start.distance(end) < EPS {
-            return Err("Give your line a little length");
+            return Err(tr!("core.document.give_your_line_a_little_length"));
         }
         let mut drawing_edges = self.drawing_edges();
         if let Some(edge) = self
@@ -207,10 +219,10 @@ impl Model {
             .cloned()
         {
             // Retracing an existing boundary heals an intentionally erased face.
-            if self.create_faces_with_edges(edge.a, edge.b, &drawing_edges) {
+            if self.create_faces_with_edges(edge.a, edge.b, &drawing_edges) || allow_existing {
                 return Ok(edge.id);
             }
-            return Err("That edge already exists");
+            return Err(tr!("core.document.that_edge_already_exists"));
         }
         let drawing_vertices = drawing_edges
             .iter()
@@ -321,13 +333,13 @@ impl Model {
             || self.texts.len() > 1_000_000
             || self.guides.len() > 1_000_000
         {
-            return Err("Model is too large");
+            return Err(tr!("core.document.model_is_too_large"));
         }
         if self.connections.values().any(|c| match &c.operation {
             crate::connections::ConnectionOperation::Fasteners(s) => !s.valid(),
             crate::connections::ConnectionOperation::Joinery(s) => !s.valid(),
         }) {
-            return Err("Invalid connection parameters");
+            return Err(tr!("core.document.invalid_connection_parameters"));
         }
         let max_id = self
             .vertices
@@ -343,15 +355,15 @@ impl Model {
             .copied()
             .unwrap_or(0);
         if self.next_id < max_id || self.next_id > u64::MAX - 2_000_001 {
-            return Err("Invalid model IDs");
+            return Err(tr!("core.document.invalid_model_ids"));
         }
         for (id, v) in &self.vertices {
             if *id != v.id || !v.position.is_finite() || v.position.abs().max_element() > 1e10 {
-                return Err("Invalid vertex");
+                return Err(tr!("core.document.invalid_vertex"));
             }
         }
         if self.guides.values().any(|guide| !guide.valid()) {
-            return Err("Invalid construction guide");
+            return Err(tr!("core.document.invalid_construction_guide"));
         }
         let mut pairs = BTreeSet::new();
         for (id, e) in &self.edges {
@@ -360,10 +372,10 @@ impl Model {
                 || !self.vertices.contains_key(&e.a)
                 || !self.vertices.contains_key(&e.b)
             {
-                return Err("Invalid edge");
+                return Err(tr!("core.document.invalid_edge"));
             }
             if self.edge_length(e) < EPS || !pairs.insert((e.a.min(e.b), e.a.max(e.b))) {
-                return Err("Invalid edge");
+                return Err(tr!("core.document.invalid_edge"));
             }
         }
         let mut boundaries = BTreeSet::new();
@@ -373,20 +385,20 @@ impl Model {
                 || self.edges.contains_key(id)
                 || !boundaries.insert(crate::faces::canonical_ring(&face.vertices))
             {
-                return Err("Invalid face ID");
+                return Err(tr!("core.document.invalid_face_id"));
             }
             for ring in std::iter::once(&face.vertices).chain(face.holes.iter()) {
                 if ring.len() < 3
                     || ring.iter().any(|v| !self.vertices.contains_key(v))
                     || crate::faces::plane(self, ring).is_none()
                 {
-                    return Err("Invalid face boundary");
+                    return Err(tr!("core.document.invalid_face_boundary"));
                 }
                 for i in 0..ring.len() {
                     let a = ring[i];
                     let b = ring[(i + 1) % ring.len()];
                     if !pairs.contains(&(a.min(b), a.max(b))) {
-                        return Err("Face boundary is missing an edge");
+                        return Err(tr!("core.document.face_boundary_is_missing_an_edge"));
                     }
                 }
             }
@@ -396,7 +408,7 @@ impl Model {
                 .map(|[a, b, c]| (*b - *a).cross(*c - *a).length() * 0.5)
                 .sum();
             if triangles.is_empty() || area <= EPS {
-                return Err("Invalid face surface");
+                return Err(tr!("core.document.invalid_face_surface"));
             }
         }
         self.validate_tags()?;
@@ -408,7 +420,7 @@ impl Model {
             .keys()
             .any(|id| !self.faces.contains_key(id))
         {
-            return Err("Paint refers to a missing face");
+            return Err(tr!("core.document.paint_refers_to_a_missing_face"));
         }
         Ok(())
     }
@@ -478,7 +490,7 @@ impl Default for Document {
             shared_project: None,
             project_author: None,
             version: 2,
-            name: "Untitled model".into(),
+            name: tr!("core.document.untitled_model").into(),
             model: Model::default(),
             history: History::default(),
             camera: Camera::default(),
@@ -495,7 +507,7 @@ impl Document {
     pub fn from_json(json: &str) -> Result<Self, String> {
         let mut doc: Self = serde_json::from_str(json).map_err(|e| e.to_string())?;
         if doc.version != 1 && doc.version != 2 {
-            return Err("Unsupported document version".into());
+            return Err(tr!("core.document.unsupported_document_version").into());
         }
         doc.model.validate().map_err(str::to_owned)?;
         if doc.version == 1 {
@@ -508,10 +520,10 @@ impl Document {
         doc.model.initialize_instance_transforms();
         doc.history.restore(&doc.model);
         if !doc.display.valid() {
-            return Err("Invalid display settings".into());
+            return Err(tr!("core.document.invalid_display_settings").into());
         }
         if !doc.camera.valid() || doc.viewport_cameras.values().any(|camera| !camera.valid()) {
-            return Err("Invalid camera".into());
+            return Err(tr!("core.document.invalid_camera").into());
         }
         Ok(doc)
     }

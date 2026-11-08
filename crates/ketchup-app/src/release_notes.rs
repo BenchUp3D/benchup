@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 #[cfg(test)]
 use crate::test_ui::ContextExt as _;
 use crate::natural_text::TextUi as _;
@@ -73,10 +74,10 @@ impl ReleaseNotes {
             let previous = self.selected;
             modal.header(|ui| {
                 let colors = Palette::for_ui(ui);
-                ui.text_heading("Release notes");
+                ui.text_heading(tr!("release_notes.release_notes"));
                 ui.text_label(
-                    RichText::new(format!(
-                        "You're using KetchUp3D {}",
+                    RichText::new(tr!(
+                        "release_notes.you_re_using_ketchup3d",
                         env!("CARGO_PKG_VERSION")
                     ))
                     .color(colors.muted),
@@ -84,7 +85,7 @@ impl ReleaseNotes {
                 ui.add_space(8.);
                 ui.horizontal_wrapped(|ui| {
                     if ui
-                        .add_enabled(self.selected > 0, egui::Button::new("Newer"))
+                        .add_enabled(self.selected > 0, egui::Button::new(tr!("release_notes.newer")))
                         .clicked()
                     {
                         self.selected -= 1;
@@ -94,7 +95,7 @@ impl ReleaseNotes {
                         .show_ui(ui, |ui| {
                             for (index, release) in self.releases.iter().enumerate() {
                                 let label = if index == 0 {
-                                    format!("v{} · Latest", release.version)
+                                    tr!("release_notes.v_latest", release.version)
                                 } else {
                                     format!("v{}", release.version)
                                 };
@@ -104,7 +105,7 @@ impl ReleaseNotes {
                     if ui
                         .add_enabled(
                             self.selected + 1 < self.releases.len(),
-                            egui::Button::new("Older"),
+                            egui::Button::new(tr!("release_notes.older")),
                         )
                         .clicked()
                     {
@@ -125,9 +126,9 @@ impl ReleaseNotes {
             modal.body_with_scroll(scroll, |ui| {
                 let colors = Palette::for_ui(ui);
                 ui.text_heading(&release.title);
-                let latest = if self.selected == 0 { " · Latest" } else { "" };
+                let latest = if self.selected == 0 { tr!("release_notes.latest") } else { "" };
                 ui.text_label(
-                    RichText::new(format!("v{} · {}{latest}", release.version, release.date))
+                    RichText::new(tr!("release_notes.v", release.version, release.date, latest = latest))
                         .color(colors.muted),
                 );
                 for section in &release.sections {
@@ -135,7 +136,7 @@ impl ReleaseNotes {
                     ui.text_label(RichText::new(&section.title).strong());
                     for change in &section.changes {
                         ui.horizontal_top(|ui| {
-                            ui.text_label("•");
+                            ui.text_label(tr!("release_notes.format"));
                             ui.add(crate::natural_text::Label::new(change).wrap());
                         });
                     }
@@ -146,7 +147,7 @@ impl ReleaseNotes {
                 ctx.request_repaint();
             }
             modal.footer(|ui| {
-                if primary_button(ui, "Close", true).clicked() {
+                if primary_button(ui, tr!("common.close"), true).clicked() {
                     ui.close();
                 }
             });

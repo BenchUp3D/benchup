@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 use super::*;
 use crate::screenshots::{self, Format, Paper, Settings, VIEW_LABELS};
 use eframe::{egui_wgpu, wgpu};
@@ -49,7 +50,7 @@ impl KetchupApp {
                             .enumerate()
                             .map(|(i, page)| {
                                 ctx.load_texture(
-                                    format!("screenshot-preview-{i}"),
+                                    tr!("screenshot_dialog.screenshot_preview", i = i),
                                     egui::ColorImage::from_rgba_unmultiplied(
                                         [page.width() as usize, page.height() as usize],
                                         page.as_raw(),
@@ -80,8 +81,8 @@ impl KetchupApp {
         let mut cancel = false;
         let response = Modal::new("generate_screenshot", 1100.).show(ctx, |modal| {
             modal.header(|ui| {
-                ui.text_heading("Generate screenshot");
-                ui.text_weak("Choose your views, page layout and export format.");
+                ui.text_heading(tr!("screenshot_dialog.generate_screenshot"));
+                ui.text_weak(tr!("screenshot_dialog.choose_your_views_page_layout_and_export_format"));
             });
             modal.body_unpadded(600., |ui| {
                 let size = ui.available_size();
@@ -150,10 +151,10 @@ impl KetchupApp {
                 }
             });
             modal.footer(|ui| {
-                cancel = ui.button("Cancel").clicked();
+                cancel = ui.button(tr!("common.cancel")).clicked();
                 export = primary_button(
                     ui,
-                    "Generate",
+                    tr!("screenshot_dialog.generate"),
                     !dialog.exporting
                         && dialog.settings.validate().is_ok()
                         && self.screenshot_gpu.is_some(),
@@ -190,7 +191,7 @@ impl KetchupApp {
                     }
                 } else {
                     dialog.error =
-                        Some("A compatible GPU renderer is required for screenshots.".into());
+                        Some(tr!("screenshot_dialog.a_compatible_gpu_renderer_is_required_for_screenshots").into());
                 }
             }
         }
@@ -206,10 +207,10 @@ fn screenshot_controls(
 ) {
     ui.add_enabled_ui(!exporting, |ui| {
         ui.horizontal(|ui| {
-            ui.text_strong("Views");
-            ui.text_weak(format!("{} selected", settings.selected().len()));
+            ui.text_strong(tr!("screenshot_dialog.views"));
+            ui.text_weak(tr!("screenshot_dialog.selected", count = settings.selected().len()));
         });
-        ui.text_small("Choose one or more views.");
+        ui.text_small(tr!("screenshot_dialog.choose_one_or_more_views"));
         egui::Grid::new("screenshot_views")
             .num_columns(2)
             .spacing(egui::vec2(16., 6.))
@@ -221,9 +222,9 @@ fn screenshot_controls(
                         egui::Checkbox::new(&mut settings.views[i], *label),
                     )
                     .on_hover_text(if i == 0 {
-                        "Fit visible content using the current viewing angle and projection."
+                        tr!("screenshot_dialog.fit_visible_content_using_the_current_viewing_angle")
                     } else {
-                        "Fit the visible model in parallel projection."
+                        tr!("screenshot_dialog.fit_the_visible_model_in_parallel_projection")
                     });
                     if i % 2 == 1 {
                         ui.end_row();
@@ -231,11 +232,11 @@ fn screenshot_controls(
                 }
             });
         screenshot_group_divider(ui);
-        ui.text_strong("Page");
-        ui.radio_value(&mut settings.combined, false, "One image per view");
-        ui.radio_value(&mut settings.combined, true, "All views in one image");
+        ui.text_strong(tr!("screenshot_dialog.page"));
+        ui.radio_value(&mut settings.combined, false, tr!("screenshot_dialog.one_image_per_view"));
+        ui.radio_value(&mut settings.combined, true, tr!("screenshot_dialog.all_views_in_one_image"));
         ui.add_space(6.);
-        ui.text_label("Paper size");
+        ui.text_label(tr!("screenshot_dialog.paper_size"));
         egui::ComboBox::from_id_salt("screenshot_paper")
             .width(ui.available_width())
             .selected_text(settings.paper.label())
@@ -245,13 +246,13 @@ fn screenshot_controls(
                 }
             });
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut settings.landscape, false, "Portrait");
-            ui.selectable_value(&mut settings.landscape, true, "Landscape");
+            ui.selectable_value(&mut settings.landscape, false, tr!("screenshot_dialog.portrait"));
+            ui.selectable_value(&mut settings.landscape, true, tr!("screenshot_dialog.landscape"));
         });
         screenshot_group_divider(ui);
-        ui.text_strong("Export");
+        ui.text_strong(tr!("screenshot_dialog.export"));
         ui.columns(2, |columns| {
-            columns[0].text_label("Format");
+            columns[0].text_label(tr!("screenshot_dialog.format"));
             egui::ComboBox::from_id_salt("screenshot_format")
                 .width(columns[0].available_width())
                 .selected_text(settings.format.label())
@@ -260,24 +261,24 @@ fn screenshot_controls(
                         ui.selectable_value(&mut settings.format, format, format.label());
                     }
                 });
-            columns[1].text_label("Resolution");
+            columns[1].text_label(tr!("screenshot_dialog.resolution"));
             egui::ComboBox::from_id_salt("screenshot_dpi")
                 .width(columns[1].available_width())
-                .selected_text(format!("{} DPI", settings.dpi))
+                .selected_text(tr!("screenshot_dialog.dpi", settings.dpi))
                 .show_ui(&mut columns[1], |ui| {
                     for dpi in [96, 150, 300] {
-                        ui.selectable_value(&mut settings.dpi, dpi, format!("{dpi} DPI"));
+                        ui.selectable_value(&mut settings.dpi, dpi, tr!("screenshot_dialog.dpi_2", dpi = dpi));
                     }
                 });
         });
         let [w, h] = settings.pixels();
-        ui.text_small(format!("{w} × {h} pixels per sheet"));
-        ui.text_small("Light mode · Transparent background");
+        ui.text_small(tr!("screenshot_dialog.pixels_per_sheet", w = w, h = h));
+        ui.text_small(tr!("screenshot_dialog.light_mode_transparent_background"));
         if !settings.combined && settings.selected().len() > 1 {
             ui.text_small(if settings.format == Format::Pdf {
-                "One PDF page per view."
+                tr!("screenshot_dialog.one_pdf_page_per_view")
             } else {
-                "Separate images packaged in a ZIP file."
+                tr!("screenshot_dialog.separate_images_packaged_in_a_zip_file")
             });
         }
     });
@@ -321,16 +322,16 @@ fn screenshot_preview(
             ui.set_min_width(ui.available_width());
             ui.spacing_mut().item_spacing = egui::vec2(6., 6.);
             ui.horizontal(|ui| {
-                ui.text_strong("Preview viewport");
+                ui.text_strong(tr!("screenshot_dialog.preview_viewport"));
                 ui.text_weak(if settings.combined {
-                    "Combined sheet"
+                    tr!("screenshot_dialog.combined_sheet")
                 } else {
-                    "Individual views"
+                    tr!("screenshot_dialog.individual_views")
                 });
             });
             let [width, height] = settings.paper_mm();
-            ui.text_weak(format!("{width:.0} × {height:.0} mm · {}",
-                if settings.landscape { "Landscape" } else { "Portrait" }));
+            ui.text_weak(tr!("screenshot_dialog.mm",
+                if settings.landscape { tr!("screenshot_dialog.landscape") } else { tr!("screenshot_dialog.portrait") }, width = width, height = height));
             if !settings.combined {
                 ui.horizontal_wrapped(|ui| {
                     for (index, &view) in settings.selected().iter().enumerate() {
@@ -347,7 +348,7 @@ fn screenshot_preview(
     let pdf_header = (settings.format == Format::Pdf).then(|| {
         let points = settings.paper_mm().map(|v| v * 72. / 25.4);
         let date = crate::estimate_pdf::generation_date().unwrap_or_default();
-        let header = crate::pdf_header::layout(project_name,"Model Views",&date,points,crate::pdf_header::base_width);
+        let header = crate::pdf_header::layout(project_name,tr!("screenshot_dialog.model_views"),&date,points,crate::pdf_header::base_width);
         let scale = paper.width() / points[0] as f32;
         crate::brand_mark::paint(&painter,Rect::from_min_size(paper.min+Vec2::splat(42.*scale),Vec2::splat(32.*scale)));
         for text in &header.text {
@@ -378,13 +379,13 @@ fn screenshot_preview(
             viewport.center(),
             Align2::CENTER_CENTER,
             if settings.selected().is_empty() {
-                "Select a view to preview"
+                tr!("screenshot_dialog.select_a_view_to_preview")
             } else if rendering && exporting {
-                "Rendering export…"
+                tr!("screenshot_dialog.rendering_export")
             } else if rendering {
-                "Preparing preview…"
+                tr!("screenshot_dialog.preparing_preview")
             } else {
-                "Preview unavailable"
+                tr!("screenshot_dialog.preview_unavailable")
             },
             FontId::proportional(14.),
             Color32::from_gray(100),
@@ -452,7 +453,7 @@ impl Capture {
             .iter()
             .any(|&v| v == 0 || v > device.limits().max_texture_dimension_2d)
         {
-            return Err("This image exceeds the GPU texture size. Choose smaller paper or a lower resolution.".into());
+            return Err(tr!("screenshot_dialog.this_image_exceeds_the_gpu_texture_size_choose").into());
         }
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let mut renderer = egui_wgpu::Renderer::new(
@@ -524,7 +525,7 @@ impl Capture {
                 depth_or_array_layers: 1,
             };
             let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Screenshot color"),
+                label: Some(tr!("screenshot_dialog.screenshot_color")),
                 size: extent,
                 mip_level_count: 1,
                 sample_count: 1,
@@ -534,7 +535,7 @@ impl Capture {
                 view_formats: &[],
             });
             let depth = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Screenshot depth"),
+                label: Some(tr!("screenshot_dialog.screenshot_depth")),
                 format: wgpu::TextureFormat::Depth32Float,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 ..texture_descriptor(extent)
@@ -545,7 +546,7 @@ impl Capture {
             let commands = renderer.update_buffers(device, queue, &mut encoder, &jobs, &screen);
             {
                 let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Screenshot viewport"),
+                    label: Some(tr!("screenshot_dialog.screenshot_viewport")),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &target,
                         depth_slice: None,
@@ -569,7 +570,7 @@ impl Capture {
             }
             let stride = (size[0] * 4).div_ceil(256) * 256;
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Screenshot readback"),
+                label: Some(tr!("screenshot_dialog.screenshot_readback")),
                 size: stride as u64 * size[1] as u64,
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
@@ -622,7 +623,7 @@ impl Capture {
             .map_err(|e| e.to_string())?;
         if ctx.input(|i| i.time) - self.started > 60. {
             return Err(
-                "Screenshot rendering timed out. Try fewer views or a lower resolution.".into(),
+                tr!("screenshot_dialog.screenshot_rendering_timed_out_try_fewer_views_or").into(),
             );
         }
         for view in &mut self.views {
@@ -631,7 +632,7 @@ impl Capture {
             }
             match view.ready.try_recv() {
                 Ok(result) => {
-                    result.map_err(|e| format!("Could not read screenshot: {e}"))?;
+                    result.map_err(|e| tr!("screenshot_dialog.could_not_read_screenshot", e = e))?;
                     let mapped = view
                         .buffer
                         .slice(..)
@@ -649,7 +650,7 @@ impl Capture {
                     view.buffer.unmap();
                 }
                 Err(mpsc::TryRecvError::Empty) => return Ok(None),
-                Err(_) => return Err("Screenshot readback did not complete.".into()),
+                Err(_) => return Err(tr!("screenshot_dialog.screenshot_readback_did_not_complete").into()),
             }
         }
         Ok(Some(

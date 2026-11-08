@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 use crate::{
     modal::{Modal, primary_button},
     natural_text::TextUi as _,
@@ -52,7 +53,7 @@ pub(crate) struct Account {
 }
 impl Default for Account {
     fn default() -> Self {
-        let server = crate::server_config::configured_server();
+        let server = crate::server_config::configured_server().map_err(server_config_message);
         let error = server.as_ref().err().cloned();
         Self {
             server: server.unwrap_or_default(),
@@ -72,6 +73,35 @@ impl Default for Account {
         }
     }
 }
+
+fn server_config_message(error: crate::server_config::ConfigError) -> String {
+    use crate::server_config::{ConfigError, KEY};
+    match error {
+        ConfigError::InvalidValue => tr!("account.config_invalid_value", key = KEY),
+        ConfigError::Unconfigured => tr!("account.config_missing", key = KEY),
+        #[cfg(any(not(target_arch = "wasm32"), test))]
+        ConfigError::MissingEquals(line) => tr!("account.config_missing_equals", key = KEY, line = line),
+        #[cfg(any(not(target_arch = "wasm32"), test))]
+        ConfigError::UnclosedQuote(line) => tr!("account.config_unclosed_quote", key = KEY, line = line),
+        #[cfg(any(not(target_arch = "wasm32"), test))]
+        ConfigError::TrailingText(line) => tr!("account.config_trailing_text", key = KEY, line = line),
+        #[cfg(not(target_arch = "wasm32"))]
+        ConfigError::MissingArgument => tr!("account.config_missing_argument").into(),
+        #[cfg(not(target_arch = "wasm32"))]
+        ConfigError::InvalidUnicode => tr!("account.config_invalid_unicode", key = KEY),
+        #[cfg(not(target_arch = "wasm32"))]
+        ConfigError::InFile(path, error) => tr!(
+            "account.config_file_error",
+            path = path.display(),
+            error = server_config_message(*error),
+        ),
+        #[cfg(not(target_arch = "wasm32"))]
+        ConfigError::ReadFile(path, error) => {
+            tr!("account.config_cannot_read_file", path = path.display(), error = error)
+        }
+    }
+}
+
 impl Account {
     pub fn has_server(&self) -> bool {
         !self.server.is_empty()
@@ -112,7 +142,7 @@ impl Account {
         }
         if !valid_server(&self.server) {
             self.error = Some(
-                "Invalid account server configuration: use HTTPS, or HTTP on localhost.".into(),
+                tr!("account.invalid_account_server_configuration_use_https_or_http").into(),
             );
             return;
         }
@@ -135,9 +165,9 @@ impl Account {
             let result = result.and_then(|bytes| match kind {
                 Request::Session => {
                     let session: Session = serde_json::from_slice(&bytes)
-                        .map_err(|_| "Invalid server session response".to_owned())?;
+                        .map_err(|_| tr!("account.invalid_server_session_response").to_owned())?;
                     if session.authenticated && session.user.is_none() {
-                        return Err("Invalid server profile".into());
+                        return Err(tr!("account.invalid_server_profile").into());
                     }
                     self.server_reachable = true;
                     self.csrf = session.csrf;
@@ -163,9 +193,9 @@ impl Account {
                 #[cfg(not(target_arch = "wasm32"))]
                 Request::Login => {
                     let login: Login = serde_json::from_slice(&bytes)
-                        .map_err(|_| "Invalid server login response".to_owned())?;
+                        .map_err(|_| tr!("account.invalid_server_login_response").to_owned())?;
                     if !login.authorize_path.starts_with("/client/connect?id=") {
-                        return Err("Invalid login address".into());
+                        return Err(tr!("account.invalid_login_address").into());
                     }
                     self.token = Some(login.token);
                     self.waiting = true;
@@ -179,9 +209,9 @@ impl Account {
                 }
                 Request::Logout => {
                     let session: Session = serde_json::from_slice(&bytes)
-                        .map_err(|_| "Invalid logout response".to_owned())?;
+                        .map_err(|_| tr!("account.invalid_logout_response").to_owned())?;
                     if session.authenticated {
-                        return Err("The server did not sign out.".into());
+                        return Err(tr!("account.the_server_did_not_sign_out").into());
                     }
                     self.clear_session();
                     #[cfg(not(target_arch = "wasm32"))]
@@ -191,7 +221,7 @@ impl Account {
                             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                             Err(_) => {
                                 return Err(
-                                    "Signed out, but could not remove the saved credential.".into(),
+                                    tr!("account.signed_out_but_could_not_remove_the_saved").into(),
                                 );
                             }
                         }
@@ -202,14 +232,14 @@ impl Account {
                     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes));
                     reader = reader
                         .with_guessed_format()
-                        .map_err(|_| "Cannot read account picture".to_owned())?;
+                        .map_err(|_| tr!("account.cannot_read_account_picture").to_owned())?;
                     let mut limits = image::Limits::default();
                     limits.max_image_width = Some(4096);
                     limits.max_image_height = Some(4096);
                     reader.limits(limits);
                     let image = reader
                         .decode()
-                        .map_err(|_| "Cannot load account picture".to_owned())?
+                        .map_err(|_| tr!("account.cannot_load_account_picture").to_owned())?
                         .thumbnail(96, 96)
                         .to_rgba8();
                     self.texture = Some(ctx.load_texture(
@@ -236,7 +266,7 @@ impl Account {
         }
         if self.waiting && ctx.input(|i| i.time) >= self.login_deadline {
             self.waiting = false;
-            self.error = Some("Login timed out. Continue with Google to try again.".into());
+            self.error = Some(tr!("account.login_timed_out_continue_with_google_to_try").into());
         }
         if (self.waiting || !self.server_reachable) && self.has_server()
             && self.pending.is_none() && ctx.input(|i| i.time) >= self.next_poll {
@@ -336,9 +366,9 @@ impl Account {
                     .add_enabled(
                         !signing_out,
                         egui::Button::new(if signing_out {
-                            "Logging out…"
+                            tr!("account.logging_out")
                         } else {
-                            "Log out"
+                            tr!("account.log_out")
                         }),
                     )
                     .clicked()
@@ -366,18 +396,18 @@ impl Account {
         let mut logout = false;
         let response = Modal::new("account_logout_confirmation", 400.).show(ctx, |modal| {
             modal.header(|ui| {
-                ui.text_heading("Log out");
+                ui.text_heading(tr!("account.log_out"));
             });
             modal.body(|ui| {
-                ui.text_label("Are you sure you want to log out?");
+                ui.text_label(tr!("account.are_you_sure_you_want_to_log_out"));
             });
             modal.footer(|ui| {
-                if ui.button("Cancel").clicked() {
+                if ui.button(tr!("common.cancel")).clicked() {
                     ui.close();
                 }
                 if primary_button(
                     ui,
-                    "Log out",
+                    tr!("account.log_out"),
                     !matches!(&self.pending, Some((Request::Logout, _))),
                 )
                 .clicked()
@@ -416,34 +446,34 @@ impl Account {
         let response = Modal::new("account_login", 400.).show(ctx, |modal| {
             modal.header(|ui| {
                 ui.text_heading(if self.user.is_some() {
-                    "Account"
+                    tr!("account.account")
                 } else {
-                    "Log in to KetchUp3D"
+                    tr!("account.log_in_to_ketchup3d")
                 });
             });
             modal.body(|ui| {
                 if let Some(user) = &self.user {
                     ui.text_label(&user.name);
                 } else {
-                    ui.text_label("Connect your account using Google in your browser.");
+                    ui.text_label(tr!("account.connect_your_account_using_google_in_your_browser"));
                 }
                 if self.pending.is_some() {
                     ui.spinner();
                 }
                 if self.waiting {
-                    ui.text_label("Complete login and authorize KetchUp3D in your browser…");
+                    ui.text_label(tr!("account.complete_login_and_authorize_ketchup3d_in_your_browser"));
                 }
                 if let Some(error) = &self.error {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
             });
             modal.footer(|ui| {
-                if ui.button("Close").clicked() {
+                if ui.button(tr!("common.close")).clicked() {
                     ui.close();
                 }
                 if primary_button(
                     ui,
-                    "Continue with Google",
+                    tr!("account.continue_with_google"),
                     !self.server.is_empty() && self.pending.is_none() && !self.waiting,
                 )
                 .clicked()
@@ -451,7 +481,7 @@ impl Account {
                     let server = self.server.trim_end_matches('/');
                     if !valid_server(server) {
                         self.error =
-                            Some("Use HTTPS, or HTTP on localhost for development.".into());
+                            Some(tr!("account.use_https_or_http_on_localhost_for_development").into());
                         return;
                     }
                     #[cfg(not(target_arch = "wasm32"))]
@@ -521,7 +551,7 @@ fn credential_path(server: &str) -> Option<std::path::PathBuf> {
 #[cfg(not(target_arch = "wasm32"))]
 fn save_credential(server: &str, token: &str) -> Result<(), String> {
     use std::io::Write;
-    let path = credential_path(server).ok_or("Cannot locate account storage")?;
+    let path = credential_path(server).ok_or(tr!("account.cannot_locate_account_storage"))?;
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
     let mut options = std::fs::OpenOptions::new();
     options.create(true).write(true).truncate(true);
@@ -542,7 +572,7 @@ fn request(
 ) -> Receiver<Result<Vec<u8>, String>> {
     let (sender, receiver) = mpsc::channel();
     if !(url.starts_with("https://") || valid_server(&url)) {
-        let _ = sender.send(Err("Invalid server address".into()));
+        let _ = sender.send(Err(tr!("account.invalid_server_address").into()));
         return receiver;
     }
     let ctx = ctx.clone();
@@ -571,13 +601,13 @@ fn request(
                     }
                     request.call()
                 }
-                .map_err(|_| "Cannot connect to the configured server. Please retry.".to_owned())?;
+                .map_err(|_| tr!("account.cannot_connect_to_the_configured_server_please_retry").to_owned())?;
                 response
                     .body_mut()
                     .with_config()
                     .limit(4 * 1024 * 1024)
                     .read_to_vec()
-                    .map_err(|_| "Cannot read server response".into())
+                    .map_err(|_| tr!("account.cannot_read_server_response").into())
             })();
             let _ = sender.send(result);
             ctx.request_repaint();
@@ -604,8 +634,8 @@ fn request(
                 Ok(value) => wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&value))
                     .await
                     .map(|value| js_sys::Uint8Array::new(&value).to_vec())
-                    .map_err(|_| "Cannot connect to the configured server. Please retry.".into()),
-                Err(_) => Err("Cannot connect to server".into()),
+                    .map_err(|_| tr!("account.cannot_connect_to_the_configured_server_please_retry").into()),
+                Err(_) => Err(tr!("account.cannot_connect_to_server").into()),
             };
             let _ = sender.send(result);
             ctx.request_repaint();
@@ -716,12 +746,12 @@ impl Account {
         #[cfg(target_arch = "wasm32")]
         {
             web_sys::window()
-                .ok_or("No browser")?
+                .ok_or(tr!("account.no_browser"))?
                 .local_storage()
-                .map_err(|_| "Storage unavailable")?
-                .ok_or("Storage unavailable")?
+                .map_err(|_| tr!("account.storage_unavailable"))?
+                .ok_or(tr!("account.storage_unavailable"))?
                 .set_item(&key, value)
-                .map_err(|_| "Cannot save guest identity".into())
+                .map_err(|_| tr!("account.cannot_save_guest_identity").into())
         }
     }
 }
@@ -735,7 +765,7 @@ fn project_request(
 ) -> Receiver<Result<ApiReply, String>> {
     let (sender, receiver) = mpsc::channel();
     if !valid_server(&url) {
-        let _ = sender.send(Err("Invalid project server configuration".into()));
+        let _ = sender.send(Err(tr!("account.invalid_project_server_configuration").into()));
         return receiver;
     }
     let ctx = ctx.clone();
@@ -768,7 +798,7 @@ fn project_request(
                 }
                 request.call()
             }
-            .map_err(|e| format!("Project server unavailable: {e}"))?;
+            .map_err(|e| tr!("account.project_server_unavailable", e = e))?;
             let status = response.status().as_u16();
             let bytes = response
                 .body_mut()
@@ -817,15 +847,15 @@ fn project_request(
         let _ = token;
         wasm_bindgen_futures::spawn_local(async move {
             let result = async {
-                let value = promise.map_err(|_| "Cannot contact project server".to_owned())?;
+                let value = promise.map_err(|_| tr!("account.cannot_contact_project_server").to_owned())?;
                 let value = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::resolve(&value))
                     .await
-                    .map_err(|_| "Cannot contact project server".to_owned())?;
+                    .map_err(|_| tr!("account.cannot_contact_project_server").to_owned())?;
                 let reply: serde_json::Value =
-                    serde_json::from_str(&value.as_string().ok_or("Invalid project response")?)
+                    serde_json::from_str(&value.as_string().ok_or(tr!("account.invalid_project_response"))?)
                         .map_err(|e| e.to_string())?;
                 Ok(ApiReply {
-                    status: reply["status"].as_u64().ok_or("Missing HTTP status")? as u16,
+                    status: reply["status"].as_u64().ok_or(tr!("account.missing_http_status"))? as u16,
                     body: reply["body"].clone(),
                 })
             }

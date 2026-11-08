@@ -1,4 +1,5 @@
 //! Pivot/reference/angle rotation using the same targets and grid as Move.
+use ketchup_core::tr;
 use super::*;
 
 pub(super) struct Rotation {
@@ -32,13 +33,13 @@ impl KetchupApp {
             .and_then(|edit| edit.rotation.as_ref())
         {
             None => {
-                "Select geometry · Click a pivot (on or offset from the selection) · Arrow keys lock the rotation plane"
+                tr!("rotate_tool.select_geometry_click_a_pivot_on_or_offset")
             }
             Some(rotation) if rotation.reference.is_none() => {
-                "Click a reference point away from the pivot · Arrow keys lock the rotation plane · Esc to cancel"
+                tr!("rotate_tool.click_a_reference_point_away_from_the_pivot")
             }
             Some(_) => {
-                "Click to rotate · Type an angle or formula + Enter · Arrow keys lock the rotation plane · Esc to cancel"
+                tr!("rotate_tool.click_to_rotate_type_an_angle_or_formula")
             }
         }
     }
@@ -156,7 +157,7 @@ impl KetchupApp {
         let target = edit.direction;
         if reference.length_squared() < 1e-12 {
             edit.error = Some(
-                "The reference lies on the rotation axis; clear the lock or restart with another reference",
+                tr!("rotate_tool.the_reference_lies_on_the_rotation_axis_clear"),
             );
             return;
         }
@@ -188,7 +189,7 @@ impl KetchupApp {
             return false;
         }
         if edit.direction.length_squared() < 1e-12 {
-            self.say(ctx, "Click a reference point away from the pivot first");
+            self.say(ctx, tr!("rotate_tool.click_a_reference_point_away_from_the_pivot_2"));
             return true;
         }
         rotation.reference = Some(edit.direction);

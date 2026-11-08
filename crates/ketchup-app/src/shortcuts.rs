@@ -1,6 +1,8 @@
 use super::*;
+use ketchup_core::tr;
 
 struct Section<'a> {
+    id: &'static str,
     title: &'a str,
     rows: Vec<(&'a str, String)>,
 }
@@ -36,7 +38,7 @@ impl Section<'_> {
                 );
                 ui.add_space(8.);
                 let column_width = (ui.available_width() - 12.) * 0.5;
-                egui::Grid::new(self.title)
+                egui::Grid::new(self.id)
                     .num_columns(2)
                     .spacing(egui::vec2(12., 9.))
                     .min_col_width(column_width)
@@ -75,132 +77,211 @@ impl KetchupApp {
     pub(super) fn help_window(&mut self, ctx: &egui::Context) {
         let mac = ctx.os() == egui::os::OperatingSystem::Mac;
         let command = if mac { "⌘" } else { "Ctrl" };
-        let section = |title: &'static str, rows: &[(&'static str, &str)]| Section {
+        let tool_row = |tool, action| {
+            (
+                action,
+                shortcut_input::key_label(self.general_settings.tool_shortcut(tool)),
+            )
+        };
+        let section = |id, title: &'static str, rows: &[(&'static str, &str)]| Section {
+            id,
             title,
             rows: rows
                 .iter()
                 .map(|(action, keys)| (*action, (*keys).to_owned()))
                 .collect(),
         };
-        let mut sections = [
+        let sections = [
             section(
-                "Drawing & measuring",
+                "drawing_measuring",
+                tr!("shortcuts.drawing_measuring"),
                 &[
-                    ("Select", "Space"),
-                    ("Connected lines", "L"),
-                    ("Rectangle", "R"),
-                    ("Circle", "C"),
-                    ("Polygon", "G"),
-                    ("Freehand", "D"),
-                    ("Paint faces", "B"),
-                    ("Erase edges or faces", "E"),
-                    ("Tape Measure", "T"),
-                    ("Protractor", "A"),
-                    ("Dimensions", "I"),
+                    tool_row(Tool::Select, tr!("shortcuts.select")),
+                    tool_row(Tool::Line, tr!("shortcuts.connected_lines")),
+                    tool_row(Tool::Rectangle, tr!("shortcuts.rectangle")),
+                    tool_row(Tool::Circle, tr!("shortcuts.circle")),
+                    tool_row(Tool::Polygon, tr!("shortcuts.polygon")),
+                    tool_row(Tool::Freehand, tr!("shortcuts.freehand")),
+                    tool_row(Tool::Paint, tr!("shortcuts.paint_faces")),
+                    tool_row(Tool::Erase, tr!("shortcuts.erase_edges_or_faces")),
+                    tool_row(Tool::TapeMeasure, tr!("shortcuts.tape_measure")),
+                    tool_row(Tool::Protractor, tr!("shortcuts.protractor")),
+                    tool_row(Tool::Dimensions, tr!("shortcuts.dimensions")),
                 ],
             ),
             Section {
-                title: "Project & clipboard",
+                id: "project_clipboard",
+                title: tr!("shortcuts.project_clipboard"),
                 rows: [
-                    ("New project", format!("{command} + N")),
-                    ("Open project", format!("{command} + O")),
-                    ("Save", format!("{command} + S")),
-                    ("Save as", format!("{command} + Shift + S")),
-                    ("Undo", format!("{command} + Z")),
-                    ("Redo", format!("{command} + Shift + Z")),
-                    ("Cut", format!("{command} + X")),
-                    ("Copy", format!("{command} + C")),
-                    ("Paste", format!("{command} + V")),
-                    ("Paste in place", format!("{command} + Shift + V")),
+                    (
+                        tr!("shortcuts.new_project"),
+                        tr!("shortcuts.n", command = command),
+                    ),
+                    (
+                        tr!("shortcuts.open_project"),
+                        tr!("shortcuts.o", command = command),
+                    ),
+                    (tr!("common.save"), tr!("shortcuts.s", command = command)),
+                    (
+                        tr!("shortcuts.save_as"),
+                        tr!("shortcuts.shift_s", command = command),
+                    ),
+                    (tr!("common.undo"), tr!("shortcuts.z", command = command)),
+                    (
+                        tr!("common.redo"),
+                        tr!("shortcuts.shift_z", command = command),
+                    ),
+                    (tr!("shortcuts.cut"), tr!("shortcuts.x", command = command)),
+                    (tr!("shortcuts.copy"), tr!("shortcuts.c", command = command)),
+                    (
+                        tr!("shortcuts.paste"),
+                        tr!("shortcuts.v", command = command),
+                    ),
+                    (
+                        tr!("shortcuts.paste_in_place"),
+                        tr!("shortcuts.shift_v", command = command),
+                    ),
                 ]
                 .into(),
             },
             section(
-                "Modeling",
+                "modeling",
+                tr!("shortcuts.modeling"),
                 &[
-                    ("Push/Pull a face", "P"),
-                    ("Scale geometry", "S"),
-                    ("Offset a face", "F"),
-                    ("Move geometry", "M"),
-                    ("Rotate geometry", "Q"),
-                    ("Toggle Move / Copy", Self::move_copy_key(ctx)),
-                    ("Divide a copy span", "/N + Enter"),
-                    ("Repeat copies", "Nx + Enter"),
-                    ("Flip & solid operations", "Union flyout"),
+                    tool_row(Tool::PushPull, tr!("shortcuts.push_pull_a_face")),
+                    tool_row(Tool::Scale, tr!("shortcuts.scale_geometry")),
+                    tool_row(Tool::Offset, tr!("shortcuts.offset_a_face")),
+                    tool_row(Tool::Move, tr!("shortcuts.move_geometry")),
+                    tool_row(Tool::Rotate, tr!("shortcuts.rotate_geometry")),
+                    (tr!("shortcuts.toggle_move_copy"), Self::move_copy_key(ctx)),
+                    (
+                        tr!("shortcuts.divide_a_copy_span"),
+                        tr!("shortcuts.n_enter"),
+                    ),
+                    (tr!("shortcuts.repeat_copies"), tr!("shortcuts.nx_enter")),
+                    (
+                        tr!("shortcuts.flip_solid_operations"),
+                        tr!("shortcuts.union_flyout"),
+                    ),
                 ],
             ),
             section(
-                "Navigation",
+                "navigation",
+                tr!("shortcuts.navigation"),
                 &[
-                    ("Orbit", "O"),
-                    ("Pan while orbiting", "Shift + drag"),
+                    tool_row(Tool::Orbit, tr!("shortcuts.orbit")),
                     (
-                        "Orbit while drawing",
+                        tr!("shortcuts.pan_while_orbiting"),
+                        tr!("shortcuts.shift_drag"),
+                    ),
+                    (
+                        tr!("shortcuts.orbit_while_drawing"),
                         if mac {
-                            "⌘ + move pointer"
+                            tr!("shortcuts.move_pointer")
                         } else {
-                            "Ctrl + move pointer"
+                            tr!("shortcuts.ctrl_move_pointer")
                         },
                     ),
-                    ("Temporary orbit", "Middle drag"),
-                    ("Temporary pan", "Shift + middle drag"),
-                    ("Zoom to pointer", "Scroll"),
-                    ("Toggle sidebar", "Tab"),
+                    (
+                        tr!("shortcuts.temporary_orbit"),
+                        tr!("shortcuts.middle_drag"),
+                    ),
+                    (
+                        tr!("shortcuts.temporary_pan"),
+                        tr!("shortcuts.shift_middle_drag"),
+                    ),
+                    (tr!("shortcuts.zoom_to_pointer"), tr!("shortcuts.scroll")),
+                    (tr!("shortcuts.toggle_sidebar"), tr!("shortcuts.tab")),
                 ],
             ),
             section(
-                "Precision & inference",
+                "precision_inference",
+                tr!("shortcuts.precision_inference"),
                 &[
-                    ("Lock X / Y / Z axis", "→ / ← / ↑"),
-                    ("Lock a plane", "Toggle two axis locks"),
-                    ("Lock shape plane normal X / Y / Z", "→ / ← / ↑"),
-                    ("Clear all axis locks", "↓"),
-                    ("Set length or radius", "Value + Enter"),
-                    ("Set rectangle size", "Width,height + Enter"),
-                    ("Acquire reference axes", "Hover geometry"),
-                    ("Match reference coordinate", "Axis lock + hover"),
-                    ("Cancel current operation", "Esc"),
+                    (
+                        tr!("shortcuts.lock_x_y_z_axis"),
+                        tr!("shortcuts.axis_lock_keys"),
+                    ),
+                    (
+                        tr!("shortcuts.lock_a_plane"),
+                        tr!("shortcuts.toggle_two_axis_locks"),
+                    ),
+                    (
+                        tr!("shortcuts.lock_shape_plane_normal_x_y_z"),
+                        tr!("shortcuts.axis_lock_keys"),
+                    ),
+                    (tr!("shortcuts.clear_all_axis_locks"), "↓"),
+                    (
+                        tr!("shortcuts.set_length_or_radius"),
+                        tr!("shortcuts.value_enter"),
+                    ),
+                    (
+                        tr!("shortcuts.set_rectangle_size"),
+                        tr!("shortcuts.width_height_enter"),
+                    ),
+                    (
+                        tr!("shortcuts.acquire_reference_axes"),
+                        tr!("shortcuts.hover_geometry"),
+                    ),
+                    (
+                        tr!("shortcuts.match_reference_coordinate"),
+                        tr!("shortcuts.axis_lock_hover"),
+                    ),
+                    (
+                        tr!("shortcuts.cancel_current_operation"),
+                        tr!("shortcuts.escape"),
+                    ),
                 ],
             ),
             section(
-                "Selection & objects",
+                "selection_objects",
+                tr!("shortcuts.selection_objects"),
                 &[
-                    ("Toggle selection", "Shift + click"),
-                    ("Search Outliner", if mac { "⌘ + F" } else { "Ctrl + F" }),
-                    ("Select all", if mac { "⌘ + A" } else { "Ctrl + A" }),
-                    ("Object & clipboard menu", "Right click"),
-                    ("Edit group or component", "Double-click"),
-                    ("Close editing level", "Esc"),
-                    ("Delete selection", "Delete / Backspace"),
+                    (
+                        tr!("shortcuts.toggle_selection"),
+                        tr!("shortcuts.shift_click"),
+                    ),
+                    (
+                        tr!("shortcuts.search_outliner"),
+                        if mac {
+                            "⌘ + F"
+                        } else {
+                            tr!("shortcuts.ctrl_f")
+                        },
+                    ),
+                    (
+                        tr!("shortcuts.select_all"),
+                        if mac {
+                            "⌘ + A"
+                        } else {
+                            tr!("shortcuts.ctrl_a")
+                        },
+                    ),
+                    (
+                        tr!("shortcuts.object_clipboard_menu"),
+                        tr!("shortcuts.right_click"),
+                    ),
+                    (
+                        tr!("shortcuts.edit_group_or_component"),
+                        tr!("shortcuts.double_click"),
+                    ),
+                    (
+                        tr!("shortcuts.close_editing_level"),
+                        tr!("shortcuts.escape"),
+                    ),
+                    (
+                        tr!("shortcuts.delete_selection"),
+                        tr!("shortcuts.delete_backspace"),
+                    ),
                 ],
             ),
         ];
-        for section in &mut sections {
-            for (action, keys) in &mut section.rows {
-                if let Some((tool, _)) = settings::TOOLS.iter().find(|(tool, _)| {
-                    tool.label() == *action
-                        || matches!(
-                            (*tool, *action),
-                            (Tool::Line, "Connected lines")
-                                | (Tool::Paint, "Paint faces")
-                                | (Tool::Erase, "Erase edges or faces")
-                                | (Tool::PushPull, "Push/Pull a face")
-                                | (Tool::Scale, "Scale geometry")
-                                | (Tool::Offset, "Offset a face")
-                                | (Tool::Move, "Move geometry")
-                                | (Tool::Rotate, "Rotate geometry")
-                        )
-                }) {
-                    *keys = self.general_settings.tool_shortcut(*tool).to_owned();
-                }
-            }
-        }
         let width = (ctx.content_rect().width() - 72.).clamp(80., 900.);
         let response = Modal::new("keyboard_shortcuts", 940.).show(ctx, |modal| {
             let mut filter_changed = false;
             modal.header(|ui| {
-                ui.text_heading("Keyboard shortcuts");
-                ui.text_weak("Find a tool, command, or gesture.");
+                ui.text_heading(tr!("shortcuts.keyboard_shortcuts"));
+                ui.text_weak(tr!("shortcuts.find_a_tool_command_or_gesture"));
                 ui.add_space(8.);
                 ui.horizontal(|ui| {
                     let clear_width = if self.shortcut_filter.is_empty() {
@@ -211,12 +292,13 @@ impl KetchupApp {
                     filter_changed = ui
                         .add(
                             egui::TextEdit::singleline(&mut self.shortcut_filter)
-                                .hint_text("Search shortcuts…")
+                                .hint_text(tr!("shortcuts.search_shortcuts"))
                                 .desired_width(ui.available_width() - clear_width)
                                 .margin(egui::vec2(10., 8.)),
                         )
                         .changed();
-                    if !self.shortcut_filter.is_empty() && ui.button("Clear").clicked() {
+                    if !self.shortcut_filter.is_empty() && ui.button(tr!("common.clear")).clicked()
+                    {
                         self.shortcut_filter.clear();
                         filter_changed = true;
                     }
@@ -239,10 +321,11 @@ impl KetchupApp {
                 let colors = Palette::for_ui(ui);
                 if !any_matches {
                     ui.add_space(24.);
-                    ui.text_label(RichText::new("No shortcuts found").strong());
+                    ui.text_label(RichText::new(tr!("shortcuts.no_shortcuts_found")).strong());
                     ui.text_label(
-                        RichText::new(format!(
-                            "Try a tool name like “orbit” or a key like “{command}”."
+                        RichText::new(tr!(
+                            "shortcuts.try_a_tool_name_like_orbit_or_a",
+                            command = command,
                         ))
                         .color(colors.muted),
                     );
@@ -259,10 +342,10 @@ impl KetchupApp {
                 }
             });
             modal.footer(|ui| {
-                if primary_button(ui, "Close", true).clicked() {
+                if primary_button(ui, tr!("common.close"), true).clicked() {
                     ui.close();
                 }
-                ui.text_weak("Lengths accept units and formulas: (1m + 20cm) / 2");
+                ui.text_weak(tr!("shortcuts.lengths_accept_units_and_formulas_1m_20cm_2"));
             });
         });
         if response.should_close() {

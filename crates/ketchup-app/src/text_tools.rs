@@ -1,4 +1,5 @@
 //! Attached leader text: pick geometry, place the label, then enter its contents.
+use ketchup_core::tr;
 use super::*;
 use ketchup_core::{DimensionAnchor, TextAnnotation};
 
@@ -131,7 +132,7 @@ impl KetchupApp {
                         })
                     }
                 })
-                .unwrap_or_else(|| "Text".into());
+                .unwrap_or_else(|| tr!("text_tools.text").into());
             self.measurement = Some(measurement_tools::Measurement {
                 points: vec![snap.point],
                 text,
@@ -140,7 +141,7 @@ impl KetchupApp {
         } else {
             self.say(
                 ctx,
-                "Click a visible edge, face, group, or component to attach text",
+                tr!("text_tools.click_a_visible_edge_face_group_or_component"),
             );
         }
     }
@@ -177,9 +178,9 @@ impl KetchupApp {
                 self.selected = BTreeSet::from([id]);
                 self.finish_edit(
                     if editor.id.is_some() {
-                        "Edit text"
+                        tr!("text_tools.edit_text")
                     } else {
-                        "Add text"
+                        tr!("text_tools.add_text")
                     },
                     before,
                     ctx,
@@ -207,11 +208,11 @@ impl KetchupApp {
         let response = Modal::new("attached_text_editor", 400.).show(ctx, |modal| {
             modal.header(|ui| {
                 ui.text_heading(if editor.id.is_some() {
-                    "Edit Text"
+                    tr!("text_tools.edit_text_2")
                 } else {
-                    "Attach Text"
+                    tr!("text_tools.attach_text")
                 });
-                ui.text_weak("Add a label to your model.");
+                ui.text_weak(tr!("text_tools.add_a_label_to_your_model"));
             });
             modal.body(|ui| {
                 let input_id = egui::Id::unique("attached_text_input");
@@ -224,18 +225,18 @@ impl KetchupApp {
                         .id(input_id)
                         .desired_width(320.)
                         .desired_rows(4)
-                        .hint_text("Enter label text"),
+                        .hint_text(tr!("text_tools.enter_label_text")),
                 );
                 Self::focus_name_input(ui, &editor.text, input_id);
                 if editor.text.len() > 4096 {
                     editor.text.truncate(editor.text.floor_char_boundary(4096));
                 }
-                ui.text_weak("Enter to save · Shift+Enter for a new line · Esc to cancel");
+                ui.text_weak(tr!("text_tools.enter_to_save_shift_enter_for_a_new"));
             });
             modal.footer(|ui| {
-                cancel = ui.button("Cancel").clicked();
+                cancel = ui.button(tr!("common.cancel")).clicked();
                 let valid = !editor.text.trim().is_empty();
-                save = (primary_button(ui, "Save", valid).clicked() || save) && valid;
+                save = (primary_button(ui, tr!("common.save"), valid).clicked() || save) && valid;
             });
         });
         if (!cancel && !response.should_close()) || save {
@@ -256,7 +257,7 @@ impl KetchupApp {
             if ui
                 .add_enabled(
                     !self.doc.model.is_locked(id),
-                    egui::Button::new("Edit Text…").min_size(egui::vec2(
+                    egui::Button::new(tr!("text_tools.edit_text_3")).min_size(egui::vec2(
                         ui.available_width(),
                         ui.spacing().interact_size.y,
                     )),

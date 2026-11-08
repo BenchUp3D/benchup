@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use ketchup_core::tr;
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
     // Installer hooks must run before opening windows or loading user data.
@@ -13,7 +14,7 @@ fn main() -> eframe::Result {
             eframe::icon_data::from_png_bytes(include_bytes!(
                 "../../../assets/branding/icon-256.png"
             ))
-            .expect("The bundled KetchUp3D icon must be a valid PNG"),
+            .expect(tr!("startup.the_bundled_ketchup3d_icon_must_be_a_valid")),
         );
     // GNOME/Wayland resolves the icon through the matching .desktop file.
     #[cfg(target_os = "linux")]
@@ -36,7 +37,7 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native(
-        "KetchUp3D — 3D workspace",
+        tr!("startup.ketchup3d_3d_workspace"),
         options,
         Box::new(|cc| Ok(Box::new(ketchup_app::KetchupApp::new(cc)))),
     )
@@ -53,6 +54,7 @@ fn main() {
             .get_element_by_id("ketchup-canvas")
             .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
             .expect("Missing viewport canvas");
+        let _ = canvas.set_attribute("aria-label", tr!("web.canvas_label"));
         let options = eframe::WebOptions {
             renderer: eframe::Renderer::Wgpu,
             depth_buffer: 32,
@@ -68,7 +70,7 @@ fn main() {
         if let Some(loading) = document.get_element_by_id("loading") {
             match result {
                 Ok(())=>loading.remove(),
-                Err(_)=>loading.set_text_content(Some("KetchUp3D could not start its GPU renderer. Enable hardware acceleration or try a browser with WebGPU or WebGL2 support.")),
+                Err(_)=>loading.set_text_content(Some(tr!("startup.ketchup3d_could_not_start_its_gpu_renderer_enable"))),
             }
         }
     });

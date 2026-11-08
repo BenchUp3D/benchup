@@ -1,5 +1,6 @@
 //! A shared document with independently framed cameras. Tools use the active
 //! document camera while every view shares the model, selection and history.
+use ketchup_core::tr;
 use super::*;
 use std::collections::BTreeMap;
 
@@ -304,9 +305,9 @@ impl Workspace {
     fn name(&self, id: u64) -> String {
         self.names.get(&id).cloned().unwrap_or_else(|| {
             if id == 0 {
-                "Current".to_owned()
+                tr!("viewports.current").to_owned()
             } else {
-                format!("View {id}")
+                tr!("viewports.view", id = id)
             }
         })
     }
@@ -552,20 +553,20 @@ impl KetchupApp {
                         if response.drag_started() { self.viewports.dragging = Some(*tab); }
                         response.context_menu(|ui| {
                             Self::menu_style(ui.style_mut());
-                            if ui.add_enabled(self.gesture.is_none(), Self::menu_item_button(ui, "Rename…", None)).clicked() {
+                            if ui.add_enabled(self.gesture.is_none(), Self::menu_item_button(ui, tr!("viewports.rename"), None)).clicked() {
                                 self.viewports.renaming = Some((*tab, self.viewports.name(*tab)));
                                 Self::request_name_input_focus(ui.ctx(), egui::Id::unique("rename_viewport_name"));
                                 ui.close();
                             }
-                            if ui.add_enabled(tabs.len() > 1 && self.gesture.is_none(), Self::menu_item_button(ui, "Close", Some("close"))).clicked() {
+                            if ui.add_enabled(tabs.len() > 1 && self.gesture.is_none(), Self::menu_item_button(ui, tr!("common.close"), Some("close"))).clicked() {
                                 close = Some(*tab);
                                 ui.close();
                             }
                         });
-                        response.on_hover_text("Drag to a viewport edge to split, or its center to join tabs. Right-click to rename or close.");
+                        response.on_hover_text(tr!("viewports.drag_to_a_viewport_edge_to_split_or"));
                     });
                 }
-                add = ui.button("+").on_hover_text("Create viewport").clicked();
+                add = ui.button("+").on_hover_text(tr!("viewports.create_viewport")).clicked();
                 ui.separator();
                 self.edit_context_bar(ui);
             });
@@ -602,10 +603,10 @@ impl KetchupApp {
         let mut cancel = false;
         let response = Modal::new("rename_viewport", 360.).show(ctx, |modal| {
             modal.header(|ui| {
-                ui.text_heading("Rename view");
+                ui.text_heading(tr!("viewports.rename_view"));
             });
             modal.body(|ui| {
-                ui.text_label("Name");
+                ui.text_label(tr!("common.name"));
                 let input =
                     Self::name_input(ui, &mut name, egui::Id::unique("rename_viewport_name"));
                 if name.len() > 1024 {
@@ -614,9 +615,9 @@ impl KetchupApp {
                 save = input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
             });
             modal.footer(|ui| {
-                cancel = ui.button("Cancel").clicked();
+                cancel = ui.button(tr!("common.cancel")).clicked();
                 let valid = !name.trim().is_empty();
-                save = (primary_button(ui, "Save", valid).clicked() || save) && valid;
+                save = (primary_button(ui, tr!("common.save"), valid).clicked() || save) && valid;
             });
         });
         if save {
@@ -835,7 +836,7 @@ impl KetchupApp {
                 ui.painter().with_clip_rect(*rect).text(
                     rect.center(),
                     Align2::CENTER_CENTER,
-                    "A compatible GPU renderer is required. Try updating your graphics driver.",
+                    tr!("viewports.a_compatible_gpu_renderer_is_required_try_updating"),
                     FontId::proportional(15.),
                     ACCENT,
                 );

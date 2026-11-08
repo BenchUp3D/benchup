@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 use super::shortcut_input::{shortcut_input, valid_tool_key};
 use super::*;
 use crate::inspector_table::{Column, InspectorTable, inspector_field};
@@ -22,13 +23,13 @@ pub(super) enum Section {
 
 impl Section {
     const GROUPS: [(&'static str, &'static [Self]); 4] = [
-        ("Workspace", &[Self::Units, Self::Grid, Self::Colors]),
-        ("Controls", &[Self::Navigation, Self::Shortcuts, Self::Tools]),
+        (tr!("settings.workspace"), &[Self::Units, Self::Grid, Self::Colors]),
+        (tr!("settings.controls"), &[Self::Navigation, Self::Shortcuts, Self::Tools]),
         (
-            "Materials & estimates",
+            tr!("settings.materials_estimates"),
             &[Self::StockPricing, Self::SurfaceTreatment],
         ),
-        ("System", &[Self::Diagnostics, Self::Rendering]),
+        (tr!("settings.system"), &[Self::Diagnostics, Self::Rendering]),
     ];
     #[cfg(test)]
     const ALL: [Self; 10] = [
@@ -45,16 +46,16 @@ impl Section {
     ];
     fn label(self) -> &'static str {
         match self {
-            Self::Colors => "Axis and inference colors",
-            Self::Navigation => "Navigation",
-            Self::Shortcuts => "Shortcuts management",
-            Self::Units => "Default units",
-            Self::Grid => "Grid",
-            Self::StockPricing => "Material",
-            Self::SurfaceTreatment => "Sanding & Finishing",
-            Self::Diagnostics => "Diagnostics",
-            Self::Rendering => "Rendering",
-            Self::Tools => "Tools",
+            Self::Colors => tr!("settings.axis_and_inference_colors"),
+            Self::Navigation => tr!("settings.navigation"),
+            Self::Shortcuts => tr!("settings.shortcuts_management"),
+            Self::Units => tr!("settings.default_units"),
+            Self::Grid => tr!("settings.grid"),
+            Self::StockPricing => tr!("settings.material"),
+            Self::SurfaceTreatment => tr!("settings.sanding_finishing"),
+            Self::Diagnostics => tr!("settings.diagnostics"),
+            Self::Rendering => tr!("settings.rendering"),
+            Self::Tools => tr!("settings.tools"),
         }
     }
 
@@ -134,10 +135,14 @@ pub(super) const TOOLS: [(Tool, &str); 17] = [
     (Tool::Rotate, "Q"),
 ];
 
+const DEFAULT_LANGUAGE: &str = "en";
+const LANGUAGES: &[(&str, &str)] = &[(DEFAULT_LANGUAGE, tr!("settings.language_english"))];
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(super) struct GeneralSettings {
     pub section: Section,
+    pub language: String,
     pub orbit_speed: f64,
     pub pan_speed: f64,
     pub zoom_speed: f64,
@@ -153,6 +158,7 @@ impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
             section: Section::default(),
+            language: DEFAULT_LANGUAGE.into(),
             orbit_speed: 1.,
             pan_speed: 1.,
             zoom_speed: 1.,
@@ -169,6 +175,9 @@ impl Default for GeneralSettings {
 impl GeneralSettings {
     pub(super) fn normalize(&mut self) {
         self.stock.normalize();
+        if !LANGUAGES.iter().any(|&(code, _)| code == self.language.as_str()) {
+            self.language = DEFAULT_LANGUAGE.into();
+        }
         for speed in [
             &mut self.orbit_speed,
             &mut self.pan_speed,
@@ -245,8 +254,31 @@ impl KetchupApp {
             .dismissible(self.material_removal.is_none())
             .show(ctx, |modal| {
                 modal.header(|ui| {
-                    ui.text_heading("Settings");
-                    ui.text_weak("Changes are saved automatically on this device.");
+                    ui.horizontal(|ui| {
+                        ui.text_heading(tr!("settings.settings"));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let language = &mut self.general_settings.language;
+                            let selected = LANGUAGES
+                                .iter()
+                                .find(|&&(code, _)| code == language.as_str())
+                                .unwrap_or(&LANGUAGES[0]);
+                            let picker = egui::ComboBox::from_id_salt("settings_language")
+                                .selected_text(selected.1)
+                                .show_ui(ui, |ui| {
+                                    for &(code, name) in LANGUAGES {
+                                        if ui
+                                            .selectable_label(code == language.as_str(), name)
+                                            .clicked()
+                                        {
+                                            *language = code.into();
+                                        }
+                                    }
+                                });
+                            let label = ui.text_label(tr!("settings.language"));
+                            picker.response.labelled_by(label.id);
+                        });
+                    });
+                    ui.text_weak(tr!("settings.changes_are_saved_automatically_on_this_device"));
                 });
                 modal.body_unpadded(650., |ui| {
                     let size = ui.available_size();
@@ -348,7 +380,7 @@ impl KetchupApp {
                     });
                 });
                 modal.footer(|ui| {
-                    if primary_button(ui, "Close", true).clicked() {
+                    if primary_button(ui, tr!("common.close"), true).clicked() {
                         ui.close();
                     }
                 });
@@ -363,21 +395,21 @@ impl KetchupApp {
             Section::Tools => {
                 ui.checkbox(
                     &mut self.general_settings.reset_axis_locks_on_action,
-                    "Reset axis locks on each action",
+                    tr!("settings.reset_axis_locks_on_each_action"),
                 )
-                .on_hover_text("Clear both axis locks after completing an edit or measurement, cancelling, or switching tools. Disable to keep locks until you clear them manually.");
+                .on_hover_text(tr!("settings.clear_both_axis_locks_after_completing_an_edit"));
             }
             Section::Rendering => {
-                ui.checkbox(&mut self.doc.display.shadow_antialiasing, "Shadow antialiasing")
-                    .on_hover_text("Smooth shadow boundaries with 4× multisampling. Only shadows are affected. Changes apply immediately.");
+                ui.checkbox(&mut self.doc.display.shadow_antialiasing, tr!("settings.shadow_antialiasing"))
+                    .on_hover_text(tr!("settings.smooth_shadow_boundaries_with_4_multisampling_only_shadows"));
             }
             Section::Diagnostics => {
-                ui.text_weak("Tools for checking performance and troubleshooting.");
-                ui.checkbox(&mut self.general_settings.show_fps, "Show frames per second")
-                    .on_hover_text("Display the rendering frame rate in the lower-left corner of each viewport. Enables continuous rendering while visible.");
+                ui.text_weak(tr!("settings.tools_for_checking_performance_and_troubleshooting"));
+                ui.checkbox(&mut self.general_settings.show_fps, tr!("settings.show_frames_per_second"))
+                    .on_hover_text(tr!("settings.display_the_rendering_frame_rate_in_the_lower"));
             }
             Section::SurfaceTreatment => {
-                ui.text_weak("Defaults for objects in all projects. Objects use these values until customized in Entity Info.");
+                ui.text_weak(tr!("settings.defaults_for_objects_in_all_projects_objects_use"));
                 time_estimates::treatment_controls(
                     ui,
                     &mut self.time_estimates,
@@ -397,13 +429,13 @@ impl KetchupApp {
             }
             Section::Colors => {
                 let d = &mut self.doc.display;
-                color_row(ui, "X axis", &mut d.axis_colors[0]);
-                color_row(ui, "Y axis", &mut d.axis_colors[1]);
-                color_row(ui, "Z axis", &mut d.axis_colors[2]);
-                color_row(ui, "Inference points", &mut d.inference_color);
-                color_row(ui, "Midpoints", &mut d.midpoint_color);
-                ui.text_weak("Axis inferences use the corresponding axis color.");
-                if ui.button("Restore default colors").clicked() {
+                color_row(ui, tr!("settings.x_axis"), &mut d.axis_colors[0]);
+                color_row(ui, tr!("settings.y_axis"), &mut d.axis_colors[1]);
+                color_row(ui, tr!("settings.z_axis"), &mut d.axis_colors[2]);
+                color_row(ui, tr!("settings.inference_points"), &mut d.inference_color);
+                color_row(ui, tr!("settings.midpoints"), &mut d.midpoint_color);
+                ui.text_weak(tr!("settings.axis_inferences_use_the_corresponding_axis_color"));
+                if ui.button(tr!("settings.restore_default_colors")).clicked() {
                     let defaults = ketchup_core::DisplaySettings::default();
                     d.axis_colors = defaults.axis_colors;
                     d.inference_color = defaults.inference_color;
@@ -411,25 +443,25 @@ impl KetchupApp {
                 }
             }
             Section::Navigation => {
-                ui.text_weak("Adjust mouse and trackpad navigation sensitivity.");
+                ui.text_weak(tr!("settings.adjust_mouse_and_trackpad_navigation_sensitivity"));
                 for (label, value) in [
-                    ("Orbit speed", &mut self.general_settings.orbit_speed),
-                    ("Pan speed", &mut self.general_settings.pan_speed),
-                    ("Zoom speed", &mut self.general_settings.zoom_speed),
+                    (tr!("settings.orbit_speed"), &mut self.general_settings.orbit_speed),
+                    (tr!("settings.pan_speed"), &mut self.general_settings.pan_speed),
+                    (tr!("settings.zoom_speed"), &mut self.general_settings.zoom_speed),
                 ] {
-                    ui.add(egui::Slider::new(value, 0.1..=4.).text(label).suffix("×"));
+                    ui.add(egui::Slider::new(value, 0.1..=4.).text(label).suffix(tr!("settings.format")));
                 }
                 ui.checkbox(
                     &mut self.general_settings.reverse_zoom,
-                    "Reverse scroll zoom",
+                    tr!("settings.reverse_scroll_zoom"),
                 );
             }
             Section::Shortcuts => {
-                ui.text_weak("Click a shortcut, then press a letter or Space. Escape cancels. Reusing a key swaps the assignments. Project commands and navigation gestures keep their standard shortcuts.");
+                ui.text_weak(tr!("settings.click_a_shortcut_then_press_a_letter_or"));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.shortcut_filter)
                         .desired_width(ui.available_width())
-                        .hint_text("Search tools…"),
+                        .hint_text(tr!("settings.search_tools")),
                 );
                 let query = self.shortcut_filter.to_lowercase();
                 let mut table = InspectorTable::new(
@@ -438,7 +470,7 @@ impl KetchupApp {
                 )
                 .centered()
                 .striped();
-                table.header(ui, ["Tool", "Shortcut"]);
+                table.header(ui, [tr!("settings.tool"), tr!("settings.shortcut")]);
                 let mut matches = 0;
                 for (index, (tool, _)) in TOOLS.iter().enumerate() {
                     if !tool.label().to_lowercase().contains(&query) {
@@ -459,24 +491,24 @@ impl KetchupApp {
                     });
                 }
                 if matches == 0 {
-                    ui.text_weak("No tools match your search.");
+                    ui.text_weak(tr!("settings.no_tools_match_your_search"));
                 }
-                if ui.button("Restore default shortcuts").clicked() {
+                if ui.button(tr!("settings.restore_default_shortcuts")).clicked() {
                     self.general_settings.tool_keys = GeneralSettings::default().tool_keys;
                 }
             }
             Section::Units => {
-                ui.text_weak("Used for new projects. Change the current project's units in the Units inspector.");
+                ui.text_weak(tr!("settings.used_for_new_projects_change_the_current_project"));
                 Self::unit_settings_contents(ui, &mut self.general_settings.default_units);
             }
             Section::Grid => {
-                inspector_field(ui, "settings/grid/show", "Show grid", |ui| {
+                inspector_field(ui, "settings/grid/show", tr!("settings.show_grid"), |ui| {
                     ui.checkbox(&mut self.doc.display.grid, "")
                 });
-                inspector_field(ui, "settings/grid/snap", "Snap to grid", |ui| {
+                inspector_field(ui, "settings/grid/snap", tr!("settings.snap_to_grid"), |ui| {
                     ui.checkbox(&mut self.snap_to_grid, "")
                 });
-                inspector_field(ui, "settings/grid/infinite", "Infinite grid", |ui| {
+                inspector_field(ui, "settings/grid/infinite", tr!("settings.infinite_grid"), |ui| {
                     ui.checkbox(&mut self.doc.display.grid_infinite, "")
                 });
                 let unit = self.doc.display.units.length;
@@ -484,28 +516,28 @@ impl KetchupApp {
                     grid_length_control(
                         ui,
                         "settings/grid/max_length",
-                        "Maximum length",
+                        tr!("settings.maximum_length"),
                         &mut self.doc.display.grid_max_length,
                         unit,
                     );
-                    ui.text_weak("Length of each side of the square, centered on the model origin. The boundary stays fixed when zooming or rotating.");
+                    ui.text_weak(tr!("settings.length_of_each_side_of_the_square_centered"));
                 }
                 inspector_field(
                     ui,
                     "settings/grid/auto_size",
-                    "Automatically size grid when zooming",
+                    tr!("settings.automatically_size_grid_when_zooming"),
                     |ui| ui.checkbox(&mut self.doc.display.grid_auto_size, ""),
                 );
                 ui.add_enabled_ui(!self.doc.display.grid_auto_size, |ui| {
                     grid_length_control(
                         ui,
                         "settings/grid/spacing",
-                        "Grid spacing",
+                        tr!("settings.grid_spacing"),
                         &mut self.doc.display.grid_spacing,
                         unit,
                     );
                 });
-                ui.text_weak("Spacing controls both grid lines and grid snapping. Every fifth line is emphasized.");
+                ui.text_weak(tr!("settings.spacing_controls_both_grid_lines_and_grid_snapping"));
             }
         }
     }
@@ -758,5 +790,21 @@ mod tests {
             output.textures_delta.clear();
             assert!(app.settings_open);
         }
+    }
+
+    #[test]
+    fn settings_header_shows_the_language_picker() {
+        let ctx = egui::Context::default();
+        let mut app = KetchupApp::with_document(Document::default(), None, true);
+        app.settings_open = true;
+        let input = || egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1100., 800.))),
+            ..Default::default()
+        };
+        ctx.run_test_ui(input(), |_| app.settings_window(&ctx));
+        let output = ctx.run_test_ui(input(), |_| app.settings_window(&ctx));
+        let text = rendered_text(&output.shapes);
+        assert!(text.iter().any(|label| label == "Language"));
+        assert!(text.iter().any(|label| label == "English"));
     }
 }

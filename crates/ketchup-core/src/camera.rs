@@ -56,13 +56,13 @@ impl StandardView {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Top => "Top",
-            Self::Front => "Front",
-            Self::Right => "Right",
-            Self::Back => "Back",
-            Self::Left => "Left",
-            Self::Bottom => "Bottom",
-            Self::Iso => "Iso",
+            Self::Top => tr!("core.camera.top"),
+            Self::Front => tr!("core.camera.front"),
+            Self::Right => tr!("core.camera.right"),
+            Self::Back => tr!("core.camera.back"),
+            Self::Left => tr!("core.camera.left"),
+            Self::Bottom => tr!("core.camera.bottom"),
+            Self::Iso => tr!("core.camera.iso"),
         }
     }
 

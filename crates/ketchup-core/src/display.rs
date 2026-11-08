@@ -19,11 +19,11 @@ impl FaceStyle {
     ];
     pub fn label(self) -> &'static str {
         match self {
-            Self::Wireframe => "Wireframe",
-            Self::HiddenLine => "Hidden line",
-            Self::Monochrome => "Monochrome",
-            Self::Shaded => "Shaded",
-            Self::Materials => "Shaded with materials",
+            Self::Wireframe => tr!("core.display.wireframe"),
+            Self::HiddenLine => tr!("core.display.hidden_line"),
+            Self::Monochrome => tr!("core.display.monochrome"),
+            Self::Shaded => tr!("core.display.shaded"),
+            Self::Materials => tr!("core.display.shaded_with_materials"),
         }
     }
 }

@@ -51,11 +51,11 @@ impl Model {
             return self.edit_in_context(|model| model.add_guide(origin, direction));
         }
         let direction = direction
-            .map(|d| d.try_normalize().ok_or("Choose a direction for the guide"))
+            .map(|d| d.try_normalize().ok_or(tr!("core.guides.choose_a_direction_for_the_guide")))
             .transpose()?;
         let guide = ConstructionGuide { origin, direction };
         if !guide.valid() {
-            return Err("Invalid guide coordinates");
+            return Err(tr!("core.guides.invalid_guide_coordinates"));
         }
         let id = self.id();
         self.guides.insert(id, guide);

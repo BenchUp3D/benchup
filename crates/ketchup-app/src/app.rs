@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 use crate::natural_text::TextUi as _;
 use crate::{
     cutting_plan::CutReport,
@@ -443,8 +444,9 @@ impl KetchupApp {
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    app.updates.error = Some(format!(
-                        "Could not restore the project file location after updating: {error}"
+                    app.updates.error = Some(tr!(
+                        "app.could_not_restore_the_project_file_location_after",
+                        error = error,
                     ))
                 }
             }
@@ -559,7 +561,7 @@ impl KetchupApp {
             shortcut_filter: String::new(),
             notice: error.map(|e| {
                 (
-                    format!("Could not restore your model: {e}. A new workspace is ready."),
+                    tr!("app.could_not_restore_your_model_a_new_workspace", e = e),
                     30.,
                 )
             }),
@@ -643,7 +645,7 @@ impl KetchupApp {
             self.notice = None;
             ctx.request_repaint();
         } else if self.doc.model.is_locked(id) {
-            self.say(ctx, "Unlock the object before opening it");
+            self.say(ctx, tr!("app.unlock_the_object_before_opening_it"));
         }
     }
     fn navigate_context(&mut self, context: Option<u64>, ctx: &egui::Context) {
@@ -752,7 +754,7 @@ impl KetchupApp {
     fn erase_selected(&mut self, ctx: &egui::Context) {
         let before = self.doc.model.clone();
         self.doc.model.erase(&self.selected);
-        self.finish_edit("Erase selection", before, ctx);
+        self.finish_edit(tr!("app.erase_selection"), before, ctx);
     }
     fn copy_selection(&mut self, ctx: &egui::Context) {
         if self.selected.is_empty() {
@@ -778,9 +780,9 @@ impl KetchupApp {
             self.set_tool(Tool::Select);
             self.finish_edit(
                 if component {
-                    "Create component"
+                    tr!("app.create_component")
                 } else {
-                    "Make group"
+                    tr!("app.make_group")
                 },
                 before,
                 ctx,
@@ -793,12 +795,12 @@ impl KetchupApp {
         if selected.is_empty() {
             self.say(
                 ctx,
-                "Cannot paste this geometry here; a component cannot contain its own definition",
+                tr!("app.cannot_paste_this_geometry_here_a_component_cannot"),
             );
             return;
         }
         self.selected = selected;
-        self.finish_edit("Paste", before, ctx);
+        self.finish_edit(tr!("app.paste"), before, ctx);
     }
     fn request_name_input_focus(ctx: &egui::Context, id: egui::Id) {
         ctx.data_mut(|data| data.insert_temp(id.with("focus_name"), true));
@@ -841,7 +843,7 @@ impl KetchupApp {
         if self.selected.is_empty() || self.doc.model.selection_protected(&self.selected) {
             return;
         }
-        let name = if component { "Component" } else { "Group" };
+        let name = if component { tr!("app.component") } else { tr!("app.group") };
         self.object_creation = Some(ObjectCreation {
             component,
             name: name.into(),
@@ -862,14 +864,14 @@ impl KetchupApp {
         let response = Modal::new("create_object", 360.).show(ctx, |modal| {
             modal.header(|ui| {
                 ui.text_heading(if component {
-                    "Create Component"
+                    tr!("app.create_component_2")
                 } else {
-                    "Make Group"
+                    tr!("app.make_group_2")
                 });
-                ui.text_weak("Give your selection a name.");
+                ui.text_weak(tr!("app.give_your_selection_a_name"));
             });
             modal.body(|ui| {
-                ui.text_label("Name");
+                ui.text_label(tr!("common.name"));
                 let input = Self::name_input(ui, &mut name, egui::Id::unique("create_object_name"));
                 create = input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                 if name.len() > 256 {
@@ -877,9 +879,9 @@ impl KetchupApp {
                 }
             });
             modal.footer(|ui| {
-                cancel = ui.button("Cancel").clicked();
+                cancel = ui.button(tr!("common.cancel")).clicked();
                 let valid = !name.trim().is_empty();
-                create = (primary_button(ui, "Create", valid).clicked() || create) && valid;
+                create = (primary_button(ui, tr!("common.create"), valid).clicked() || create) && valid;
             });
         });
         if create {
@@ -903,7 +905,7 @@ impl KetchupApp {
         let mut doc = doc;
         doc.display.units = self.general_settings.default_units;
         self.replace_project(doc, None, ctx);
-        self.say(ctx, "New project ready");
+        self.say(ctx, tr!("app.new_project_ready"));
     }
     fn fit(&mut self, ctx: &egui::Context) {
         self.doc.camera.fit(
@@ -951,7 +953,7 @@ impl KetchupApp {
             return;
         };
         let Some(snap) = self.snap else {
-            self.say(ctx, "Move over the drawing plane to set a direction");
+            self.say(ctx, tr!("app.move_over_the_drawing_plane_to_set_a"));
             return;
         };
         let mut end = snap.point;
@@ -959,7 +961,7 @@ impl KetchupApp {
             match precision::positive_length(&self.length_input, self.doc.display.units.length) {
                 Ok(length) => {
                     let Some(direction) = (end - start).try_normalize() else {
-                        self.say(ctx, "Move the pointer to choose a direction first");
+                        self.say(ctx, tr!("app.move_the_pointer_to_choose_a_direction_first"));
                         return;
                     };
                     end = start + direction * length;
@@ -976,7 +978,7 @@ impl KetchupApp {
                 self.doc.model = model;
                 self.line_group = group;
                 if let Some(group) = group { self.selected = BTreeSet::from([group]); }
-                self.finish_edit("Draw line", before, ctx);
+                self.finish_edit(tr!("app.draw_line"), before, ctx);
                 if closed_shape {
                     self.stop_drawing();
                     self.prompt_drawn_group_name(ctx, group);
@@ -1069,7 +1071,7 @@ impl KetchupApp {
         } else if self.second_lock.is_none() {
             self.second_lock = Some(axis);
         } else {
-            self.say(ctx, "Unlock an axis before locking another (maximum two)");
+            self.say(ctx, tr!("app.unlock_an_axis_before_locking_another_maximum_two"));
             return;
         }
         self.refresh_axis_lock(ctx);
@@ -1249,7 +1251,7 @@ impl KetchupApp {
             if self.tool == Tool::Freehand {
                 self.drawing = None;
             } else {
-                self.say(ctx, "Move the pointer to give the shape some size");
+                self.say(ctx, tr!("app.move_the_pointer_to_give_the_shape_some"));
             }
             return;
         }
@@ -1260,11 +1262,14 @@ impl KetchupApp {
         };
         self.doc.model = model;
         if let Some(group) = group { self.selected = BTreeSet::from([group]); }
-        self.finish_edit(
-            &format!("Draw {}", self.tool.label().to_lowercase()),
-            before,
-            ctx,
-        );
+        let action = match self.tool {
+            Tool::Rectangle => tr!("app.draw_rectangle"),
+            Tool::Circle => tr!("app.draw_circle"),
+            Tool::Polygon => tr!("app.draw_polygon"),
+            Tool::Freehand => tr!("app.draw_freehand"),
+            _ => tr!("app.draw_line"),
+        };
+        self.finish_edit(action, before, ctx);
         self.stop_drawing();
         self.prompt_drawn_group_name(ctx, group);
     }
@@ -1389,13 +1394,13 @@ impl KetchupApp {
                 let (result, label) = match self.paint_target {
                     PaintTarget::Face => (
                         self.doc.model.paint_face(face, self.paint_color),
-                        "Paint face",
+                        tr!("app.paint_face"),
                     ),
                     PaintTarget::Group => {
                         let target = self.doc.model.entity_in_context(face).unwrap();
                         (
                             self.doc.model.paint_object(target, self.paint_color),
-                            "Paint group",
+                            tr!("app.paint_group"),
                         )
                     }
                 };
@@ -1412,11 +1417,11 @@ impl KetchupApp {
         let (anchor, direction) = if matches!(self.tool, Tool::PushPull | Tool::Offset) {
             let selected_face = self.selected_modeling_face();
             let Some((id, snap)) = self.face_anchor_snap(pos) else {
-                self.say(ctx, "Click a filled face first");
+                self.say(ctx, tr!("app.click_a_filled_face_first"));
                 return;
             };
             if self.doc.model.is_locked(id) {
-                self.say(ctx, "Unlock the face before editing it");
+                self.say(ctx, tr!("app.unlock_the_face_before_editing_it"));
                 return;
             }
             face_id = Some(id);
@@ -1469,11 +1474,11 @@ impl KetchupApp {
                 }
             }
             if self.selected.is_empty() {
-                self.say(ctx, "Select or click an edge or face first");
+                self.say(ctx, tr!("app.select_or_click_an_edge_or_face_first"));
                 return;
             }
             if self.doc.model.selection_locked(&self.selected) {
-                self.say(ctx, "Unlock the selection before editing it");
+                self.say(ctx, tr!("app.unlock_the_selection_before_editing_it"));
                 return;
             }
             let Some(snap) = self.selection_anchor_snap(pos) else {
@@ -1861,11 +1866,11 @@ impl KetchupApp {
             Tool::Rotate => {
                 let rotation = edit.rotation.as_ref().unwrap();
                 if rotation.reference.is_none() {
-                    return Err("Click a reference point away from the pivot first");
+                    return Err(tr!("app.click_a_reference_point_away_from_the_pivot"));
                 }
                 let reference = rotation.reference.unwrap();
                 if (reference - rotation.normal * reference.dot(rotation.normal)).length_squared() < 1e-12 {
-                    return Err("The reference lies on the rotation axis; clear the lock or restart with another reference");
+                    return Err(tr!("app.the_reference_lies_on_the_rotation_axis_clear"));
                 }
                 model.rotate_selection(&edit.entities, edit.anchor, rotation.normal, value)?;
             }
@@ -1881,7 +1886,7 @@ impl KetchupApp {
                 }
                 model.move_selection(&edit.entities, delta)?;
             }
-            _ => return Err("Choose a modeling tool"),
+            _ => return Err(tr!("app.choose_a_modeling_tool")),
         }
         Ok(model)
     }
@@ -1950,7 +1955,7 @@ impl KetchupApp {
                 self.length_input.clear();
                 self.finish_edit(
                     if copy.is_some() {
-                        "Move copy"
+                        tr!("app.move_copy")
                     } else {
                         self.tool.label()
                     },
@@ -2168,7 +2173,7 @@ impl KetchupApp {
                                 self.clipboard = Some(clipboard)
                             }
                             _ => {
-                                self.say(ctx, "The clipboard geometry could not be read");
+                                self.say(ctx, tr!("app.the_clipboard_geometry_could_not_be_read"));
                                 continue;
                             }
                         }
@@ -2331,20 +2336,20 @@ impl KetchupApp {
         let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
         let color = ui.visuals().text_color();
         // The toolbar flows right to left, placing Close at the outer edge.
-        if Self::icon_button(ui, "close", "Close", true, color) {
+        if Self::icon_button(ui, "close", tr!("common.close"), true, color) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
         if Self::icon_button(
             ui,
             if maximized { "restore" } else { "maximize" },
-            if maximized { "Restore" } else { "Maximize" },
+            if maximized { tr!("app.restore") } else { tr!("app.maximize") },
             true,
             color,
         ) {
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
         }
-        if Self::icon_button(ui, "minimize", "Minimize", true, color) {
+        if Self::icon_button(ui, "minimize", tr!("app.minimize"), true, color) {
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
         }
@@ -2444,14 +2449,14 @@ impl KetchupApp {
                     #[cfg(not(target_arch = "wasm32"))]
                     Self::window_controls(ui);
                     #[cfg(not(target_arch = "wasm32"))]
-                    if self.updates.ready() && ui.button("Update ready").clicked() {
+                    if self.updates.ready() && ui.button(tr!("app.update_ready")).clicked() {
                         self.updates.open = true;
                     }
                     if self.account.sharing_available() {
                         let avatar = ui.add(egui::Button::new("").min_size(egui::vec2(32., 32.))
                             .corner_radius(16).stroke(Stroke::new(1., foreground.gamma_multiply(0.65))))
-                            .on_hover_text(self.account.user.as_ref().map_or("Account · Not connected", |user| user.name.as_str()));
-                        avatar.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Account"));
+                            .on_hover_text(self.account.user.as_ref().map_or(tr!("app.account_not_connected"), |user| user.name.as_str()));
+                        avatar.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr!("app.account")));
                         if let Some(texture) = &self.account.texture {
                             egui::Image::new((texture.id(), avatar.rect.size())).corner_radius(16).paint_at(ui, avatar.rect.shrink(1.));
                         } else if let Some(user) = &self.account.user {
@@ -2470,8 +2475,8 @@ impl KetchupApp {
                     let suggestion_icon = egui::Atom::paint(egui::vec2(18., 18.), |ui, args| {
                         icons::line_icon(ui.painter(), args.rect.center(), "suggest_feature", args.fallback_text_color);
                     });
-                    if ui.add(egui::Button::new((suggestion_icon, "Suggest a feature")).stroke(Stroke::new(1., foreground.gamma_multiply(0.65))))
-                        .on_hover_text("Suggest a feature on GitHub")
+                    if ui.add(egui::Button::new((suggestion_icon, tr!("app.suggest_a_feature"))).stroke(Stroke::new(1., foreground.gamma_multiply(0.65))))
+                        .on_hover_text(tr!("app.suggest_a_feature_on_github"))
                         .clicked()
                     {
                         crate::system_info::request_issue(&ctx);
@@ -2479,7 +2484,7 @@ impl KetchupApp {
                     ui.scope(|ui| {
                         // Match the undo/redo buttons despite the AppBar's flat menu style.
                         ui.visuals_mut().widgets.inactive = ctx.global_style().visuals.widgets.inactive;
-                        let tooltip = if dark { "Switch to light mode" } else { "Switch to dark mode" };
+                        let tooltip = if dark { tr!("app.switch_to_light_mode") } else { tr!("app.switch_to_dark_mode") };
                         let response = ui.add(
                             egui::Button::new("").min_size(egui::vec2(32., 32.)).stroke(Stroke::new(1., foreground.gamma_multiply(0.65))),
                         );
@@ -2493,15 +2498,15 @@ impl KetchupApp {
                     // This row flows right to left, placing the divider left of the theme toggle.
                     ui.add(egui::Separator::default().vertical().spacing(16.));
                     let (text, color) = if self.save_error.is_some() {
-                        ("Unsaved", Color32::from_rgb(243, 177, 145))
+                        (tr!("app.unsaved"), Color32::from_rgb(243, 177, 145))
                     } else if self.dirty_since.is_some() {
-                        ("Saving…", Color32::from_rgb(190, 202, 188))
+                        (tr!("app.saving"), Color32::from_rgb(190, 202, 188))
                     } else if self.storage_recovery {
-                        ("New workspace", Color32::from_rgb(190, 202, 188))
+                        (tr!("app.new_workspace"), Color32::from_rgb(190, 202, 188))
                     } else if self.project.modified {
-                        ("Modified · saved locally", Color32::from_rgb(190, 202, 188))
+                        (tr!("app.modified_saved_locally"), Color32::from_rgb(190, 202, 188))
                     } else {
-                        ("Saved locally", Color32::from_rgb(190, 202, 188))
+                        (tr!("app.saved_locally"), Color32::from_rgb(190, 202, 188))
                     };
                     let color = if dark {
                         color
@@ -2516,9 +2521,9 @@ impl KetchupApp {
                             saved.on_hover_text(error);
                         } else {
                             saved.on_hover_text(if self.project.modified {
-                                "Autosaved on this device. Use File → Save to update your project file."
+                                tr!("app.autosaved_on_this_device_use_file_save_to")
                             } else {
-                                "Your model stays on this device"
+                                tr!("app.your_model_stays_on_this_device")
                             });
                         }
                     }
@@ -2543,13 +2548,13 @@ impl KetchupApp {
                             ui.text_label(RichText::new("KetchUp3D").size(23.).strong().color(foreground));
                         }
                         ui.add_space(18.);
-                        Self::app_bar_menu(ui, "File", |ui| {
+                        Self::app_bar_menu(ui, tr!("app.file"), |ui| {
                             ui.visuals_mut().override_text_color = Some(colors.ink);
                             for (label, icon, modifiers, key, action) in [
-                                ("New project", "new", egui::Modifiers::COMMAND, Key::N, 0),
-                                ("Open…", "open", egui::Modifiers::COMMAND, Key::O, 1),
-                                ("Save", "save", egui::Modifiers::COMMAND, Key::S, 2),
-                                ("Save As…", "save", egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::S, 3),
+                                (tr!("app.new_project"), "new", egui::Modifiers::COMMAND, Key::N, 0),
+                                (tr!("common.open"), "open", egui::Modifiers::COMMAND, Key::O, 1),
+                                (tr!("common.save"), "save", egui::Modifiers::COMMAND, Key::S, 2),
+                                (tr!("app.save_as"), "save", egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::S, 3),
                             ] {
                                 let shortcut = ctx.format_shortcut(&egui::KeyboardShortcut::new(modifiers, key));
                                 if ui.add(Self::menu_item_button(ui, label, Some(icon)).shortcut_text(shortcut)).clicked() {
@@ -2567,12 +2572,12 @@ impl KetchupApp {
                             }
                             if self.account.sharing_available() && ui.add(Self::menu_item_button(ui, self.share_menu_label(), Some("share"))).clicked() { self.start_sharing(&ctx); ui.close(); }
                             ui.separator();
-                            Self::menu_submenu(ui, "Import", None, |ui| {
+                            Self::menu_submenu(ui, tr!("app.import"), None, |ui| {
                                 for (extension, label, help) in [
-                                    ("skp", "SketchUp (.skp)…", "Editable groups, holes and solid colors. No textures or annotations."),
-                                    ("stl", "STL (.stl; millimetres)…", "ASCII or binary. Geometry only; coordinates interpreted as millimetres, Z up."),
-                                    ("obj", "Wavefront OBJ (.obj; metres)…", "Faces and lines, including negative vertex indices. Metres, Z up. No materials, textures or group hierarchy."),
-                                    ("dxf", "DXF 2D (.dxf)…", "Text DXF: LINE, straight LWPOLYLINE, ARC and CIRCLE in XY. Curves approximated with up to 96 segments per circle. No blocks, bulges or widths. Declared units; unitless files use millimetres."),
+                                    ("skp", tr!("app.sketchup_skp"), tr!("app.editable_groups_holes_and_solid_colors_no_textures")),
+                                    ("stl", tr!("app.stl_stl_millimetres"), tr!("app.ascii_or_binary_geometry_only_coordinates_interpreted_as")),
+                                    ("obj", tr!("app.wavefront_obj_obj_metres"), tr!("app.faces_and_lines_including_negative_vertex_indices_metres")),
+                                    ("dxf", tr!("app.dxf_2d_dxf"), tr!("app.text_dxf_line_straight_lwpolyline_arc_and_circle")),
                                 ] {
                                     if ui.add(Self::menu_item_button(ui, label, None)).on_hover_text(help).clicked() && !self.project.blocked() {
                                         self.project.import_format = extension.into();
@@ -2581,10 +2586,10 @@ impl KetchupApp {
                                     }
                                 }
                             });
-                            Self::menu_submenu(ui, "Export", None, |ui| {
+                            Self::menu_submenu(ui, tr!("app.export"), None, |ui| {
                                 for (stl, label, help) in [
-                                    (false, "Wavefront OBJ (.obj)…", "Visible edges and triangulated faces in metres, Z up. Geometry only."),
-                                    (true, "STL (.stl; millimetres)…", "Binary STL of visible faces in millimetres, Z up. No edges or materials. Ensure solids are closed before printing; no automatic repair."),
+                                    (false, tr!("app.wavefront_obj_obj"), tr!("app.visible_edges_and_triangulated_faces_in_metres_z")),
+                                    (true, tr!("app.stl_stl_millimetres"), tr!("app.binary_stl_of_visible_faces_in_millimetres_z")),
                                 ] {
                                     if ui.add(Self::menu_item_button(ui, label, None)).on_hover_text(help).clicked() && !self.project.blocked() {
                                         self.project.export_stl = stl;
@@ -2594,28 +2599,28 @@ impl KetchupApp {
                                 }
                             });
                             ui.separator();
-                            if ui.add(Self::menu_item_button(ui, "Settings…", Some("settings"))).clicked() {
+                            if ui.add(Self::menu_item_button(ui, tr!("app.settings"), Some("settings"))).clicked() {
                                 self.settings_open = true;
                                 ui.close();
                             }
                             #[cfg(not(target_arch = "wasm32"))]
                             {
                                 ui.separator();
-                                if ui.add(Self::menu_item_button(ui, "Quit", None)).clicked() {
+                                if ui.add(Self::menu_item_button(ui, tr!("app.quit"), None)).clicked() {
                                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                     ui.close();
                                 }
                             }
                         });
-                        Self::app_bar_menu(ui, "Edit", |ui| {
+                        Self::app_bar_menu(ui, tr!("app.edit"), |ui| {
                             ui.visuals_mut().override_text_color = Some(colors.ink);
                             Self::configure_entity_menu(ui);
                             for (redo, action, label, modifiers) in [
-                                (false, "Undo", self.doc.history.undo_label().map(str::to_owned), egui::Modifiers::COMMAND),
-                                (true, "Redo", self.doc.history.redo_label().map(str::to_owned), egui::Modifiers::COMMAND | egui::Modifiers::SHIFT),
+                                (false, tr!("common.undo"), self.doc.history.undo_label().map(str::to_owned), egui::Modifiers::COMMAND),
+                                (true, tr!("common.redo"), self.doc.history.redo_label().map(str::to_owned), egui::Modifiers::COMMAND | egui::Modifiers::SHIFT),
                             ] {
                                 let enabled = label.is_some();
-                                let label = label.map(|label| format!("{action} {label}")).unwrap_or_else(|| action.to_owned());
+                                let label = label.map(|label| tr!("app.history_menu_action", action = action, label = label)).unwrap_or_else(|| action.to_owned());
                                 let shortcut = ctx.format_shortcut(&egui::KeyboardShortcut::new(modifiers, Key::Z));
                                 if ui.add_enabled(enabled, Self::menu_item_button(ui, label, Some(if redo { "redo" } else { "undo" })).shortcut_text(shortcut)).clicked() {
                                     self.undo(&ctx, redo);
@@ -2626,89 +2631,89 @@ impl KetchupApp {
                             self.context_position = None;
                             self.entity_menu(ui, |_, _| {});
                             ui.separator();
-                            if ui.add_enabled(!self.doc.model.guides.is_empty() && !self.project.blocked(), Self::menu_item_button(ui, "Delete Guides", None)).clicked() {
+                            if ui.add_enabled(!self.doc.model.guides.is_empty() && !self.project.blocked(), Self::menu_item_button(ui, tr!("app.delete_guides"), None)).clicked() {
                                 self.delete_construction_guides(&ctx);
                                 ui.close();
                             }
                         });
-                        Self::app_bar_menu(ui, "View", |ui| {
+                        Self::app_bar_menu(ui, tr!("app.view"), |ui| {
                             ui.visuals_mut().override_text_color = Some(colors.ink);
                             self.view_menu(ui);
                         });
-                        Self::app_bar_menu(ui, "Tools", |ui| {
+                        Self::app_bar_menu(ui, tr!("app.tools"), |ui| {
                             ui.visuals_mut().override_text_color = Some(colors.ink);
-                            if ui.add_enabled(self.selected_fastener_pair(&ctx).is_some(), Self::menu_item_button(ui, "Wood Joinery", Some("connections/wood_joinery"))).clicked() {
+                            if ui.add_enabled(self.selected_fastener_pair(&ctx).is_some(), Self::menu_item_button(ui, tr!("app.wood_joinery"), Some("connections/wood_joinery"))).clicked() {
                                 self.context_action(&ctx, context_menu::ContextAction::WoodJoinery);
                                 ui.close();
                             }
                             ui.separator();
                             let editable = !self.selected.is_empty()
                                 && !self.doc.model.selection_protected(&self.selected);
-                            if ui.add_enabled(editable, Self::menu_item_button(ui, "Clean aligned vertices", Some("clean_aligned"))).clicked() {
+                            if ui.add_enabled(editable, Self::menu_item_button(ui, tr!("app.clean_aligned_vertices"), Some("clean_aligned"))).clicked() {
                                 self.context_action(&ctx, ContextAction::CleanAligned);
                                 ui.close();
                             }
                             ui.separator();
-                            if ui.add_enabled(!self.project.blocked(), Self::menu_item_button(ui, "Generate Time & Cost Estimates…", Some("export_pdf")))
-                                .on_hover_text("Export time and cost estimates as PDF")
+                            if ui.add_enabled(!self.project.blocked(), Self::menu_item_button(ui, tr!("app.generate_time_cost_estimates"), Some("export_pdf")))
+                                .on_hover_text(tr!("app.export_time_and_cost_estimates_as_pdf"))
                                 .clicked() {
                                 self.export_time_estimates(&ctx);
                                 ui.close();
                             }
-                            if ui.add_enabled(!self.project.blocked(), Self::menu_item_button(ui, "Print Workshop Labels…", Some("export_pdf")))
-                                .on_hover_text("Create a printable label for each piece in the selection or whole project.")
+                            if ui.add_enabled(!self.project.blocked(), Self::menu_item_button(ui, tr!("app.print_workshop_labels"), Some("export_pdf")))
+                                .on_hover_text(tr!("app.create_a_printable_label_for_each_piece_in"))
                                 .clicked() {
                                 self.prepare_cut_report(CutReport::WorkshopLabels);
                                 ui.close();
                             }
-                            if ui.add_enabled(!self.project.blocked(), Self::menu_item_button(ui, "Prepare cutting plan…", Some("dimension")))
-                                .on_hover_text("Summarize matching parts and export finished cutting dimensions for the selection or whole project.")
+                            if ui.add_enabled(!self.project.blocked(), Self::menu_item_button(ui, tr!("app.prepare_cutting_plan"), Some(tr!("app.dimension"))))
+                                .on_hover_text(tr!("app.summarize_matching_parts_and_export_finished_cutting_dimensions"))
                                 .clicked() {
                                 self.prepare_cut_report(CutReport::CuttingPlan);
                                 ui.close();
                             }
                             ui.separator();
-                            if ui.add_enabled(!self.project.blocked(), Self::menu_item_button(ui, "Screenshot", Some("screenshot"))).clicked() {
+                            if ui.add_enabled(!self.project.blocked(), Self::menu_item_button(ui, tr!("app.screenshot"), Some("screenshot"))).clicked() {
                                 self.screenshot.open = true;
                                 ui.close();
                             }
                         });
-                        Self::app_bar_menu(ui, "Help", |ui| {
+                        Self::app_bar_menu(ui, tr!("app.help"), |ui| {
                             ui.visuals_mut().override_text_color = Some(colors.ink);
-                            if ui.add(Self::menu_item_button(ui, "Keyboard shortcuts", None)).clicked() {
+                            if ui.add(Self::menu_item_button(ui, tr!("app.keyboard_shortcuts"), None)).clicked() {
                                 self.help = true;
                                 ui.close();
                             }
                             ui.separator();
-                            if ui.add(Self::menu_item_button(ui, "Report a bug", None)).clicked() {
+                            if ui.add(Self::menu_item_button(ui, tr!("app.report_a_bug"), None)).clicked() {
                                 crate::system_info::request_issue(&ctx);
                                 ui.close();
                             }
-                            if ui.add(Self::menu_item_button(ui, "GitHub", None)).clicked() {
+                            if ui.add(Self::menu_item_button(ui, tr!("app.github"), None)).clicked() {
                                 ctx.open_url(egui::OpenUrl::new_tab("https://github.com/Ketchup3D/app"));
                                 ui.close();
                             }
                             ui.separator();
-                            if ui.add(Self::menu_item_button(ui, "Download desktop app", Some("import"))).clicked() {
+                            if ui.add(Self::menu_item_button(ui, tr!("app.download_desktop_app"), Some("import"))).clicked() {
                                 ctx.open_url(egui::OpenUrl::new_tab("https://ketchup3d.github.io/app/"));
                                 ui.close();
                             }
-                            if ui.add(Self::menu_item_button(ui, "Release notes", None)).clicked() {
+                            if ui.add(Self::menu_item_button(ui, tr!("app.release_notes"), None)).clicked() {
                                 self.release_notes.open();
                                 ui.close();
                             }
                             #[cfg(not(target_arch = "wasm32"))]
-                            if ui.add(Self::menu_item_button(ui, "Check for updates…", Some("import"))).clicked() {
+                            if ui.add(Self::menu_item_button(ui, tr!("app.check_for_updates"), Some("import"))).clicked() {
                                 self.updates.open = true;
                                 self.updates.check(&ctx, false);
                                 ui.close();
                             }
                             ui.separator();
-                            if ui.add(Self::menu_item_button(ui, "System information", None)).clicked() {
+                            if ui.add(Self::menu_item_button(ui, tr!("app.system_information"), None)).clicked() {
                                 crate::system_info::open(&ctx);
                                 ui.close();
                             }
-                            if ui.add(Self::menu_item_button(ui, "About KetchUp3D", Some("info"))).clicked() {
+                            if ui.add(Self::menu_item_button(ui, tr!("app.about_ketchup3d"), Some("info"))).clicked() {
                                 self.about = true;
                                 ui.close();
                             }
@@ -2723,12 +2728,12 @@ impl KetchupApp {
                             // Match the axis-lock buttons despite the AppBar's flat menu style.
                             ui.visuals_mut().widgets.inactive = ctx.global_style().visuals.widgets.inactive;
                             for (redo, kind, action, label) in [
-                                (false, "undo", "Undo", self.doc.history.undo_label().map(str::to_owned)),
-                                (true, "redo", "Redo", self.doc.history.redo_label().map(str::to_owned)),
+                                (false, "undo", tr!("common.undo"), self.doc.history.undo_label().map(str::to_owned)),
+                                (true, "redo", tr!("common.redo"), self.doc.history.redo_label().map(str::to_owned)),
                             ] {
                                 let enabled = label.is_some();
                                 let tooltip = label
-                                    .map(|label| format!("{action} {label}"))
+                                    .map(|label| tr!("app.history_menu_action", action = action, label = label))
                                     .unwrap_or_else(|| action.to_owned());
                                 let response = ui.add_enabled(
                                     enabled,
@@ -2781,26 +2786,26 @@ impl KetchupApp {
                     let message = if let Some(status) = shared_status.as_deref() {
                         status
                     } else if drawing_orbit {
-                        "Move the cursor to orbit · Hold Shift to pan · Release Ctrl / ⌘ to resume drawing"
+                        tr!("app.move_the_cursor_to_orbit_hold_shift_to")
                     } else if navigating {
                         if ctx.input(|i| i.modifiers.shift) {
-                            "Panning · Release Shift to orbit"
+                            tr!("app.panning_release_shift_to_orbit")
                         } else {
-                            "Orbiting · Hold Shift to pan"
+                            tr!("app.orbiting_hold_shift_to_pan")
                         }
                     } else if self.paste_preview.is_some() {
-                        "Click to place the copy · Escape to cancel"
+                        tr!("app.click_to_place_the_copy_escape_to_cancel")
                     } else if self.tool == Tool::Rotate {
                         self.rotation_status()
                     } else if self.tool == Tool::Move {
                         if self.last_move_copy.is_some() {
-                            "Copy placed · Type /3 to divide the span or 3x to repeat · Enter to apply"
+                            tr!("app.copy_placed_type_3_to_divide_the_span")
                         } else {
                             match (ctx.os() == egui::os::OperatingSystem::Mac, self.move_copy) {
-                                (true, true) => "Copy · Option toggles Move · Click to place · Type distance + Enter",
-                                (true, false) => "Move · Option toggles Copy · Click base point and destination",
-                                (false, true) => "Copy · Ctrl toggles Move · Click to place · Type distance + Enter",
-                                (false, false) => "Move · Ctrl toggles Copy · Click base point and destination",
+                                (true, true) => tr!("app.copy_option_toggles_move_click_to_place_type"),
+                                (true, false) => tr!("app.move_option_toggles_copy_click_base_point_and"),
+                                (false, true) => tr!("app.copy_ctrl_toggles_move_click_to_place_type"),
+                                (false, false) => tr!("app.move_ctrl_toggles_copy_click_base_point_and"),
                             }
                         }
                     } else if self.tool.is_solid() {
@@ -2810,15 +2815,15 @@ impl KetchupApp {
                     } else if self.tool == Tool::Paint {
                         self.paint_instructions()
                     } else if self.tool == Tool::Line && self.line_start.is_some() {
-                        "Click to finish · Type length + Enter · Esc to stop"
+                        tr!("app.click_to_finish_type_length_enter_esc_to")
                     } else if self.drawing.is_some() && self.tool == Tool::Rectangle {
-                        "Click the opposite corner · Type width,height (5m,50mm) + Enter"
+                        tr!("app.click_the_opposite_corner_type_width_height_5m")
                     } else if self.drawing.is_some()
                         && matches!(self.tool, Tool::Circle | Tool::Polygon)
                     {
-                        "Click to set the radius · Type a radius (5cm) + Enter · Esc to cancel"
+                        tr!("app.click_to_set_the_radius_type_a_radius")
                     } else if self.drawing.is_some() && self.tool == Tool::Freehand {
-                        "Release to finish · Type total length + Enter · Esc to cancel"
+                        tr!("app.release_to_finish_type_total_length_enter_esc")
                     } else {
                         self.tool.instructions()
                     };
@@ -2835,9 +2840,9 @@ impl KetchupApp {
                             );
                             ui.text_label(
                                 RichText::new(if self.tool == Tool::Protractor {
-                                    "Angle"
+                                    tr!("app.angle")
                                 } else {
-                                    "Distance"
+                                    tr!("app.distance")
                                 })
                                 .size(12.)
                                 .color(colors.muted),
@@ -2845,7 +2850,7 @@ impl KetchupApp {
                             return;
                         }
                         if self.tool == Tool::Scale {
-                            ui.text_label(RichText::new("×").color(colors.muted));
+                            ui.text_label(RichText::new(tr!("app.scale_factor_symbol")).color(colors.muted));
                         }
                         let available = self.precision_available();
                         let hint = if self.measurement_precision_available() {
@@ -2872,9 +2877,9 @@ impl KetchupApp {
                                 .char_limit(precision::MAX_INPUT_LEN)
                                 .margin(egui::vec2(9., 6.)),
                         ).on_hover_text(if matches!(self.tool, Tool::Rotate | Tool::Protractor) {
-                            format!("Enter an angle or formula, such as 90 or (45 + 45) / 2. Plain numbers use {}. Add deg, °, rad, or gon after the formula to override the unit.", self.doc.display.units.angle.label())
+                            tr!("app.enter_an_angle_or_formula_such_as_90", self.doc.display.units.angle.label())
                         } else {
-                            format!("Use lengths or formulas: 60cm - 89mm, (1m + 20cm) / 2. Operators: + - * / and parentheses. Plain numbers default to {}; multipliers are unitless. Units: mm, cm, m, km, in, ft, yd. Rectangles accept one formula per dimension, separated by a comma. Scale uses numbers without units.", self.doc.display.units.length.label())
+                            tr!("app.use_lengths_or_formulas_60cm_89mm_1m_20cm", self.doc.display.units.length.label())
                         });
                         if (field.has_focus() || field.lost_focus())
                             && ctx.input(|i| i.key_pressed(Key::Enter))
@@ -2894,15 +2899,15 @@ impl KetchupApp {
                         }
                         ui.text_label(
                             RichText::new(match self.tool {
-                                Tool::Scale => "Factor",
-                                Tool::Rotate | Tool::Protractor => "Angle",
-                                Tool::PushPull => "Distance",
-                                Tool::Offset => "Offset",
-                                Tool::Move if self.last_move_copy.is_some() => "Copies",
-                                Tool::Move => "Distance",
-                                Tool::Rectangle => "Width, height",
-                                Tool::Circle | Tool::Polygon => "Radius",
-                                _ => "Length",
+                                Tool::Scale => tr!("app.factor"),
+                                Tool::Rotate | Tool::Protractor => tr!("app.angle"),
+                                Tool::PushPull => tr!("app.distance"),
+                                Tool::Offset => tr!("app.offset"),
+                                Tool::Move if self.last_move_copy.is_some() => tr!("app.copies"),
+                                Tool::Move => tr!("app.distance"),
+                                Tool::Rectangle => tr!("app.width_height"),
+                                Tool::Circle | Tool::Polygon => tr!("app.radius"),
+                                _ => tr!("app.length"),
                             })
                             .size(12.)
                             .color(colors.muted),
@@ -2926,14 +2931,11 @@ impl KetchupApp {
     }
     fn tool_tooltip(&self, response: egui::Response, tool: Tool) -> egui::Response {
         response.on_hover_ui(|ui| {
-            let title = if self.general_settings.tool_shortcut(tool).is_empty() {
+            let shortcut = shortcut_input::key_label(self.general_settings.tool_shortcut(tool));
+            let title = if shortcut.is_empty() {
                 tool.label().to_owned()
             } else {
-                format!(
-                    "{} ({})",
-                    tool.label(),
-                    self.general_settings.tool_shortcut(tool)
-                )
+                tr!("app.tool_with_shortcut", tool = tool.label(), shortcut = shortcut)
             };
             ui.text_strong(title);
             ui.text_label(tool.instructions());
@@ -2973,7 +2975,7 @@ impl KetchupApp {
             FontId::proportional(13.),
             color,
         );
-        let shortcut = self.general_settings.tool_shortcut(tool);
+        let shortcut = shortcut_input::key_label(self.general_settings.tool_shortcut(tool));
         let shortcut_size = ui.painter().text(
             egui::pos2(rect.right() - 8., rect.center().y),
             Align2::RIGHT_CENTER,
@@ -3002,7 +3004,7 @@ impl KetchupApp {
                         .range(3..=64)
                         .min_size(egui::vec2(48., 0.)),
                 )
-                .on_hover_text("Polygon sides");
+                .on_hover_text(tr!("app.polygon_sides"));
         }
         self.tool_tooltip(response, tool)
     }
@@ -3041,14 +3043,11 @@ impl KetchupApp {
                         let active = self.tool == tool;
                         let nested =
                             matches!(rail_tool, Tool::Line | Tool::Dimensions | Tool::Union);
-                        let tooltip = if self.general_settings.tool_shortcut(tool).is_empty() {
+                        let shortcut = shortcut_input::key_label(self.general_settings.tool_shortcut(tool));
+                        let tooltip = if shortcut.is_empty() {
                             tool.label().to_owned()
                         } else {
-                            format!(
-                                "{} ({})",
-                                tool.label(),
-                                self.general_settings.tool_shortcut(tool)
-                            )
+                            tr!("app.tool_with_shortcut", tool = tool.label(), shortcut = shortcut)
                         };
                         let (rect, response) =
                             ui.allocate_exact_size(egui::vec2(56., 55.), Sense::click());
@@ -3085,7 +3084,7 @@ impl KetchupApp {
                             rect.center() + egui::vec2(0., 17.),
                             Align2::CENTER_CENTER,
                             if tool == Tool::TapeMeasure {
-                                "Tape"
+                                tr!("app.tape")
                             } else {
                                 tool.label()
                             },
@@ -3226,8 +3225,8 @@ impl KetchupApp {
     }
     fn paint_instructions(&self) -> &'static str {
         match self.paint_target {
-            PaintTarget::Face => "Click a face to apply this color.",
-            PaintTarget::Group => "Click a face in a group or component to paint all its faces.",
+            PaintTarget::Face => tr!("app.click_a_face_to_apply_this_color"),
+            PaintTarget::Group => tr!("app.click_a_face_in_a_group_or_component"),
         }
     }
 
@@ -3239,8 +3238,8 @@ impl KetchupApp {
             .filter(|id| self.doc.model.objects.contains_key(id))
             .collect();
         if objects.is_empty() {
-            crate::empty_state::EmptyState::new("No objects selected",
-                "Select a group or component to edit its material, sanding, and finishing.").show(ui);
+            crate::empty_state::EmptyState::new(tr!("app.no_objects_selected"),
+                tr!("app.select_a_group_or_component_to_edit_its")).show(ui);
             return;
         }
         let first = self.doc.model.objects[&objects[0]].stock_material_id;
@@ -3250,9 +3249,9 @@ impl KetchupApp {
         let mut chosen = first;
         let mut assign = false;
         ui.add_enabled_ui(!self.doc.model.selection_locked(&self.selected), |ui| {
-            ui.text_label("Stock material");
+            ui.text_label(tr!("app.stock_material"));
             let label = if mixed {
-                "Mixed"
+                tr!("app.mixed")
             } else if let Some(id) = first {
                 self.general_settings
                     .stock
@@ -3267,9 +3266,9 @@ impl KetchupApp {
                             .get(&id)
                             .map(|material| material.name.as_str())
                     })
-                    .unwrap_or("Missing material")
+                    .unwrap_or(tr!("app.missing_material"))
             } else {
-                "Unassigned"
+                tr!("app.unassigned")
             };
             assign = stock_settings::material_selector(
                 ui,
@@ -3301,7 +3300,7 @@ impl KetchupApp {
                 object.stock_material_id = chosen;
                 object.stock_material = None;
             }
-            self.finish_edit("Assign stock material", before, ui.ctx());
+            self.finish_edit(tr!("app.assign_stock_material"), before, ui.ctx());
         }
         ui.add_space(12.);
         self.surface_treatment_info(ui);
@@ -3320,8 +3319,8 @@ impl KetchupApp {
         self.measurement_inspector(ui);
         self.text_entity_info(ui);
         if self.selected.is_empty() {
-            crate::empty_state::EmptyState::new("Nothing selected",
-                "Select an entity to see its details.").show(ui);
+            crate::empty_state::EmptyState::new(tr!("app.nothing_selected"),
+                tr!("app.select_an_entity_to_see_its_details")).show(ui);
         } else {
             self.face_cache.update(&self.doc.model);
             let entities = self.doc.model.expand_entities(&self.selected);
@@ -3342,8 +3341,6 @@ impl KetchupApp {
                 .filter(|id| self.doc.model.texts.contains_key(id))
                 .count();
             let guides = entities.iter().filter(|id| self.doc.model.guides.contains_key(id)).count();
-            let noun =
-                |n: usize, single: &str| format!("{n} {single}{}", if n == 1 { "" } else { "s" });
             let objects = self
                 .selected
                 .iter()
@@ -3352,49 +3349,49 @@ impl KetchupApp {
             let selection = if objects.len() == 1 && self.selected.len() == 1 {
                 let object = objects[0];
                 let kind = if object.kind == ObjectKind::Group {
-                    "Group"
+                    tr!("app.group")
                 } else {
-                    "Component"
+                    tr!("app.component")
                 };
-                format!("{kind}: {}", object.name)
+                tr!("app.object_selection", object.name, kind = kind)
             } else if !objects.is_empty() {
-                noun(self.selected.len(), "entity")
+                tr!("app.selection_entities", count = self.selected.len())
             } else if dimensions > 0 || texts > 0 || guides > 0 {
                 let mut parts = vec![];
                 if edges > 0 {
-                    parts.push(noun(edges, "edge"));
+                    parts.push(tr!("app.selection_edges", count = edges));
                 }
                 if faces > 0 {
-                    parts.push(noun(faces, "face"));
+                    parts.push(tr!("app.selection_faces", count = faces));
                 }
                 if dimensions > 0 {
-                    parts.push(noun(dimensions, "dimension"));
+                    parts.push(tr!("app.selection_dimensions", count = dimensions));
                 }
                 if texts > 0 {
-                    parts.push(noun(texts, "text label"));
+                    parts.push(tr!("app.selection_text_labels", count = texts));
                 }
-                if guides > 0 { parts.push(noun(guides, "guide")); }
-                parts.join(" · ")
+                if guides > 0 { parts.push(tr!("app.selection_guides", count = guides)); }
+                parts.join(tr!("app.selection_separator"))
             } else if faces == 0 {
-                noun(edges, "edge")
+                tr!("app.selection_edges", count = edges)
             } else if edges == 0 {
-                noun(faces, "face")
+                tr!("app.selection_faces", count = faces)
             } else {
-                format!("{} · {}", noun(edges, "edge"), noun(faces, "face"))
+                tr!("app.edge_and_face_selection", tr!("app.selection_edges", count = edges), tr!("app.selection_faces", count = faces))
             };
             let single_group = self.selected.len() == 1
                 && objects.len() == 1
                 && objects[0].kind == ObjectKind::Group;
             if !single_group {
                 ui.text_label(
-                    RichText::new(format!("{selection} selected"))
+                    RichText::new(tr!("app.selected", selection = selection))
                         .size(17.)
                         .strong(),
                 );
                 ui.add_space(12.);
             }
             if self.doc.model.selection_locked(&self.selected) {
-                ui.text_label(RichText::new("Locked").color(self.axis_color(Axis::Z)));
+                ui.text_label(RichText::new(tr!("app.locked")).color(self.axis_color(Axis::Z)));
             }
             if edges > 0 {
                 let length: f64 = entities
@@ -3404,7 +3401,7 @@ impl KetchupApp {
                     .sum();
                 Self::property_row(
                     ui,
-                    if edges == 1 { "Length" } else { "Total edge length" },
+                    if edges == 1 { tr!("app.length") } else { tr!("app.total_edge_length") },
                     &self.doc.display.units.format_length(length),
                 );
             }
@@ -3416,7 +3413,7 @@ impl KetchupApp {
                     .sum();
                 Self::property_row(
                     ui,
-                    "Surface area",
+                    tr!("app.surface_area"),
                     &self.doc.display.units.format_area(area),
                 );
                 let side_lengths = |ring: &[u64]| {
@@ -3440,9 +3437,9 @@ impl KetchupApp {
                 Self::property_row(
                     ui,
                     if faces == 1 {
-                        "Perimeter"
+                        tr!("app.perimeter")
                     } else {
-                        "Total perimeter"
+                        tr!("app.total_perimeter")
                     },
                     &self.doc.display.units.format_length(perimeter),
                 );
@@ -3452,15 +3449,15 @@ impl KetchupApp {
                         .enumerate()
                     {
                         let label = if index == 0 {
-                            "Side lengths".to_owned()
+                            tr!("app.side_lengths").to_owned()
                         } else {
-                            format!("Hole {index} side lengths")
+                            tr!("app.hole_side_lengths", index = index)
                         };
                         let lengths = side_lengths(ring)
                             .into_iter()
                             .map(|length| self.doc.display.units.format_length(length))
                             .collect::<Vec<_>>()
-                            .join(" · ");
+                            .join(tr!("app.selection_separator"));
                         Self::property_row(ui, &label, &lengths);
                     }
                 }
@@ -3470,29 +3467,29 @@ impl KetchupApp {
                 && self.doc.model.objects.contains_key(&id)
                 && let Ok(volume) = self.solid_volume_cache.volume(&self.doc.model, id)
             {
-                Self::property_row(ui, "Volume", &self.doc.display.units.format_volume(volume));
+                Self::property_row(ui, tr!("app.volume"), &self.doc.display.units.format_volume(volume));
             }
         }
         if self.selected.is_empty() {
             return;
         }
         ui.add_space(8.);
-        sidebar::inspector_section(ui, "Appearance", "entity_appearance", true, |ui| {
+        sidebar::inspector_section(ui, tr!("app.appearance"), "entity_appearance", true, |ui| {
             self.paint_color_controls(ui, false);
             ui.add_space(8.);
             if ui
                 .add_enabled(
                     !self.selected.is_empty()
                         && !self.doc.model.selection_locked(&self.selected),
-                    egui::Button::new("Clear Color")
+                    egui::Button::new(tr!("app.clear_color"))
                         .min_size(egui::vec2(ui.available_width(), ui.spacing().interact_size.y)),
                 )
-                .on_hover_text("Remove color from the selected items and all their children")
+                .on_hover_text(tr!("app.remove_color_from_the_selected_items_and_all"))
                 .clicked()
             {
                 let before = self.doc.model.clone();
                 match self.doc.model.clear_colors(&self.selected) {
-                    Ok(()) => self.finish_edit("Clear color", before, ui.ctx()),
+                    Ok(()) => self.finish_edit(tr!("app.clear_color_2"), before, ui.ctx()),
                     Err(message) => self.say(ui.ctx(), message),
                 }
             }
@@ -3545,7 +3542,8 @@ impl KetchupApp {
             self.inspector_width = panel.response.rect.width();
         } else {
             let mut open = true;
-            egui::Window::new("Inspector")
+            egui::Window::new(tr!("app.inspector"))
+                .id(egui::Id::unique("Inspector"))
                 .open(&mut open)
                 .default_width(280.)
                 .default_height(560.)
@@ -4398,7 +4396,7 @@ impl KetchupApp {
                                 ids.extend(self.sweep_erase(gesture.last, pos));
                                 let before = self.doc.model.clone();
                                 self.doc.model.erase(&ids);
-                                self.finish_edit("Erase geometry", before, ctx);
+                                self.finish_edit(tr!("app.erase_geometry"), before, ctx);
                             }
                             GestureKind::Modeling
                                 if self.viewport.contains(pos)
@@ -5276,14 +5274,14 @@ impl KetchupApp {
                     let label = if modeling_anchor {
                         snap.kind.label().into()
                     } else if let Some(normal) = self.plane_lock() {
-                        format!("{} plane · Locked", match normal {
+                        tr!("app.plane_locked", match normal {
                             Axis::X => "YZ", Axis::Y => "XZ", Axis::Z => "XY",
                         })
                     } else if let Some(axis) = self.lock {
                         if self.tool.is_drawing() && self.tool != Tool::Line {
-                            format!("{} · Plane locked", axis.label())
+                            tr!("app.plane_locked_2", axis.label())
                         } else {
-                            format!("{} · Locked", axis.label())
+                            tr!("app.locked_2", axis.label())
                         }
                     } else {
                         snap.kind.label().into()
@@ -5359,16 +5357,16 @@ impl KetchupApp {
                 .unwrap_or(edit.value);
                 if self.tool == Tool::Rotate {
                     if edit.rotation.as_ref().is_some_and(|rotation| rotation.reference.is_none()) {
-                        "Click a reference point away from the pivot · Esc to cancel".into()
+                        tr!("app.click_a_reference_point_away_from_the_pivot_2").into()
                     } else {
-                        format!("{} · Click to confirm · Esc to cancel", self.doc.display.units.format_angle(value))
+                        tr!("app.click_to_confirm_esc_to_cancel", self.doc.display.units.format_angle(value))
                     }
                 } else if self.tool == Tool::Scale {
-                    format!("{value:.3} × · Click to confirm · Esc to cancel")
+                    tr!("app.click_to_confirm_esc_to_cancel_2", value = value)
                 } else {
                     let alignment = if edit.guides.len() > 1 && self.length_input.is_empty() {
-                        format!(
-                            " · {} aligned",
+                        tr!(
+                            "app.aligned",
                             edit.guides
                                 .iter()
                                 .map(|g| match g.axis {
@@ -5382,14 +5380,15 @@ impl KetchupApp {
                     } else {
                         String::new()
                     };
-                    format!(
-                        "{}{}{alignment} · Click to confirm · Esc to cancel",
+                    tr!(
+                        "app.click_to_confirm_esc_to_cancel_3",
                         if self.tool == Tool::Move {
-                            if edit.copy { "Copy · " } else { "Move · " }
+                            if edit.copy { tr!("app.copy") } else { tr!("app.move") }
                         } else {
                             ""
                         },
-                        self.doc.display.units.format_length(value)
+                        self.doc.display.units.format_length(value),
+                        alignment = alignment,
                     )
                 }
             });
@@ -5483,11 +5482,11 @@ impl KetchupApp {
         let mut destination = None;
         ui.horizontal_centered(|ui| {
             if path.is_empty() {
-                ui.text_label(RichText::new("Model").size(13.).strong());
+                ui.text_label(RichText::new(tr!("app.model")).size(13.).strong());
                 ui.text_label(RichText::new("/").color(colors.border));
-                ui.text_label(RichText::new("No group open").size(12.).color(colors.muted));
+                ui.text_label(RichText::new(tr!("app.no_group_open")).size(12.).color(colors.muted));
             } else {
-                if ui.small_button("Model").clicked() {
+                if ui.small_button(tr!("app.model")).clicked() {
                     destination = Some(None);
                 }
                 for id in &path {
@@ -5497,7 +5496,7 @@ impl KetchupApp {
                     }
                 }
                 ui.add_space(10.);
-                if ui.small_button("Close level  (Esc)").clicked() {
+                if ui.small_button(tr!("app.close_level_esc")).clicked() {
                     destination = Some(
                         self.doc
                             .model
@@ -5518,9 +5517,9 @@ impl KetchupApp {
         let colors = Palette::for_ui(ui);
         // The viewport toolbar flows right to left: show X, Y, then Z.
         for (axis, label) in [
-            (Axis::Z, "Toggle Z axis lock (↑). Select up to two axes to lock their plane; ↓ clears all locks. Shapes and Rotate use a single lock as their plane normal."),
-            (Axis::Y, "Toggle Y axis lock (←). Select up to two axes to lock their plane; ↓ clears all locks. Shapes and Rotate use a single lock as their plane normal."),
-            (Axis::X, "Toggle X axis lock (→). Select up to two axes to lock their plane; ↓ clears all locks. Shapes and Rotate use a single lock as their plane normal."),
+            (Axis::Z, tr!("app.toggle_z_axis_lock_select_up_to_two")),
+            (Axis::Y, tr!("app.toggle_y_axis_lock_select_up_to_two")),
+            (Axis::X, tr!("app.toggle_x_axis_lock_select_up_to_two")),
         ] {
             let active = self.lock == Some(axis) || self.second_lock == Some(axis);
             let available = enabled && (active || self.second_lock.is_none());
@@ -5551,8 +5550,8 @@ impl KetchupApp {
         let colors = Palette::for_ui(ui);
         let response = ui
             .add(egui::Button::new("").min_size(egui::vec2(48., 32.)))
-            .on_hover_text("Configure edge, face, face center, axis, and grid snapping");
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Snapping"));
+            .on_hover_text(tr!("app.configure_edge_face_face_center_axis_and_grid"));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr!("app.snapping")));
         icons::line_icon(
             ui.painter(),
             egui::pos2(response.rect.left() + 16., response.rect.center().y),
@@ -5568,20 +5567,20 @@ impl KetchupApp {
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
                 Self::menu_style(ui.style_mut());
-                let edges_changed = Self::menu_checkbox(ui, &mut self.snap_to_edge, "Snap to edge")
-                    .on_hover_text("Snap to object edges, including their endpoints and midpoints.")
+                let edges_changed = Self::menu_checkbox(ui, &mut self.snap_to_edge, tr!("app.snap_to_edge"))
+                    .on_hover_text(tr!("app.snap_to_object_edges_including_their_endpoints_and"))
                     .changed();
-                let faces_changed = Self::menu_checkbox(ui, &mut self.snap_to_face, "Snap to face")
-                    .on_hover_text("Snap to object surfaces, independently of edge and face center snapping.")
+                let faces_changed = Self::menu_checkbox(ui, &mut self.snap_to_face, tr!("app.snap_to_face"))
+                    .on_hover_text(tr!("app.snap_to_object_surfaces_independently_of_edge_and"))
                     .changed();
-                let face_centers_changed = Self::menu_checkbox(ui, &mut self.snap_to_face_center, "Snap to face center")
-                    .on_hover_text("Snap to the area center of a visible face, independently of edge and surface snapping.")
+                let face_centers_changed = Self::menu_checkbox(ui, &mut self.snap_to_face_center, tr!("app.snap_to_face_center"))
+                    .on_hover_text(tr!("app.snap_to_the_area_center_of_a_visible"))
                     .changed();
-                let axes_changed = Self::menu_checkbox(ui, &mut self.doc.snap_to_axes, "Snap to axes")
-                    .on_hover_text("Automatically align drawing with the red, green, and blue axes. Hover an endpoint, midpoint, or edge to acquire axes through that position. Arrow keys can still lock an axis when this is off.")
+                let axes_changed = Self::menu_checkbox(ui, &mut self.doc.snap_to_axes, tr!("app.snap_to_axes"))
+                    .on_hover_text(tr!("app.automatically_align_drawing_with_the_red_green_and"))
                     .changed();
-                let grid_changed = Self::menu_checkbox(ui, &mut self.snap_to_grid, "Snap to grid")
-                    .on_hover_text("Snap points and moves to the grid spacing at the current zoom. Object targets and axis locks take precedence.")
+                let grid_changed = Self::menu_checkbox(ui, &mut self.snap_to_grid, tr!("app.snap_to_grid"))
+                    .on_hover_text(tr!("app.snap_points_and_moves_to_the_grid_spacing"))
                     .changed();
                 if edges_changed || faces_changed || face_centers_changed {
                     self.sync_geometry_snapping();
@@ -5736,7 +5735,7 @@ impl KetchupApp {
                                     if Self::icon_button(
                                         ui,
                                         "panel",
-                                        "Toggle model inspector (Tab)",
+                                        tr!("app.toggle_model_inspector_tab"),
                                         true,
                                         colors.muted,
                                     ) {
@@ -5746,7 +5745,7 @@ impl KetchupApp {
                                     if Self::icon_button(
                                         ui,
                                         "fit",
-                                        "Fit model to view",
+                                        tr!("app.fit_model_to_view"),
                                         true,
                                         colors.muted,
                                     ) {
@@ -5755,7 +5754,7 @@ impl KetchupApp {
                                     if Self::icon_button(
                                         ui,
                                         "fit_selection",
-                                        "Fit selection to view",
+                                        tr!("app.fit_selection_to_view"),
                                         !self.selected.is_empty(),
                                         colors.muted,
                                     ) {
@@ -5764,7 +5763,7 @@ impl KetchupApp {
                                     if Self::icon_button(
                                         ui,
                                         "origin",
-                                        "Center view on axis origin (0, 0, 0)",
+                                        tr!("app.center_view_on_axis_origin_0_0_0"),
                                         true,
                                         colors.muted,
                                     ) {
@@ -5798,9 +5797,9 @@ impl KetchupApp {
                     icons::logo(ui.painter(), logo);
                     ui.add_space(8.);
                     ui.vertical(|ui| {
-                        ui.text_heading("About KetchUp3D");
+                        ui.text_heading(tr!("app.about_ketchup3d"));
                         ui.text_label(
-                            RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                            RichText::new(tr!("app.version", env!("CARGO_PKG_VERSION")))
                                 .color(colors.muted),
                         );
                     });
@@ -5808,16 +5807,16 @@ impl KetchupApp {
             });
             modal.body(|ui| {
                 let colors = Palette::for_ui(ui);
-                ui.text_label("KetchUp3D is a 3D modeling app for turning ideas into shapes. Draw precise geometry, shape surfaces, and organize your model with groups and components.");
+                ui.text_label(tr!("app.ketchup3d_is_a_3d_modeling_app_for_turning"));
                 ui.add_space(8.);
                 ui.text_label(
-                    RichText::new("Your work is saved automatically on this device. Save a .k3d project to keep a portable copy. Legacy .ketchup files are also supported.")
+                    RichText::new(tr!("app.your_work_is_saved_automatically_on_this_device"))
                         .small()
                         .color(colors.muted),
                 );
             });
             modal.footer(|ui| {
-                if primary_button(ui, "Close", true).clicked() {
+                if primary_button(ui, tr!("common.close"), true).clicked() {
                     ui.close();
                 }
             });
@@ -5956,7 +5955,7 @@ impl eframe::App for KetchupApp {
         );
         #[cfg(target_arch = "wasm32")]
         if let Some(document) = web_sys::window().and_then(|window| window.document()) {
-            let title = format!("{} - KetchUp3D", self.doc.name);
+            let title = tr!("app.ketchup3d", self.doc.name);
             if document.title() != title {
                 document.set_title(&title);
             }

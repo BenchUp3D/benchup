@@ -1,4 +1,5 @@
 //! Reusable purchasing catalog. Geometry and project assignments remain in documents.
+use ketchup_core::tr;
 use super::*;
 use crate::inspector_table::{Column, InspectorTable};
 #[cfg(test)]
@@ -35,15 +36,15 @@ impl WoodType {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Unspecified => "Unspecified",
-            Self::SolidWood => "Solid wood",
-            Self::Plywood => "Plywood",
+            Self::Unspecified => tr!("stock_settings.unspecified"),
+            Self::SolidWood => tr!("stock_settings.solid_wood"),
+            Self::Plywood => tr!("stock_settings.plywood"),
             Self::Mdf => "MDF",
-            Self::Particleboard => "Particleboard",
+            Self::Particleboard => tr!("stock_settings.particleboard"),
             Self::Osb => "OSB",
-            Self::Hardboard => "Hardboard",
-            Self::Veneer => "Veneer",
-            Self::Other => "Other",
+            Self::Hardboard => tr!("stock_settings.hardboard"),
+            Self::Veneer => tr!("stock_settings.veneer"),
+            Self::Other => tr!("stock_settings.other"),
         }
     }
 }
@@ -65,7 +66,7 @@ impl Default for Stock {
     fn default() -> Self {
         Self {
             id: ketchup_core::MaterialId::new_v4(),
-            name: "Wood stock".into(),
+            name: tr!("stock_settings.wood_stock").into(),
             wood_type: WoodType::default(),
             thickness_mm: 19.,
             width_mm: 89.,
@@ -143,12 +144,12 @@ impl Settings {
         type_filters: &mut std::collections::BTreeMap<String, String>,
     ) -> Option<ketchup_core::MaterialId> {
         let mut requested_removal = None;
-        ui.text_weak("Save the wood stock and finishing products you can buy, with your supplier’s prices. Use actual dimensions for boards or sheets.");
+        ui.text_weak(tr!("stock_settings.save_the_wood_stock_and_finishing_products_you"));
         ui.horizontal_wrapped(|ui| {
-            ui.text_label("Currency");
+            ui.text_label(tr!("stock_settings.currency"));
             currency::selector(ui, &mut self.currency, &mut self.currency_filter)
-                .on_hover_text("Used for all prices and cost estimates in the app. Changing currency does not convert entered prices.");
-            ui.text_label("Sizing units");
+                .on_hover_text(tr!("stock_settings.used_for_all_prices_and_cost_estimates_in"));
+            ui.text_label(tr!("stock_settings.sizing_units"));
             egui::ComboBox::from_id_salt("stock_sizing_units")
                 .selected_text(self.units.label())
                 .show_ui(ui, |ui| {
@@ -157,10 +158,10 @@ impl Settings {
                     }
                 });
         });
-        sidebar::inspector_section(ui, "Wood", "settings/stock/wood", true, |ui| {
+        sidebar::inspector_section(ui, tr!("stock_settings.wood"), "settings/stock/wood", true, |ui| {
             if self.wood.is_empty() {
                 ui.text_weak(
-                    "No wood stock yet. Add a board or sheet, then enter its size and price.",
+                    tr!("stock_settings.no_wood_stock_yet_add_a_board_or"),
                 );
             } else {
                 let key = "settings/stock/wood/table";
@@ -188,12 +189,12 @@ impl Settings {
                     table.header(
                         ui,
                         [
-                            "Stock",
-                            "Type",
-                            "Thickness",
-                            "Width",
-                            "Length",
-                            "Price / piece",
+                            tr!("stock_settings.stock"),
+                            tr!("stock_settings.type"),
+                            tr!("stock_settings.thickness"),
+                            tr!("stock_settings.width"),
+                            tr!("stock_settings.length"),
+                            tr!("stock_settings.price_piece"),
                             "",
                         ],
                     );
@@ -204,7 +205,7 @@ impl Settings {
                                 0 => {
                                     ui.add(
                                         egui::TextEdit::singleline(&mut stock.name)
-                                            .hint_text("e.g. Pine 2 × 4")
+                                            .hint_text(tr!("stock_settings.e_g_pine_2_4"))
                                             .char_limit(120),
                                     );
                                 }
@@ -217,8 +218,8 @@ impl Settings {
                                         selected_label: stock.wood_type.label(),
                                         width: ui.available_width(),
                                         popup_width: 240.,
-                                        hint: "Search wood types…",
-                                        empty_text: "No wood types match your search.",
+                                        hint: tr!("stock_settings.search_wood_types"),
+                                        empty_text: tr!("stock_settings.no_wood_types_match_your_search"),
                                     }
                                     .show(
                                         ui,
@@ -251,12 +252,12 @@ impl Settings {
                                 }
                                 5 => {
                                     ui.add(currency::price_input(&self.currency, &mut stock.price))
-                                        .on_hover_text(format!("{} per piece", self.currency));
+                                        .on_hover_text(tr!("stock_settings.per_piece", self.currency));
                                 }
                                 _ => {
                                     if ui
-                                        .button("×")
-                                        .on_hover_text(format!("Remove {}", stock.name))
+                                        .button(tr!("stock_settings.format"))
+                                        .on_hover_text(tr!("stock_settings.remove", stock.name))
                                         .clicked()
                                     {
                                         requested_removal = Some(stock.id);
@@ -267,13 +268,13 @@ impl Settings {
                     }
                 });
                 sidebar::remember_scroll(ui.ctx(), key, output.state.clamped_offset());
-                ui.text_weak(format!(
-                    "Sizes in {} · Prices in {} per piece",
+                ui.text_weak(tr!(
+                    "stock_settings.sizes_in_prices_in_per_piece",
                     self.units.symbol(),
                     self.currency
                 ));
             }
-            if ui.button("+ Add wood stock").clicked() {
+            if ui.button(tr!("stock_settings.add_wood_stock")).clicked() {
                 self.wood.push(Stock::default());
             }
         });
@@ -422,13 +423,12 @@ impl KetchupApp {
 
     fn material_usage_key(&self) -> Option<String> {
         self.doc.project_id.map(|id| {
-            format!(
-                "{id}/{}",
+            format!("{id}/{}",
                 self.project
                     .path
                     .as_ref()
                     .map(|path| path.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| self.doc.name.clone())
+                    .unwrap_or_else(|| self.doc.name.clone()),
             )
         })
     }
@@ -452,30 +452,35 @@ impl KetchupApp {
         let mut remove = false;
         let mut cancel = false;
         let response = Modal::new("remove_stock_material", 520.).show(ctx, |modal| {
-            modal.header(|ui| { ui.text_heading("Remove material?"); });
+            modal.header(|ui| { ui.text_heading(tr!("stock_settings.remove_material")); });
             modal.body(|ui| {
-                ui.text_label(format!("Remove “{name}” from Settings → Material?"));
-                ui.text_label("This material may be associated with objects in other projects.");
+                ui.text_label(tr!("stock_settings.remove_from_settings_material", name = name));
+                ui.text_label(tr!("stock_settings.this_material_may_be_associated_with_objects_in"));
                 ui.add_space(8.);
-                ui.text_strong("Known project associations on this device");
+                ui.text_strong(tr!("stock_settings.known_project_associations_on_this_device"));
                 let mut found = false;
                 for (project_key, usage) in &self.general_settings.stock.projects {
                     if let Some(count) = usage.materials.get(&id).filter(|count| **count > 0) {
                         found = true;
-                        let current = if Some(project_key) == current_key.as_ref() { " (current project)" } else { "" };
-                        let label = format!("{}{} · {} assigned object{}", usage.name, current, count, if *count == 1 { "" } else { "s" });
+                        let current = if Some(project_key) == current_key.as_ref() { tr!("stock_settings.current_project") } else { "" };
+                        let label = tr!(
+                            "stock_settings.assigned_objects",
+                            count = *count,
+                            project = usage.name,
+                            current = current,
+                        );
                         let response = ui.text_label(label);
                         if let Some(path) = &usage.path { response.on_hover_text(path); }
                     }
                 }
-                if !found { ui.text_weak("No known project associations."); }
-                ui.text_weak("Usage is based on projects opened on this device and may be out of date. Unopened projects may also reference this material.");
+                if !found { ui.text_weak(tr!("stock_settings.no_known_project_associations")); }
+                ui.text_weak(tr!("stock_settings.usage_is_based_on_projects_opened_on_this"));
                 ui.add_space(8.);
-                ui.text_label("Existing projects keep their material definitions and assignments. They will no longer receive catalog updates for this material.");
+                ui.text_label(tr!("stock_settings.existing_projects_keep_their_material_definitions_and_assignments"));
             });
             modal.footer(|ui| {
-                if ui.button("Cancel").clicked() { cancel = true; }
-                if primary_button(ui, "Remove material", true).clicked() { remove = true; }
+                if ui.button(tr!("common.cancel")).clicked() { cancel = true; }
+                if primary_button(ui, tr!("stock_settings.remove_material_2"), true).clicked() { remove = true; }
             });
         });
         if remove {
@@ -511,8 +516,8 @@ fn material_choices(
         listed.insert(stock.id);
         choices.push(MaterialChoice {
             id: stock.id,
-            label: format!(
-                "{} ({} × {} × {} mm)",
+            label: tr!(
+                "stock_settings.mm",
                 stock.name, stock.thickness_mm, stock.width_mm, stock.length_mm
             ),
         });
@@ -521,7 +526,7 @@ fn material_choices(
         if !listed.contains(id) {
             choices.push(MaterialChoice {
                 id: *id,
-                label: format!("{} (project material)", material.name),
+                label: tr!("stock_settings.project_material", material.name),
             });
         }
     }
@@ -544,7 +549,7 @@ pub(super) fn material_selector(
     filter: &mut String,
 ) -> egui::InnerResponse<bool> {
     use super::searchable_selector::{Choice, SearchableSelector};
-    let mut none = Choice::new(None, "Unassigned");
+    let mut none = Choice::new(None, tr!("stock_settings.unassigned"));
     none.always_visible = true;
     let mut choices = vec![none];
     choices.extend(
@@ -558,8 +563,8 @@ pub(super) fn material_selector(
         selected_label,
         width: ui.available_width(),
         popup_width: 300.,
-        hint: "Search name or size…",
-        empty_text: "No stock materials match your search.",
+        hint: tr!("stock_settings.search_name_or_size"),
+        empty_text: tr!("stock_settings.no_stock_materials_match_your_search"),
     }
     .show(ui, selected_id, filter, choices)
 }

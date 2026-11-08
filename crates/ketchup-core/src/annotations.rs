@@ -38,7 +38,7 @@ impl Model {
             return self.edit_in_context(|model| model.add_text(point, offset, text));
         }
         if !valid_point(point) || !valid_point(offset) || !valid_point(point + offset) {
-            return Err("Text coordinates must be finite and within the model limits");
+            return Err(tr!("core.annotations.text_coordinates_must_be_finite_and_within_the"));
         }
         let text = checked_text(text)?;
         let anchor = self.dimension_anchor(point);
@@ -59,10 +59,10 @@ impl Model {
             return self.edit_in_context(|model| model.edit_text(id, text));
         }
         if self.is_locked(id) {
-            return Err("Unlock the text before editing it");
+            return Err(tr!("core.annotations.unlock_the_text_before_editing_it"));
         }
         let text = checked_text(text)?;
-        self.texts.get_mut(&id).ok_or("Text no longer exists")?.text = text;
+        self.texts.get_mut(&id).ok_or(tr!("core.annotations.text_no_longer_exists"))?.text = text;
         Ok(())
     }
     pub(crate) fn sync_texts(&mut self) {
@@ -87,11 +87,11 @@ impl Model {
     pub(crate) fn validate_texts(&self) -> Result<(), &'static str> {
         for (id, text) in &self.texts {
             if *id != text.id || !valid_point(text.offset) || checked_text(&text.text).is_err() {
-                return Err("Invalid text annotation");
+                return Err(tr!("core.annotations.invalid_text_annotation"));
             }
             text.anchor.validate(self)?;
             if text.layout(self).iter().any(|p| !valid_point(*p)) {
-                return Err("Text is outside the model limits");
+                return Err(tr!("core.annotations.text_is_outside_the_model_limits"));
             }
         }
         Ok(())
@@ -100,7 +100,7 @@ impl Model {
 fn checked_text(text: &str) -> Result<String, &'static str> {
     let text = text.trim();
     if text.is_empty() || text.len() > 4096 {
-        return Err("Enter text between 1 and 4096 bytes");
+        return Err(tr!("core.annotations.enter_text_between_1_and_4096_bytes"));
     }
     Ok(text.to_owned())
 }

@@ -1,5 +1,6 @@
 //! Persistent WebSocket transport. Only reconnect and liveness have timers;
 //! project updates and selection commands are sent immediately.
+use ketchup_core::tr;
 use eframe::egui;
 use serde_json::Value;
 use std::sync::mpsc::{self, Receiver};
@@ -61,7 +62,7 @@ impl Socket {
                     use tungstenite::{Message, client::IntoClientRequest, stream::MaybeTlsStream};
                     let _ = rustls::crypto::ring::default_provider().install_default();
                     let request = url.into_client_request().map_err(|e| e.to_string())?;
-                    let host = request.uri().host().ok_or("WebSocket host missing")?;
+                    let host = request.uri().host().ok_or(tr!("realtime.websocket_host_missing"))?;
                     let port = request.uri().port_u16().unwrap_or(
                         if request.uri().scheme_str() == Some("wss") {
                             443
@@ -78,7 +79,7 @@ impl Socket {
                             break;
                         }
                     }
-                    let stream = stream.ok_or("WebSocket connection failed")?;
+                    let stream = stream.ok_or(tr!("realtime.websocket_connection_failed"))?;
                     stream
                         .set_read_timeout(Some(Duration::from_secs(10)))
                         .map_err(|e| e.to_string())?;
@@ -94,7 +95,7 @@ impl Socket {
                         MaybeTlsStream::Rustls(s) => {
                             s.sock.set_read_timeout(Some(Duration::from_millis(20)))
                         }
-                        _ => return Err("Unsupported WebSocket TLS stream".into()),
+                        _ => return Err(tr!("realtime.unsupported_websocket_tls_stream").into()),
                     }
                     .map_err(|e| e.to_string())?;
                     socket.send(Message::Text(serde_json::json!({"type":"authenticate","ticket":ticket,"connection":connection}).to_string().into())).map_err(|e|e.to_string())?;
@@ -120,7 +121,7 @@ impl Socket {
                                 }
                                 ctx.request_repaint();
                             }
-                            Ok(Message::Close(_)) => return Err("WebSocket disconnected".into()),
+                            Ok(Message::Close(_)) => return Err(tr!("realtime.websocket_disconnected").into()),
                             Ok(_) => {
                                 let _ = socket.flush();
                             }
@@ -129,7 +130,7 @@ impl Socket {
                                     e.kind(),
                                     ErrorKind::WouldBlock | ErrorKind::TimedOut
                                 ) => {}
-                            Err(e) => return Err(format!("WebSocket disconnected: {e}")),
+                            Err(e) => return Err(tr!("realtime.websocket_disconnected_2", e = e)),
                         }
                     }
                 })();
@@ -154,11 +155,11 @@ impl Socket {
                     let value = queue_copy.shift();
                     let result = value
                         .as_string()
-                        .ok_or_else(|| "Invalid WebSocket event".to_owned())
+                        .ok_or_else(|| tr!("realtime.invalid_websocket_event").to_owned())
                         .and_then(|s| serde_json::from_str::<Value>(&s).map_err(|e| e.to_string()));
                     let result = result.and_then(|v| {
                         if v["type"] == "transport_error" {
-                            Err("WebSocket disconnected".into())
+                            Err(tr!("realtime.websocket_disconnected").into())
                         } else {
                             Ok(v)
                         }
@@ -168,7 +169,7 @@ impl Socket {
                 ctx.request_repaint();
             }) as Box<dyn FnMut()>);
             let create = js_sys::Function::new_with_args(
-                "url,ticket,connection,queue,wake",
+                tr!("realtime.url_ticket_connection_queue_wake"),
                 r#"
                 const socket=new WebSocket(url);
                 const emit=v=>{queue.push(JSON.stringify(v));wake();};
@@ -199,19 +200,19 @@ impl Socket {
         {
             self.sender
                 .send(message)
-                .map_err(|_| "WebSocket disconnected".into())
+                .map_err(|_| tr!("realtime.websocket_disconnected").into())
         }
         #[cfg(target_arch = "wasm32")]
         {
             use eframe::wasm_bindgen::JsCast;
             let method = js_sys::Reflect::get(&self.handle, &"send".into())
-                .map_err(|_| "WebSocket unavailable")?
+                .map_err(|_| tr!("realtime.websocket_unavailable"))?
                 .dyn_into::<js_sys::Function>()
-                .map_err(|_| "WebSocket unavailable")?;
+                .map_err(|_| tr!("realtime.websocket_unavailable"))?;
             method
                 .call1(&self.handle, &message.to_string().into())
                 .map(|_| ())
-                .map_err(|_| "WebSocket disconnected".into())
+                .map_err(|_| tr!("realtime.websocket_disconnected").into())
         }
     }
 }

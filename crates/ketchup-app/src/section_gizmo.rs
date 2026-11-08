@@ -1,5 +1,6 @@
 //! Small perimeter handles share the viewport's input routing, so planes never
 //! cover the model with an interactive surface or steal a tool's existing drag.
+use ketchup_core::tr;
 use super::*;
 
 #[derive(Clone)]
@@ -340,7 +341,7 @@ impl KetchupApp {
                     egui::CursorIcon::Grab
                 });
                 if hovered {
-                    response.clone().on_hover_text(format!("Drag section {} along its axis · Esc to cancel. When viewed along the axis, drag up/down.", ["X", "Y", "Z"][handle.axis]));
+                    response.clone().on_hover_text(tr!("section_gizmo.drag_section_along_its_axis_esc_to_cancel", ["X", "Y", "Z"][handle.axis]));
                 }
             }
         }

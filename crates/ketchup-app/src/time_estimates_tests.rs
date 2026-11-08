@@ -964,7 +964,7 @@ fn object_defaults_apply_to_existing_objects_and_explicit_overrides_survive_relo
     );
     let tasks = object_tasks(&app.doc.model, &areas, &app.time_estimates);
     assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].0, "Stain · coat 1");
+    assert_eq!(tasks[0].0.label(), "Stain · coat 1");
     // Defaults are live for unconfigured objects, including ones created earlier.
     app.time_estimates.stain.enabled = false;
     assert!(object_tasks(&app.doc.model, &areas, &app.time_estimates).is_empty());
@@ -1076,7 +1076,7 @@ fn task_groups_sum_work_and_share_the_longest_wait_per_coat() {
     let areas = std::collections::BTreeMap::from([(first, 2.), (second, 3.)]);
     let tasks = object_tasks(&model, &areas, &Settings::default());
     assert_eq!(tasks.len(), 3);
-    assert_eq!(tasks[0].0, "Sanding · 80 grit");
+    assert_eq!(tasks[0].0.label(), "Sanding · 80 grit");
     assert_eq!(tasks[0].2, 1);
     assert_eq!(
         tasks[0].1,
@@ -1085,7 +1085,7 @@ fn task_groups_sum_work_and_share_the_longest_wait_per_coat() {
             wait: 0.
         }
     );
-    assert_eq!(tasks[1].0, "Stain · coat 1");
+    assert_eq!(tasks[1].0.label(), "Stain · coat 1");
     assert_eq!(tasks[1].2, 2);
     assert_eq!(
         tasks[1].1,
@@ -1094,7 +1094,7 @@ fn task_groups_sum_work_and_share_the_longest_wait_per_coat() {
             wait: 480.
         }
     );
-    assert_eq!(tasks[2].0, "Stain · coat 2");
+    assert_eq!(tasks[2].0.label(), "Stain · coat 2");
     assert_eq!(tasks[2].2, 2);
     assert_eq!(
         tasks[2].1,

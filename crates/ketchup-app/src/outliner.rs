@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 use super::*;
 
 #[derive(Clone, Copy)]
@@ -120,9 +121,9 @@ impl OutlinerMaterial {
 
     fn label(self) -> &'static str {
         match self {
-            Self::None => "No material assigned",
-            Self::Partial => "Partial material assignment",
-            Self::Full => "Full material assignment",
+            Self::None => tr!("outliner.no_material_assigned"),
+            Self::Partial => tr!("outliner.partial_material_assignment"),
+            Self::Full => tr!("outliner.full_material_assignment"),
         }
     }
 
@@ -279,17 +280,17 @@ impl Outliner<'_> {
             .unwrap_or(OutlinerPaint::Empty);
         let (kind, icon) = if let Some(object) = object {
             match object.kind {
-                ObjectKind::Group => ("Group", "group"),
-                ObjectKind::Component { .. } => ("Component", "component"),
+                ObjectKind::Group => (tr!("outliner.group"), "group"),
+                ObjectKind::Component { .. } => (tr!("outliner.component"), "component"),
             }
         } else if self.model.edges.contains_key(&id) {
-            ("Edge", "edge")
+            (tr!("outliner.edge"), "edge")
         } else if self.model.faces.contains_key(&id) {
-            ("Face", "face")
+            (tr!("outliner.face"), "face")
         } else if self.model.texts.contains_key(&id) {
-            ("Text", "text")
+            (tr!("outliner.text"), "text")
         } else {
-            ("Dimension", "dimension")
+            (tr!("outliner.dimension"), "dimension")
         };
         let mut label = object
             .map(|object| object.name.trim())
@@ -297,16 +298,16 @@ impl Outliner<'_> {
                 self.model
                     .texts
                     .get(&id)
-                    .map(|text| text.text.lines().next().unwrap_or("Text"))
+                    .map(|text| text.text.lines().next().unwrap_or(tr!("outliner.text")))
             })
             .filter(|name| !name.is_empty())
             .map(str::to_owned)
-            .unwrap_or_else(|| format!("#{id}"));
+            .unwrap_or_else(|| tr!("outliner.entity_number", id = id));
         if state.locked {
-            label.push_str(" · Locked");
+            label.push_str(tr!("outliner.locked"));
         }
         if self.model.edit_context == Some(id) {
-            label.push_str(" · Editing");
+            label.push_str(tr!("outliner.editing"));
         }
         let hidden_color = Palette::for_ui(ui).muted.gamma_multiply(0.5);
         let text = RichText::new(&label);
@@ -371,7 +372,7 @@ impl Outliner<'_> {
                     let (rect, indicator) = ui.allocate_exact_size(egui::vec2(height, height), Sense::focusable_noninteractive());
                     let color = material.color(ui);
                     icons::line_icon(ui.painter(), rect.center(), material.icon(), color);
-                    let material_label = format!("{} — {kind}: {label}", material.label());
+                    let material_label = tr!("outliner.material_accessibility", material.label(), kind = kind, label = label);
                     indicator.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), &material_label));
                     indicator.accessible_name(material_label.clone()).on_hover_text(material_label);
                     let hidden = self.model.hidden.contains(&id);
@@ -388,9 +389,9 @@ impl Outliner<'_> {
                             },
                         );
                     });
-                    let name = format!("{} {kind}: {label}", if hidden { "Show" } else { "Hide" });
+                    let name = tr!("outliner.visibility_accessibility", if hidden { tr!("outliner.show") } else { tr!("outliner.hide") }, kind = kind, label = label);
                     let tooltip = if state.hidden && !hidden {
-                        format!("{name}\nVisibility is also controlled by the parent object and tags")
+                        tr!("outliner.visibility_is_also_controlled_by_the_parent_object", name = name)
                     } else {
                         name.clone()
                     };
@@ -407,19 +408,22 @@ impl Outliner<'_> {
                 .inner
             })
             .inner
-            .accessible_name(format!("{kind}: {label}"))
-            .on_hover_text(format!(
-                "{kind}: {label}\nEntity #{id}{}\n{}",
+            .accessible_name(tr!("outliner.entity_accessibility", kind = kind, label = label))
+            .on_hover_text(tr!(
+                "outliner.entity",
                 match paint {
-                    OutlinerPaint::Color([r, g, b]) => format!("\nPaint: #{r:02X}{g:02X}{b:02X}"),
-                    OutlinerPaint::Mixed => "\nPaint: Mixed face colors".to_owned(),
+                    OutlinerPaint::Color([r, g, b]) => tr!("outliner.paint", r = r, g = g, b = b),
+                    OutlinerPaint::Mixed => tr!("outliner.paint_mixed_face_colors").to_owned(),
                     _ => String::new(),
                 },
                 if state.hidden {
-                    "Click to select · Shift-click to select a range · Ctrl/Cmd-click to toggle selection · Use the eye button to toggle visibility; check parent objects and Tags for inherited visibility"
+                    tr!("outliner.click_to_select_shift_click_to_select_a")
                 } else {
-                    "Click to select · Shift-click to select a range · Ctrl/Cmd-click to toggle selection · Double-click to edit · Drag onto a group to nest, or between rows to reorder"
-                }
+                    tr!("outliner.click_to_select_shift_click_to_select_a_2")
+                },
+                kind = kind,
+                label = label,
+                id = id,
             ));
         if object.is_some() && response.drag_started_by(egui::PointerButton::Primary) {
             let ids = if self.selected.contains(&id) {
@@ -621,7 +625,7 @@ impl Outliner<'_> {
                         ObjectKind::Group => "group",
                         ObjectKind::Component { .. } => "component",
                     };
-                    empty_outliner_label(ui, icon, "Empty object");
+                    empty_outliner_label(ui, icon, tr!("outliner.empty_object"));
                 } else {
                     self.level(ui, &object.entities, Some(id));
                 }
@@ -640,7 +644,7 @@ impl Outliner<'_> {
             let key = format!("outliner_geometry/{parent:?}");
             let open = restored_header_open(ui, &key, false);
             let mut label = egui::text::LayoutJob::simple(
-                format!("Geometry ({})", geometry.len()),
+                tr!("outliner.geometry", count = geometry.len()),
                 egui::TextStyle::Button.resolve(ui.style()),
                 Color32::PLACEHOLDER,
                 f32::INFINITY,
@@ -1454,11 +1458,11 @@ impl KetchupApp {
                         })
                         .atom_align(egui::Align2::CENTER_CENTER),
                     )
-                    .hint_text("Search objects")
+                    .hint_text(tr!("outliner.search_objects"))
                     .desired_width(f32::INFINITY),
             )
-            .accessible_name("Search objects")
-            .on_hover_text("Find groups and components at any depth by name or #ID · Ctrl/Cmd+F");
+            .accessible_name(tr!("outliner.search_objects"))
+            .on_hover_text(tr!("outliner.find_groups_and_components_at_any_depth_by"));
         if self.focus_outliner_search {
             search.request_focus();
             search.scroll_to_me(Some(egui::Align::Center));
@@ -1469,12 +1473,12 @@ impl KetchupApp {
             .update(&self.doc.model, revision, &self.outliner_filter);
         let roots = &self.outliner_cache.roots;
         if roots.is_empty() {
-            crate::empty_state::EmptyState::new("No objects or geometry yet", "Draw geometry or import a model to see its objects here.").show(ui);
+            crate::empty_state::EmptyState::new(tr!("outliner.no_objects_or_geometry_yet"), tr!("outliner.draw_geometry_or_import_a_model_to_see")).show(ui);
             return;
         }
         let filtered_objects = &self.outliner_cache.filtered_objects;
         if filtered_objects.as_ref().is_some_and(BTreeSet::is_empty) {
-            crate::empty_state::EmptyState::new("No matching objects", "Try another name or clear the search to see all objects.").show(ui);
+            crate::empty_state::EmptyState::new(tr!("outliner.no_matching_objects"), tr!("outliner.try_another_name_or_clear_the_search_to")).show(ui);
             return;
         }
         self.outliner_cache.entities.update(&self.doc.model);
@@ -1562,11 +1566,7 @@ impl KetchupApp {
                 ui.scope_id().with("outliner_drag_label"),
             ));
             let colors = Palette::for_ui(ui);
-            let label = format!(
-                "Move {} object{}",
-                payload.ids.len(),
-                if payload.ids.len() == 1 { "" } else { "s" }
-            );
+            let label = tr!("outliner.drag_move_objects", count = payload.ids.len());
             let text = painter.layout_no_wrap(label, FontId::proportional(12.), colors.ink);
             let rect = Rect::from_min_size(
                 pointer + egui::vec2(16., 16.),
@@ -1602,7 +1602,7 @@ impl KetchupApp {
                         .is_some_and(|object| !object.entities.is_empty())
                 });
                 ui.separator();
-                for (label, open) in [("Expand Children", true), ("Collapse Children", false)] {
+                for (label, open) in [(tr!("outliner.expand_children"), true), (tr!("outliner.collapse_children"), false)] {
                     if ui
                         .add_enabled(has_children, Self::menu_item_button(ui, label, None))
                         .clicked()
@@ -1635,7 +1635,7 @@ impl KetchupApp {
             self.say(ctx, message);
             return;
         }
-        self.finish_edit(if show { "Unhide" } else { "Hide" }, before, ctx);
+        self.finish_edit(if show { tr!("outliner.unhide") } else { tr!("outliner.hide") }, before, ctx);
         if context.is_some_and(|id| self.doc.model.is_hidden(id)) {
             self.navigate_context(None, ctx);
         }
@@ -1686,7 +1686,7 @@ impl KetchupApp {
                 self.navigate_context(drop.parent, ctx);
                 self.outliner_hover.clear();
                 if changed {
-                    self.finish_edit("Move objects", before, ctx);
+                    self.finish_edit(tr!("outliner.move_objects"), before, ctx);
                 }
                 self.selected = ids;
             }
@@ -1766,14 +1766,14 @@ impl KetchupApp {
         if parent.is_some_and(|parent| self.doc.model.is_locked(parent)) {
             self.say(
                 ctx,
-                "Unlock the parent object before selecting its contents",
+                tr!("outliner.unlock_the_parent_object_before_selecting_its_contents"),
             );
             return false;
         }
         if parent.is_some_and(|parent| self.doc.model.is_hidden(parent)) {
             self.say(
                 ctx,
-                "Unhide the parent object before selecting its contents",
+                tr!("outliner.unhide_the_parent_object_before_selecting_its_contents"),
             );
             return false;
         }

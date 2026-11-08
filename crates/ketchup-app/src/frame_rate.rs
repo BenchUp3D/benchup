@@ -1,4 +1,5 @@
 //! Optional frame timing for performance diagnostics on desktop and web.
+use ketchup_core::tr;
 use eframe::egui::{self, FontId, Rect};
 
 #[derive(Clone, Default)]
@@ -47,7 +48,7 @@ pub(crate) fn paint(ui: &egui::Ui, viewport: Rect) {
     });
     // Measure continuous rendering while the indicator is enabled.
     ctx.request_repaint();
-    let text = fps.map_or_else(|| "— FPS".into(), |fps| format!("{fps:.0} FPS"));
+    let text = fps.map_or_else(|| tr!("frame_rate.fps").into(), |fps| tr!("frame_rate.fps_2", fps = fps));
     let colors = crate::theme::Palette::for_ui(ui);
     let painter = ui
         .painter()

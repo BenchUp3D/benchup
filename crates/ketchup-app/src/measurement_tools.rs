@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 use super::*;
 use ketchup_core::{Dimension, DimensionAnchor, angle_arc, angle_degrees};
 
@@ -56,9 +57,9 @@ impl KetchupApp {
                 m.guide_id = Some(id);
                 self.finish_edit(
                     if adjusting {
-                        "Adjust guide"
+                        tr!("measurement_tools.adjust_guide")
                     } else {
-                        "Add guide"
+                        tr!("measurement_tools.add_guide")
                     },
                     before,
                     ctx,
@@ -97,7 +98,7 @@ impl KetchupApp {
         let m = self
             .measurement
             .as_ref()
-            .ok_or("Choose a starting point first")?;
+            .ok_or(tr!("measurement_tools.choose_a_starting_point_first"))?;
         let origin = m.points[0];
         if self.tool == Tool::Protractor {
             let angle =
@@ -119,10 +120,10 @@ impl KetchupApp {
                 .get(1)
                 .copied()
                 .or(self.snap.map(|s| s.point))
-                .ok_or("Move the pointer to choose a direction first")?;
+                .ok_or(tr!("measurement_tools.move_the_pointer_to_choose_a_direction_first"))?;
             let direction = (endpoint - origin)
                 .try_normalize()
-                .ok_or("Move the pointer to choose a direction first")?;
+                .ok_or(tr!("measurement_tools.move_the_pointer_to_choose_a_direction_first"))?;
             Ok(origin + direction * length)
         }
     }
@@ -272,7 +273,7 @@ impl KetchupApp {
                     self.measurement = None;
                     self.snap = None;
                     self.selected = BTreeSet::from([id]);
-                    self.finish_edit("Add dimension", before, ctx);
+                    self.finish_edit(tr!("measurement_tools.add_dimension"), before, ctx);
                 }
                 Err(message) => self.say(ctx, message),
             }
@@ -281,7 +282,7 @@ impl KetchupApp {
         let Some(snap) = self.snap else {
             self.say(
                 ctx,
-                "Move over the model or drawing plane to choose a point",
+                tr!("measurement_tools.move_over_the_model_or_drawing_plane_to"),
             );
             return;
         };
@@ -317,7 +318,7 @@ impl KetchupApp {
             .first()
             .is_some_and(|p| p.distance(snap.point) < 1e-7)
         {
-            self.say(ctx, "Choose a point away from the measurement origin");
+            self.say(ctx, tr!("measurement_tools.choose_a_point_away_from_the_measurement_origin"));
             return;
         }
         m.points.push(snap.point);
@@ -417,22 +418,22 @@ impl KetchupApp {
                     .map(|m| (m.complete, m.points.len())),
             ) {
                 (true, Some((true, _))) => {
-                    "Guide created · Type a value + Enter to adjust · Click to start another · Ctrl/Command toggles Measure"
+                    tr!("measurement_tools.guide_created_type_a_value_enter_to_adjust")
                 }
                 (false, Some((true, _))) => {
-                    "Measurement complete · Click to start another · Ctrl/Command toggles Create Guides"
+                    tr!("measurement_tools.measurement_complete_click_to_start_another_ctrl_command")
                 }
                 (true, Some((false, 1))) if self.tool == Tool::TapeMeasure => {
-                    "Create guide · Click to place or type distance + Enter · Arrow keys lock axes · Ctrl/Command toggles Measure"
+                    tr!("measurement_tools.create_guide_click_to_place_or_type_distance")
                 }
                 (true, Some((false, 2))) if self.tool == Tool::Protractor => {
-                    "Create guide · Click the angle point or type angle + Enter · Ctrl/Command toggles Measure"
+                    tr!("measurement_tools.create_guide_click_the_angle_point_or_type")
                 }
                 (true, _) => {
-                    "Create Guides · Click a reference edge or point · Ctrl/Command toggles Measure · Esc to cancel"
+                    tr!("measurement_tools.create_guides_click_a_reference_edge_or_point")
                 }
                 (false, _) => {
-                    "Measure only · Click measurement points · Ctrl/Command toggles Create Guides · Esc to cancel"
+                    tr!("measurement_tools.measure_only_click_measurement_points_ctrl_command_toggles")
                 }
             };
         }
@@ -440,24 +441,24 @@ impl KetchupApp {
             return self.tool.instructions();
         };
         if m.complete {
-            return "Measurement complete · Click to start another · Esc to clear";
+            return tr!("measurement_tools.measurement_complete_click_to_start_another_esc_to");
         }
         match (self.tool, m.points.len()) {
             (Tool::Text, 1) => {
-                "Move to position the text · Arrow keys lock axes · Click to place · Esc to cancel"
+                tr!("measurement_tools.move_to_position_the_text_arrow_keys_lock")
             }
             (Tool::TapeMeasure, 1) => {
-                "Click the second point · Arrow keys lock axes · Esc to cancel"
+                tr!("measurement_tools.click_the_second_point_arrow_keys_lock_axes")
             }
             (Tool::Protractor, 1) => {
-                "Click a baseline point · Arrow keys lock axes · Esc to cancel"
+                tr!("measurement_tools.click_a_baseline_point_arrow_keys_lock_axes")
             }
-            (Tool::Protractor, 2) => "Click the angle point · Arrow keys lock axes · Esc to cancel",
+            (Tool::Protractor, 2) => tr!("measurement_tools.click_the_angle_point_arrow_keys_lock_axes"),
             (Tool::Dimensions, 1) => {
-                "Click the second endpoint · Arrow keys align X / Y / Z · Esc to cancel"
+                tr!("measurement_tools.click_the_second_endpoint_arrow_keys_align_x")
             }
             (Tool::Dimensions, 2) => {
-                "Move to place · Arrow keys align X / Y / Z · Down clears the lock"
+                tr!("measurement_tools.move_to_place_arrow_keys_align_x_y")
             }
             _ => self.tool.instructions(),
         }

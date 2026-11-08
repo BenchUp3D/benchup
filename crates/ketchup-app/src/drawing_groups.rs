@@ -1,4 +1,5 @@
 //! Root drawings own their topology; drawing inside an object edits that object.
+use ketchup_core::tr;
 use super::*;
 
 impl KetchupApp {
@@ -33,10 +34,10 @@ impl KetchupApp {
         drawing.edit_context = context.or(continuing_group);
         let faces_before = drawing.faces.len();
         for pair in points.windows(2) {
-            match drawing.add_edge(pair[0], pair[1]) {
-                Ok(_) => {}
-                Err("That edge already exists") if self.tool != Tool::Line => {}
-                Err(error) => return Err(error),
+            if self.tool == Tool::Line {
+                drawing.add_edge(pair[0], pair[1])?;
+            } else {
+                drawing.ensure_edge(pair[0], pair[1])?;
             }
         }
         let closed = drawing.faces.len() > faces_before;
@@ -45,7 +46,7 @@ impl KetchupApp {
             let entities = model.paste_entities(&drawing, DVec3::ZERO);
             let group = model
                 .make_object(&entities, false, self.tool.label())
-                .ok_or("The drawing could not be grouped")?;
+                .ok_or(tr!("drawing_groups.the_drawing_could_not_be_grouped"))?;
             Ok((model, Some(group), closed))
         } else {
             drawing.edit_context = context;

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 pub const MAX_DECIMAL_PLACES: u8 = 6;
 
 macro_rules! units {
-    ($name:ident, $default:ident, $digits:literal, $( $variant:ident => ($label:literal, $symbol:literal, $factor:expr) ),+ $(,)?) => {
+    ($name:ident, $default:ident, $digits:literal, $( $variant:ident => ($label:expr, $symbol:literal, $factor:expr) ),+ $(,)?) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
         #[serde(rename_all = "snake_case")]
         pub enum $name { $( $variant ),+ }
@@ -41,42 +41,42 @@ macro_rules! units {
 }
 
 units!(LengthUnit, Meters, 3,
-    Millimeters => ("Millimeters (mm)", "mm", 0.001),
-    Centimeters => ("Centimeters (cm)", "cm", 0.01),
-    Meters => ("Meters (m)", "m", 1.),
-    Kilometers => ("Kilometers (km)", "km", 1000.),
-    Inches => ("Inches (in)", "in", 0.0254),
-    Feet => ("Feet (ft)", "ft", 0.3048),
-    Yards => ("Yards (yd)", "yd", 0.9144),
+    Millimeters => (tr!("core.units.millimeters_mm"), "mm", 0.001),
+    Centimeters => (tr!("core.units.centimeters_cm"), "cm", 0.01),
+    Meters => (tr!("core.units.meters_m"), "m", 1.),
+    Kilometers => (tr!("core.units.kilometers_km"), "km", 1000.),
+    Inches => (tr!("core.units.inches_in"), "in", 0.0254),
+    Feet => (tr!("core.units.feet_ft"), "ft", 0.3048),
+    Yards => (tr!("core.units.yards_yd"), "yd", 0.9144),
 );
 
 units!(AreaUnit, SquareMeters, 3,
-    SquareMillimeters => ("Square millimeters (mm²)", "mm²", 1e-6),
-    SquareCentimeters => ("Square centimeters (cm²)", "cm²", 1e-4),
-    SquareMeters => ("Square meters (m²)", "m²", 1.),
-    SquareKilometers => ("Square kilometers (km²)", "km²", 1e6),
-    SquareInches => ("Square inches (in²)", "in²", 0.0254_f64.powi(2)),
-    SquareFeet => ("Square feet (ft²)", "ft²", 0.3048_f64.powi(2)),
-    SquareYards => ("Square yards (yd²)", "yd²", 0.9144_f64.powi(2)),
-    Hectares => ("Hectares (ha)", "ha", 10000.),
-    Acres => ("Acres (ac)", "ac", 4046.8564224),
+    SquareMillimeters => (tr!("core.units.square_millimeters_mm2"), "mm²", 1e-6),
+    SquareCentimeters => (tr!("core.units.square_centimeters_cm2"), "cm²", 1e-4),
+    SquareMeters => (tr!("core.units.square_meters_m2"), "m²", 1.),
+    SquareKilometers => (tr!("core.units.square_kilometers_km2"), "km²", 1e6),
+    SquareInches => (tr!("core.units.square_inches_in2"), "in²", 0.0254_f64.powi(2)),
+    SquareFeet => (tr!("core.units.square_feet_ft2"), "ft²", 0.3048_f64.powi(2)),
+    SquareYards => (tr!("core.units.square_yards_yd2"), "yd²", 0.9144_f64.powi(2)),
+    Hectares => (tr!("core.units.hectares_ha"), "ha", 10000.),
+    Acres => (tr!("core.units.acres_ac"), "ac", 4046.8564224),
 );
 
 units!(VolumeUnit, CubicMeters, 3,
-    CubicMillimeters => ("Cubic millimeters (mm³)", "mm³", 1e-9),
-    CubicCentimeters => ("Cubic centimeters (cm³)", "cm³", 1e-6),
-    CubicMeters => ("Cubic meters (m³)", "m³", 1.),
-    CubicInches => ("Cubic inches (in³)", "in³", 0.0254_f64.powi(3)),
-    CubicFeet => ("Cubic feet (ft³)", "ft³", 0.3048_f64.powi(3)),
-    CubicYards => ("Cubic yards (yd³)", "yd³", 0.9144_f64.powi(3)),
-    Liters => ("Liters (L)", "L", 0.001),
-    Milliliters => ("Milliliters (mL)", "mL", 1e-6),
+    CubicMillimeters => (tr!("core.units.cubic_millimeters_mm3"), "mm³", 1e-9),
+    CubicCentimeters => (tr!("core.units.cubic_centimeters_cm3"), "cm³", 1e-6),
+    CubicMeters => (tr!("core.units.cubic_meters_m3"), "m³", 1.),
+    CubicInches => (tr!("core.units.cubic_inches_in3"), "in³", 0.0254_f64.powi(3)),
+    CubicFeet => (tr!("core.units.cubic_feet_ft3"), "ft³", 0.3048_f64.powi(3)),
+    CubicYards => (tr!("core.units.cubic_yards_yd3"), "yd³", 0.9144_f64.powi(3)),
+    Liters => (tr!("core.units.liters_l"), "L", 0.001),
+    Milliliters => (tr!("core.units.milliliters_ml"), "mL", 1e-6),
 );
 
 units!(AngleUnit, Degrees, 2,
-    Degrees => ("Degrees (°)", "°", 1.),
-    Radians => ("Radians (rad)", "rad", 180. / std::f64::consts::PI),
-    Gradians => ("Gradians (gon)", "gon", 0.9),
+    Degrees => (tr!("core.units.degrees"), "°", 1.),
+    Radians => (tr!("core.units.radians_rad"), "rad", 180. / std::f64::consts::PI),
+    Gradians => (tr!("core.units.gradians_gon"), "gon", 0.9),
 );
 
 impl AngleUnit {

@@ -23,7 +23,7 @@ struct Import {
     for (const auto& layer:model.layers) if(layer.hidden) hidden_layers.insert(layer.name);
   }
   Id allocate() {
-    if(next>=1000000) throw std::runtime_error("The imported model is too large (one million entities maximum)");
+    if(next>=1000000) throw std::runtime_error("ketchup.skp.model_too_large");
     return ++next;
   }
   static Json ids(const std::vector<Id>& values) {
@@ -36,7 +36,7 @@ struct Import {
   }
   std::vector<Id> visit(const Definition& def, const std::vector<std::vector<double>>& transforms,
       std::optional<EntityId> inherited, unsigned depth) {
-    if(depth>64 || !active.insert(def.id).second) throw std::runtime_error("Recursive or excessively nested SketchUp components");
+    if(depth>64 || !active.insert(def.id).second) throw std::runtime_error("ketchup.skp.nested_components");
     std::vector<Id> entities;
     std::map<EntityId,Id> remap;
     std::map<std::pair<Id,Id>,Id> pairs;
@@ -45,7 +45,7 @@ struct Import {
       for(const auto& transform:transforms) {
         if(transform.empty()) continue;
         if(transform.size()!=12 && transform.size()!=13 && transform.size()!=16)
-          throw std::runtime_error("Unsupported SketchUp instance transform");
+          throw std::runtime_error("ketchup.skp.instance_transform");
         if(transform.size()==16) {
           const auto x=p[0], y=p[1], z=p[2];
           p={transform[0]*x+transform[4]*y+transform[8]*z+transform[12],
@@ -56,7 +56,7 @@ struct Import {
       auto position=Json::make_array();
       for(auto n:p) {
         n*=0.0254;
-        if(!std::isfinite(n) || std::abs(n)>1e10) throw std::runtime_error("Invalid SketchUp coordinates");
+        if(!std::isfinite(n) || std::abs(n)>1e10) throw std::runtime_error("ketchup.skp.invalid_coordinates");
         position.push(n);
       }
       const auto id=allocate();remap[old]=id;
@@ -64,7 +64,7 @@ struct Import {
       vertices.set(std::to_string(id),std::move(out));
     }
     for(const auto& [old,e]:def.edges) {
-      if(!remap.count(e.v1_id) || !remap.count(e.v2_id)) throw std::runtime_error("SketchUp edge refers to a missing vertex");
+      if(!remap.count(e.v1_id) || !remap.count(e.v2_id)) throw std::runtime_error("ketchup.skp.missing_vertex");
       const auto a=remap.at(e.v1_id), b=remap.at(e.v2_id);
       auto key=std::make_pair(std::min(a,b),std::max(a,b));
       auto found=pairs.find(key);
@@ -76,20 +76,20 @@ struct Import {
     for(const auto& [old,f]:def.faces) {
       std::vector<std::vector<Id>> rings;
       for(const auto& loop:f.loops) {
-        if(loop.size()<3) throw std::runtime_error("SketchUp face has an invalid boundary");
+        if(loop.size()<3) throw std::runtime_error("ketchup.skp.invalid_boundary");
         std::vector<Id> ring;
         for(std::size_t i=0;i<loop.size();++i) {
           const auto& ce=loop[i];const auto& ne=loop[(i+1)%loop.size()];
-          if(!def.edges.count(ce.edge_id) || !def.edges.count(ne.edge_id)) throw std::runtime_error("SketchUp face refers to a missing edge");
+          if(!def.edges.count(ce.edge_id) || !def.edges.count(ne.edge_id)) throw std::runtime_error("ketchup.skp.missing_edge");
           const auto& e=def.edges.at(ce.edge_id); const auto& next=def.edges.at(ne.edge_id);
           auto start=ce.orientation>=0?e.v1_id:e.v2_id;
           auto end=ce.orientation>=0?e.v2_id:e.v1_id;
-          if(end!=(ne.orientation>=0?next.v1_id:next.v2_id)) throw std::runtime_error("SketchUp face has a disconnected boundary");
+          if(end!=(ne.orientation>=0?next.v1_id:next.v2_id)) throw std::runtime_error("ketchup.skp.disconnected_boundary");
           ring.push_back(remap.at(start));
         }
         rings.push_back(std::move(ring));
       }
-      if(rings.empty()) throw std::runtime_error("SketchUp face has an invalid boundary");
+      if(rings.empty()) throw std::runtime_error("ketchup.skp.invalid_boundary");
       const auto id=allocate();entities.push_back(id);
       auto out=Json::make_object(), holes=Json::make_array();
       for(std::size_t i=1;i<rings.size();++i) holes.push(ids(rings[i]));
@@ -106,12 +106,12 @@ struct Import {
       }
     }
     for(const auto& instance:def.instances) {
-      if(!instance.ref_idx || !source.definitions.count(*instance.ref_idx)) throw std::runtime_error("SketchUp instance refers to a missing definition");
+      if(!instance.ref_idx || !source.definitions.count(*instance.ref_idx)) throw std::runtime_error("ketchup.skp.missing_definition");
       const auto& child=source.definitions.at(*instance.ref_idx);
       auto chain=transforms;chain.insert(chain.begin(),instance.matrix);
       auto children=visit(child,chain,instance.material_id?instance.material_id:inherited,depth+1);
       if(children.empty())continue;
-      auto name=!instance.name.empty()?instance.name:(!child.name.empty()?child.name:"SketchUp group");
+      auto name=!instance.name.empty()?instance.name:child.name;
       auto id=group(name,std::move(children));entities.push_back(id);
       if(instance.hidden || hidden_layers.count(instance.layer))hidden.push(id);
     }
@@ -119,8 +119,8 @@ struct Import {
   }
   std::string run() {
     auto entities=visit(source.root(),{},std::nullopt,0);
-    if(entities.empty())throw std::runtime_error("This SketchUp file contains no importable edges or faces");
-    group("SketchUp import",std::move(entities));
+    if(entities.empty())throw std::runtime_error("ketchup.skp.no_geometry");
+    group("",std::move(entities));
     auto out=Json::make_object();
     out.set("vertices",std::move(vertices));out.set("edges",std::move(edges));out.set("faces",std::move(faces));
     out.set("face_colors",std::move(colors));out.set("objects",std::move(objects));out.set("hidden",std::move(hidden));out.set("next_id",next);
@@ -141,6 +141,6 @@ extern "C" char* ketchup_skp_parse(const unsigned char* bytes, std::size_t size,
     auto json=Import(model).run();
     auto* out=copy(json);if(out)*success=1;return out;
   } catch(const std::exception& error) {return copy(error.what());}
-  catch(...) {return copy("The SketchUp reader could not complete this import");}
+  catch(...) {return copy("ketchup.skp.incomplete_import");}
 }
 extern "C" void ketchup_skp_free(char* value) noexcept {std::free(value);}

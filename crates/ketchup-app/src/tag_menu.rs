@@ -1,4 +1,5 @@
 //! Tag management for the right sidebar.
+use ketchup_core::tr;
 use super::*;
 use crate::inspector_table::{Column, InspectorTable};
 
@@ -24,9 +25,9 @@ impl KetchupApp {
             .assign_tag(&targets, if assigned { Some(tag) } else { None })?;
         self.finish_context_state_edit(
             if assigned {
-                "Assign tag"
+                tr!("tag_menu.assign_tag")
             } else {
-                "Unassign tag"
+                tr!("tag_menu.unassign_tag")
             },
             before,
             ctx,
@@ -37,13 +38,13 @@ impl KetchupApp {
     pub(super) fn tags_contents(&mut self, ui: &mut egui::Ui) {
         let colors = Palette::for_ui(ui);
         let mut before = None;
-        let mut action = "Edit tags";
+        let mut action = tr!("tag_menu.edit_tags");
         ui.horizontal(|ui| {
             let width = (ui.available_width() - 52. - ui.spacing().item_spacing.x).max(40.);
             let input = ui.add_sized(
                 [width, 28.],
                 egui::TextEdit::singleline(&mut self.new_tag_name)
-                    .hint_text("New tag name")
+                    .hint_text(tr!("tag_menu.new_tag_name"))
                     .align(Align2::LEFT_CENTER)
                     .char_limit(128),
             );
@@ -52,7 +53,7 @@ impl KetchupApp {
             if ui
                 .add_enabled(
                     !self.new_tag_name.trim().is_empty(),
-                    egui::Button::new("Add")
+                    egui::Button::new(tr!("common.add"))
                         .min_size(egui::vec2(52., 28.))
                         .stroke(Stroke::new(1., colors.accent)),
                 )
@@ -64,7 +65,7 @@ impl KetchupApp {
                     match self.doc.model.add_tag(&self.new_tag_name) {
                         Ok(_) => {
                             self.new_tag_name.clear();
-                            action = "Add tag";
+                            action = tr!("tag_menu.add_tag");
                         }
                         Err(error) => self.say(ui.ctx(), error),
                     }
@@ -85,8 +86,8 @@ impl KetchupApp {
         let can_assign =
             !self.selected.is_empty() && !self.doc.model.selection_protected(&self.selected);
         if tags.is_empty() {
-            crate::empty_state::EmptyState::new("No tags yet",
-                "Create a tag above to organize objects and control their visibility.").show(ui);
+            crate::empty_state::EmptyState::new(tr!("tag_menu.no_tags_yet"),
+                tr!("tag_menu.create_a_tag_above_to_organize_objects_and")).show(ui);
         }
         if !tags.is_empty() {
             ui.add_space(6.);
@@ -115,7 +116,7 @@ impl KetchupApp {
                     6.,
                 )
                 .striped();
-                table.header(ui, ["", "", "Name", "", "", ""]);
+                table.header(ui, ["", "", tr!("common.name"), "", "", ""]);
                 for tag in &tags {
                     let editing = rename.as_ref().is_some_and(|(id, _)| *id == tag.id);
                     table.row(ui, tag.id, |column, cell| match column {
@@ -133,9 +134,9 @@ impl KetchupApp {
                                     can_assign,
                                     egui::Checkbox::new(&mut assigned, "").indeterminate(mixed),
                                 )
-                                .accessible_name(format!("Assign: {}", tag.name))
+                                .accessible_name(tr!("tag_menu.assign", tag.name))
                                 .on_hover_text(
-                                    "Assign this tag to the selection; untick to remove it",
+                                    tr!("tag_menu.assign_this_tag_to_the_selection_untick_to"),
                                 )
                                 .changed()
                             {
@@ -162,8 +163,8 @@ impl KetchupApp {
                                             if active { colors.accent } else { colors.muted },
                                         )),
                                 )
-                                .accessible_name(format!("Color: {}", tag.name))
-                                .on_hover_text("Click to edit the tag color");
+                                .accessible_name(tr!("tag_menu.color", tag.name))
+                                .on_hover_text(tr!("tag_menu.click_to_edit_the_tag_color"));
                             if response.clicked() {
                                 editing_color = if active { None } else { Some(tag.id) };
                             }
@@ -207,9 +208,9 @@ impl KetchupApp {
                                     },
                                 );
                             });
-                            let name = format!(
-                                "{} tag: {}",
-                                if hidden { "Show" } else { "Hide" },
+                            let name = tr!(
+                                "tag_menu.tag",
+                                if hidden { tr!("tag_menu.show") } else { tr!("tag_menu.hide") },
                                 tag.name
                             );
                             if cell
@@ -223,17 +224,17 @@ impl KetchupApp {
                             {
                                 before.get_or_insert_with(|| self.doc.model.clone());
                                 self.doc.model.tags.get_mut(&tag.id).unwrap().visible = hidden;
-                                action = if hidden { "Show tag" } else { "Hide tag" };
+                                action = if hidden { tr!("tag_menu.show_tag") } else { tr!("tag_menu.hide_tag") };
                             }
                         }
                         4 => {
                             if editing {
-                                save |= cell.button("✓").on_hover_text("Save name").clicked();
+                                save |= cell.button("✓").on_hover_text(tr!("tag_menu.save_name")).clicked();
                             } else {
                                 let response = cell
                                     .add(egui::Button::new("").min_size(egui::vec2(26., 26.)))
-                                    .accessible_name(format!("Rename: {}", tag.name))
-                                    .on_hover_text("Rename tag");
+                                    .accessible_name(tr!("tag_menu.rename", tag.name))
+                                    .on_hover_text(tr!("tag_menu.rename_tag"));
                                 icons::ui_tool(
                                     cell.painter(),
                                     response.rect.shrink(4.),
@@ -247,11 +248,11 @@ impl KetchupApp {
                         _ => {
                             if editing {
                                 cancel |=
-                                    cell.button("×").on_hover_text("Cancel renaming").clicked();
+                                    cell.button(tr!("tag_menu.format")).on_hover_text(tr!("tag_menu.cancel_renaming")).clicked();
                             } else if cell
-                                .button("×")
-                                .accessible_name(format!("Delete: {}", tag.name))
-                                .on_hover_text("Delete tag; its entities become Untagged")
+                                .button(tr!("tag_menu.format"))
+                                .accessible_name(tr!("tag_menu.delete", tag.name))
+                                .on_hover_text(tr!("tag_menu.delete_tag_its_entities_become_untagged"))
                                 .clicked()
                             {
                                 delete = Some(tag.id);
@@ -270,10 +271,10 @@ impl KetchupApp {
             let tag = self.doc.model.tags.get(&id).cloned().unwrap();
             ui.separator();
             ui.horizontal(|ui| {
-                ui.text_strong(format!("Color · {}", tag.name));
+                ui.text_strong(tr!("tag_menu.color_2", tag.name));
                 if ui
-                    .small_button("×")
-                    .on_hover_text("Close color editor")
+                    .small_button(tr!("tag_menu.format"))
+                    .on_hover_text(tr!("tag_menu.close_color_editor"))
                     .clicked()
                 {
                     editing_color = None;
@@ -290,7 +291,7 @@ impl KetchupApp {
                     before.get_or_insert_with(|| self.doc.model.clone());
                     self.doc.model.tags.get_mut(&id).unwrap().color =
                         [color.r(), color.g(), color.b()];
-                    action = "Tag color";
+                    action = tr!("tag_menu.tag_color");
                 }
             });
         }
@@ -310,7 +311,7 @@ impl KetchupApp {
             match self.doc.model.rename_tag(*id, name) {
                 Ok(()) => {
                     rename = None;
-                    action = "Rename tag";
+                    action = tr!("tag_menu.rename_tag");
                 }
                 Err(error) => self.say(ui.ctx(), error),
             }
@@ -321,7 +322,7 @@ impl KetchupApp {
         if let Some(id) = delete {
             before.get_or_insert_with(|| self.doc.model.clone());
             self.doc.model.remove_tag(id);
-            action = "Delete tag";
+            action = tr!("tag_menu.delete_tag");
         }
         self.tag_rename = rename;
         if let Some(before) = before {

@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 #[cfg(test)]
 use crate::test_ui::ContextExt as _;
 use super::*;
@@ -2452,6 +2453,33 @@ mod preference_tests {
     }
 
     #[test]
+    fn language_defaults_and_saves_without_a_model_edit() {
+        let mut saved: InspectorPreferences =
+            serde_json::from_str(r#"{"general":{"orbit_speed":2.0}}"#).unwrap();
+        assert_eq!(saved.general.language, "en");
+        saved.general.language = "unsupported".into();
+
+        let mut storage = SavedPreferences::default();
+        eframe::set_value(&mut storage, PREFERENCE_KEY, &saved);
+        let ctx = egui::Context::default();
+        let mut app = KetchupApp::with_document(Document::default(), None, true);
+        app.restore_inspector_preferences(&ctx, Some(&storage));
+        assert_eq!(app.general_settings.language, "en");
+        assert_eq!(app.general_settings.orbit_speed, 2.);
+
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        assert!(storage.flushed);
+        assert!(!app.project.modified);
+        assert!(app.dirty_since.is_none());
+
+        let mut restored = KetchupApp::with_document(Document::default(), None, true);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        let saved: InspectorPreferences = eframe::get_value(&storage, PREFERENCE_KEY).unwrap();
+        assert_eq!(saved.general.language, "en");
+        assert_eq!(restored.general_settings.language, "en");
+    }
+
+    #[test]
     fn currency_changes_save_immediately_and_apply_after_switching_projects() {
         let ctx = egui::Context::default();
         let mut app = KetchupApp::with_document(Document::default(), None, true);
@@ -3781,17 +3809,17 @@ impl InspectorSection {
 
     fn title(self) -> &'static str {
         match self {
-            Self::Outliner => "Outliner",
-            Self::EntityInfo => "Properties",
-            Self::Components => "Components",
-            Self::Tags => "Tags",
-            Self::Display => "Display",
-            Self::View => "View",
-            Self::Units => "Units",
-            Self::TimeCostEstimates => "Time & Cost Estimates",
-            Self::Materials => "Materials",
-            Self::History => "History",
-            Self::Fasteners => "Automatic Fasteners",
+            Self::Outliner => tr!("sidebar.outliner"),
+            Self::EntityInfo => tr!("sidebar.properties"),
+            Self::Components => tr!("sidebar.components"),
+            Self::Tags => tr!("sidebar.tags"),
+            Self::Display => tr!("sidebar.display"),
+            Self::View => tr!("sidebar.view"),
+            Self::Units => tr!("sidebar.units"),
+            Self::TimeCostEstimates => tr!("sidebar.time_cost_estimates"),
+            Self::Materials => tr!("sidebar.materials"),
+            Self::History => tr!("sidebar.history"),
+            Self::Fasteners => tr!("sidebar.automatic_fasteners"),
         }
     }
 
@@ -4105,10 +4133,10 @@ pub(super) fn inspector_section_with_remove(
                     remove = ui
                         .put(
                             remove_rect,
-                            egui::Button::new(RichText::new("×").color(colors.muted))
+                            egui::Button::new(RichText::new(tr!("sidebar.format")).color(colors.muted))
                                 .min_size(remove_rect.size()),
                         )
-                        .on_hover_text("Remove this grit")
+                        .on_hover_text(tr!("sidebar.remove_this_grit"))
                         .clicked();
                 });
                 state.show_body_unindented(ui, |ui| {
@@ -4412,7 +4440,7 @@ impl KetchupApp {
         );
         let mut points = points.chain(model.texts.values().flat_map(|t| t.layout(&model)));
         let Some(first) = points.next() else {
-            self.say(ctx, "This component is empty");
+            self.say(ctx, tr!("sidebar.this_component_is_empty"));
             return;
         };
         let anchor = points.fold(first, |lo, point| lo.min(point));
@@ -4422,7 +4450,7 @@ impl KetchupApp {
             clipboard,
             point: self.doc.camera.target,
         });
-        self.say(ctx, "Click to place the component · Escape to cancel");
+        self.say(ctx, tr!("sidebar.click_to_place_the_component_escape_to_cancel"));
     }
 
     fn components_contents(&mut self, ui: &mut egui::Ui) {
@@ -4437,12 +4465,12 @@ impl KetchupApp {
             }
         }
         if definitions.is_empty() {
-            crate::empty_state::EmptyState::new("No components yet",
-                "Select geometry and choose Create Component from the Edit menu.").show(ui);
+            crate::empty_state::EmptyState::new(tr!("sidebar.no_components_yet"),
+                tr!("sidebar.select_geometry_and_choose_create_component_from_the")).show(ui);
         } else {
             ui.add(
                 egui::TextEdit::singleline(&mut self.component_filter)
-                    .hint_text("Search components")
+                    .hint_text(tr!("sidebar.search_components"))
                     .desired_width(f32::INFINITY),
             );
             let query = self.component_filter.to_lowercase();
@@ -4456,8 +4484,8 @@ impl KetchupApp {
                     .then(a.0.cmp(&b.0))
             });
             if rows.is_empty() {
-                crate::empty_state::EmptyState::new("No matching components",
-                    "Try another name or clear the search to see all components.").show(ui);
+                crate::empty_state::EmptyState::new(tr!("sidebar.no_matching_components"),
+                    tr!("sidebar.try_another_name_or_clear_the_search_to")).show(ui);
             }
             for (id, name, count) in rows {
                 ui.push_id(id, |ui| {
@@ -4469,17 +4497,14 @@ impl KetchupApp {
                             ui.set_min_width(ui.available_width());
                             ui.text_label(RichText::new(name).strong());
                             ui.text_label(
-                                RichText::new(format!(
-                                    "{count} instance{}",
-                                    if count == 1 { "" } else { "s" }
-                                ))
+                                RichText::new(tr!("sidebar.component_instances", count = count))
                                 .small()
                                 .color(Palette::for_ui(ui).muted),
                             );
                             if ui
                                 .add_sized(
                                     egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
-                                    egui::Button::new("Place instance"),
+                                    egui::Button::new(tr!("sidebar.place_instance")),
                                 )
                                 .clicked()
                             {
@@ -4492,7 +4517,7 @@ impl KetchupApp {
         if ui
             .add_enabled(
                 !self.selected.is_empty() && !self.doc.model.selection_protected(&self.selected),
-                egui::Button::new("Make Component…").min_size(egui::vec2(
+                egui::Button::new(tr!("sidebar.make_component")).min_size(egui::vec2(
                     ui.available_width(),
                     ui.spacing().interact_size.y,
                 )),
@@ -4566,7 +4591,7 @@ impl KetchupApp {
         picker(
             ui,
             "units_length",
-            "Length",
+            tr!("sidebar.length"),
             &mut units.length,
             LengthUnit::ALL,
             LengthUnit::label,
@@ -4574,14 +4599,14 @@ impl KetchupApp {
         precision_picker(
             ui,
             "units_length_precision",
-            "Length precision",
+            tr!("sidebar.length_precision"),
             &mut units.precision.length,
             3,
         );
         picker(
             ui,
             "units_area",
-            "Area",
+            tr!("sidebar.area"),
             &mut units.area,
             AreaUnit::ALL,
             AreaUnit::label,
@@ -4589,14 +4614,14 @@ impl KetchupApp {
         precision_picker(
             ui,
             "units_area_precision",
-            "Area precision",
+            tr!("sidebar.area_precision"),
             &mut units.precision.area,
             3,
         );
         picker(
             ui,
             "units_volume",
-            "Volume",
+            tr!("sidebar.volume"),
             &mut units.volume,
             VolumeUnit::ALL,
             VolumeUnit::label,
@@ -4604,14 +4629,14 @@ impl KetchupApp {
         precision_picker(
             ui,
             "units_volume_precision",
-            "Volume precision",
+            tr!("sidebar.volume_precision"),
             &mut units.precision.volume,
             3,
         );
         picker(
             ui,
             "units_angle",
-            "Angle",
+            tr!("sidebar.angle"),
             &mut units.angle,
             AngleUnit::ALL,
             AngleUnit::label,
@@ -4619,13 +4644,13 @@ impl KetchupApp {
         precision_picker(
             ui,
             "units_angle_precision",
-            "Angle precision",
+            tr!("sidebar.angle_precision"),
             &mut units.precision.angle,
             units.angle.default_precision(),
         );
         ui.add_space(4.);
         ui.text_label(
-            RichText::new("Precision controls displayed decimal places. Lengths entered without a unit use the selected length unit.")
+            RichText::new(tr!("sidebar.precision_controls_displayed_decimal_places_lengths_entered_without"))
                 .small()
                 .color(Palette::for_ui(ui).muted),
         );
@@ -4635,36 +4660,36 @@ impl KetchupApp {
         let before = self.doc.display.clone();
         let d = &mut self.doc.display;
         for (value, label) in [
-            (&mut d.axes, "Axes"),
-            (&mut d.grid, "Grid"),
-            (&mut d.guides, "Guides"),
+            (&mut d.axes, tr!("sidebar.axes")),
+            (&mut d.grid, tr!("sidebar.grid")),
+            (&mut d.guides, tr!("sidebar.guides")),
         ] {
             Self::menu_checkbox(ui, value, label);
         }
         ui.separator();
         for (value, label) in [
-            (&mut d.group_names, "Group names"),
-            (&mut d.dimensions, "Dimensions"),
-            (&mut d.wood_joinery, "Wood Joinery"),
+            (&mut d.group_names, tr!("sidebar.group_names")),
+            (&mut d.dimensions, tr!("sidebar.dimensions")),
+            (&mut d.wood_joinery, tr!("sidebar.wood_joinery")),
         ] {
             Self::menu_checkbox(ui, value, label);
         }
         ui.separator();
         for (value, label) in [
-            (&mut d.hidden_geometry, "Hidden geometry"),
-            (&mut d.hidden_objects, "Hidden objects"),
+            (&mut d.hidden_geometry, tr!("sidebar.hidden_geometry")),
+            (&mut d.hidden_objects, tr!("sidebar.hidden_objects")),
         ] {
             Self::menu_checkbox(ui, value, label);
         }
         ui.separator();
-        Self::menu_checkbox(ui, &mut d.x_ray, "X-Ray");
-        Self::menu_checkbox(ui, &mut d.color_by_tag, "Color by tag");
+        Self::menu_checkbox(ui, &mut d.x_ray, tr!("sidebar.x_ray"));
+        Self::menu_checkbox(ui, &mut d.color_by_tag, tr!("sidebar.color_by_tag"));
         if before != self.doc.display {
             self.changed(ui.ctx());
         }
         // Group emphasis is an application preference and does not modify the project.
-        if Self::menu_checkbox(ui, &mut self.doc.display.group_emphasis, "Emphasize group")
-            .on_hover_text("Emphasize the group/component currently being edited and show everything else in muted wireframe. Has no visual effect outside a group/component.")
+        if Self::menu_checkbox(ui, &mut self.doc.display.group_emphasis, tr!("sidebar.emphasize_group"))
+            .on_hover_text(tr!("sidebar.emphasize_the_group_component_currently_being_edited_and"))
             .changed()
         {
             ui.ctx().request_repaint();
@@ -4676,45 +4701,45 @@ impl KetchupApp {
     fn display_contents(&mut self, ui: &mut egui::Ui) {
         let before = self.doc.display.clone();
         let d = &mut self.doc.display;
-        ui.text_label(RichText::new("Face style").strong());
+        ui.text_label(RichText::new(tr!("sidebar.face_style")).strong());
         face_style_picker(ui, &mut d.face_style);
-        inspector_section(ui, "Edge style", "edge_style", false, |ui| {
+        inspector_section(ui, tr!("sidebar.edge_style"), "edge_style", false, |ui| {
             for (value, label) in [
-                (&mut d.edges, "Edges"),
-                (&mut d.back_edges, "Back edges"),
-                (&mut d.profiles, "Profiles"),
-                (&mut d.depth_cue, "Depth cue"),
-                (&mut d.endpoints, "Endpoints"),
-                (&mut d.extensions, "Extensions"),
+                (&mut d.edges, tr!("sidebar.edges")),
+                (&mut d.back_edges, tr!("sidebar.back_edges")),
+                (&mut d.profiles, tr!("sidebar.profiles")),
+                (&mut d.depth_cue, tr!("sidebar.depth_cue")),
+                (&mut d.endpoints, tr!("sidebar.endpoints")),
+                (&mut d.extensions, tr!("sidebar.extensions")),
             ] {
                 ui.checkbox(value, label);
             }
             ui.add_enabled_ui(d.profiles, |ui| {
                 // Keep the label above the slider so this nested section fits
                 // even at the inspector's minimum width.
-                let label = ui.text_label("Profile width");
+                let label = ui.text_label(tr!("sidebar.profile_width"));
                 ui.add(egui::Slider::new(&mut d.profile_width, 1. ..=8.))
                     .labelled_by(label.id);
             });
         });
-        inspector_section(ui, "Shadows", "shadows", false, |ui| {
-            ui.checkbox(&mut d.shadows, "Display shadows");
+        inspector_section(ui, tr!("sidebar.shadows"), "shadows", false, |ui| {
+            ui.checkbox(&mut d.shadows, tr!("sidebar.display_shadows"));
             ui.add_enabled_ui(d.shadows, |ui| {
-                crate::inspector_table::inspector_field(ui, "sun_direction", "Direction", |ui| {
+                crate::inspector_table::inspector_field(ui, "sun_direction", tr!("sidebar.direction"), |ui| {
                     ui.add(egui::Slider::new(&mut d.sun_angle, 0. ..=360.).suffix("°"))
                 });
-                crate::inspector_table::inspector_field(ui, "sun_elevation", "Elevation", |ui| {
+                crate::inspector_table::inspector_field(ui, "sun_elevation", tr!("sidebar.elevation"), |ui| {
                     ui.add(egui::Slider::new(&mut d.sun_elevation, 5. ..=85.).suffix("°"))
                 });
-                crate::inspector_table::inspector_field(ui, "shadow_darkness", "Darkness", |ui| {
+                crate::inspector_table::inspector_field(ui, "shadow_darkness", tr!("sidebar.darkness"), |ui| {
                     ui.add(egui::Slider::new(&mut d.shadow_darkness, 0. ..=1.))
                 });
             });
         });
-        inspector_section(ui, "Fog", "fog", false, |ui| {
-            ui.checkbox(&mut d.fog, "Display fog");
+        inspector_section(ui, tr!("sidebar.fog"), "fog", false, |ui| {
+            ui.checkbox(&mut d.fog, tr!("sidebar.display_fog"));
             ui.add_enabled_ui(d.fog, |ui| {
-                crate::inspector_table::inspector_field(ui, "fog_start", "Start", |ui| {
+                crate::inspector_table::inspector_field(ui, "fog_start", tr!("sidebar.start"), |ui| {
                     ui.add(
                         egui::DragValue::new(&mut d.fog_start)
                             .speed(0.5)
@@ -4722,7 +4747,7 @@ impl KetchupApp {
                             .suffix(" m"),
                     )
                 });
-                crate::inspector_table::inspector_field(ui, "fog_end", "End", |ui| {
+                crate::inspector_table::inspector_field(ui, "fog_end", tr!("sidebar.end"), |ui| {
                     ui.add(
                         egui::DragValue::new(&mut d.fog_end)
                             .speed(0.5)
@@ -4735,20 +4760,20 @@ impl KetchupApp {
             crate::inspector_table::inspector_field(
                 ui,
                 "fog_color",
-                "Background / fog color",
+                tr!("sidebar.background_fog_color"),
                 |ui| {
                     ui.spacing_mut().interact_size.x = ui.available_width();
                     crate::environment::background_control(ui, d)
                 },
             );
         });
-        inspector_section(ui, "Environment", "display_environment", false, |ui| {
+        inspector_section(ui, tr!("sidebar.environment"), "display_environment", false, |ui| {
             crate::environment::controls(ui, d);
         });
         if ui
             .add_sized(
                 egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
-                egui::Button::new("Reset display"),
+                egui::Button::new(tr!("sidebar.reset_display")),
             )
             .clicked()
         {
@@ -4768,17 +4793,17 @@ impl KetchupApp {
 
         let current = self.doc.history.position();
         let labels: Vec<String> = self.doc.history.attributed_labels().map(|(label, author, timestamp)| {
-            let who = author.map(|a| format!("{} ({})", a.name, if a.kind == "guest" { "Guest" } else if a.verified { "Server-verified account" } else { "Unverified" })).unwrap_or_else(|| "Unknown author".into());
-            let when = timestamp.map(|t| format!(" · {t} UTC")).unwrap_or_default();
-            format!("{label} · {who}{when}")
+            let who = author.map(|a| format!("{} ({})", a.name, if a.kind == "guest" { tr!("sidebar.guest") } else if a.verified { tr!("sidebar.server_verified_account") } else { tr!("sidebar.unverified") })).unwrap_or_else(|| tr!("sidebar.unknown_author").into());
+            let when = timestamp.map(|t| tr!("sidebar.utc", t = t)).unwrap_or_default();
+            tr!("sidebar.history_entry_detail", label = label, who = who, when = when)
         }).collect();
         if labels.is_empty() {
-            crate::empty_state::EmptyState::new("No modifications yet.",
-                "Changes to your project will appear here. Make an edit to start its history.").show(ui);
+            crate::empty_state::EmptyState::new(tr!("sidebar.no_modifications_yet"),
+                tr!("sidebar.changes_to_your_project_will_appear_here_make")).show(ui);
             return;
         }
-        ui.text_label("Hover to preview an edit. Click to restore that state.");
-        ui.weak("Up to 100 edits are saved with this project. Editing an earlier state replaces later edits.");
+        ui.text_label(tr!("sidebar.hover_to_preview_an_edit_click_to_restore"));
+        ui.weak(tr!("sidebar.up_to_100_edits_are_saved_with_this"));
         let latest = labels.len();
         let mut target = None;
         let mut preview = None;
@@ -4791,7 +4816,7 @@ impl KetchupApp {
                 .auto_shrink([false, true]),
         )
         .show(ui, |ui| {
-            for (position, label) in std::iter::once((0, "Oldest retained state".to_owned()))
+            for (position, label) in std::iter::once((0, tr!("sidebar.oldest_retained_state").to_owned()))
                 .chain(
                     labels
                         .into_iter()
@@ -4801,9 +4826,9 @@ impl KetchupApp {
                 .rev()
             {
                 let suffix = if position == current {
-                    " · Current"
+                    tr!("sidebar.current")
                 } else if position > current {
-                    " · Undone"
+                    tr!("sidebar.undone")
                 } else {
                     ""
                 };
@@ -4811,7 +4836,7 @@ impl KetchupApp {
                     .push_id(position, |ui| {
                         ui.add_sized(
                             [ui.available_width(), 28.],
-                            egui::Button::new(format!("{}. {label}{suffix}", latest - position))
+                            egui::Button::new(tr!("sidebar.history_entry", latest - position, label = label, suffix = suffix))
                                 .selected(position == current)
                                 .wrap(),
                         )
@@ -4827,8 +4852,8 @@ impl KetchupApp {
         });
         remember_scroll(ui.ctx(), "history_entries", scroll.state.clamped_offset());
         for action in self.doc.history.actions().iter().rev().take(5) {
-            let who = action.author.as_ref().map(|a| format!("{} ({})", a.name, if a.kind == "guest" { "Guest" } else if a.verified { "Server-verified account" } else { "Unverified" })).unwrap_or_else(|| "Unknown author".into());
-            ui.weak(format!("{} · {} · {} UTC", action.action, who, action.timestamp.map(|t| t.to_string()).unwrap_or_else(|| "Unknown time".into())));
+            let who = action.author.as_ref().map(|a| format!("{} ({})", a.name, if a.kind == "guest" { tr!("sidebar.guest") } else if a.verified { tr!("sidebar.server_verified_account") } else { tr!("sidebar.unverified") })).unwrap_or_else(|| tr!("sidebar.unknown_author").into());
+            ui.weak(tr!("sidebar.utc_2", action.action, who, action.timestamp.map(|t| t.to_string()).unwrap_or_else(|| tr!("sidebar.unknown_time").into())));
         }
         if let Some(target) = target {
             self.navigate_history(ui.ctx(), target);

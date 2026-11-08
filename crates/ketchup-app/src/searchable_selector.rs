@@ -1,4 +1,5 @@
 //! Shared searchable dropdown with a fixed search row and persisted results scroll.
+use ketchup_core::tr;
 use crate::natural_text::TextUi as _;
 use super::sidebar;
 use eframe::egui;
@@ -82,7 +83,7 @@ impl SearchableSelector<'_> {
                             if ui
                                 .add_enabled(
                                     !filter.is_empty(),
-                                    egui::Button::new("Clear").min_size(egui::vec2(48., height)),
+                                    egui::Button::new(tr!("common.clear")).min_size(egui::vec2(48., height)),
                                 )
                                 .clicked()
                             {

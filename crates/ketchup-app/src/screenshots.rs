@@ -1,4 +1,5 @@
 //! Screenshot settings, paper composition and portable image/PDF packaging.
+use ketchup_core::tr;
 use image::{DynamicImage, RgbaImage};
 use ketchup_core::{Camera, DVec2, DVec3, Model, Projection, StandardView};
 use serde::{Deserialize, Serialize};
@@ -28,14 +29,17 @@ impl Default for Settings {
 }
 
 pub(crate) const VIEW_LABELS: [&str; 8] = [
-    "Current",
-    "Top",
-    "Front",
-    "Back",
-    "Left",
-    "Right",
-    "Bottom",
-    "Isometric",
+    tr!("screenshots.current"),
+    tr!("screenshots.top"),
+    tr!("screenshots.front"),
+    tr!("screenshots.back"),
+    tr!("screenshots.left"),
+    tr!("screenshots.right"),
+    tr!("screenshots.bottom"),
+    tr!("screenshots.isometric"),
+];
+const VIEW_FILE_STEMS: [&str; 8] = [
+    "current", "top", "front", "back", "left", "right", "bottom", "isometric",
 ];
 const STANDARD_VIEWS: [Option<StandardView>; 8] = [
     None,
@@ -68,12 +72,12 @@ impl Paper {
     ];
     pub fn label(self) -> &'static str {
         match self {
-            Self::A5 => "A5 · 148 × 210 mm",
-            Self::A4 => "A4 · 210 × 297 mm",
-            Self::A3 => "A3 · 297 × 420 mm",
-            Self::Letter => "Letter · 8.5 × 11 in",
-            Self::Legal => "Legal · 8.5 × 14 in",
-            Self::Tabloid => "Tabloid · 11 × 17 in",
+            Self::A5 => tr!("screenshots.a5_148_210_mm"),
+            Self::A4 => tr!("screenshots.a4_210_297_mm"),
+            Self::A3 => tr!("screenshots.a3_297_420_mm"),
+            Self::Letter => tr!("screenshots.letter_8_5_11_in"),
+            Self::Legal => tr!("screenshots.legal_8_5_14_in"),
+            Self::Tabloid => tr!("screenshots.tabloid_11_17_in"),
         }
     }
     fn mm(self) -> [f64; 2] {
@@ -100,10 +104,10 @@ impl Format {
     pub const ALL: [Self; 3] = [Self::Png, Self::WebP, Self::Pdf];
     pub fn label(self) -> &'static str {
         match self {
-            Self::Png => "PNG",
-            Self::Jpeg => "JPEG",
-            Self::WebP => "WebP",
-            Self::Pdf => "PDF",
+            Self::Png => tr!("screenshots.png"),
+            Self::Jpeg => tr!("screenshots.jpeg"),
+            Self::WebP => tr!("screenshots.webp"),
+            Self::Pdf => tr!("screenshots.pdf"),
         }
     }
     pub fn extension(self) -> &'static str {
@@ -160,7 +164,7 @@ impl Settings {
     }
     pub fn validate(&self) -> Result<(), String> {
         if self.selected().is_empty() {
-            return Err("Select at least one view.".into());
+            return Err(tr!("screenshots.select_at_least_one_view").into());
         }
         let [w, h] = self.pixels();
         let pages = if self.combined {
@@ -169,7 +173,7 @@ impl Settings {
             self.selected().len() as u64
         };
         if u64::from(w) * u64::from(h) * pages > 64_000_000 {
-            return Err("This export is too large. Choose a lower resolution, smaller paper or fewer views.".into());
+            return Err(tr!("screenshots.this_export_is_too_large_choose_a_lower").into());
         }
         Ok(())
     }
@@ -310,7 +314,7 @@ pub(crate) fn encode(settings: &Settings, pages: &[RgbaImage]) -> Result<Export,
 pub(crate) fn encode_with_title(settings: &Settings, pages: &[RgbaImage], title:&str) -> Result<Export, String> {
     settings.validate()?;
     if settings.format == Format::Jpeg {
-        return Err("JPEG cannot preserve transparency. Choose PNG, WebP or PDF.".into());
+        return Err(tr!("screenshots.jpeg_cannot_preserve_transparency_choose_png_webp_or").into());
     }
     if pages.len()
         != if settings.combined {
@@ -319,7 +323,7 @@ pub(crate) fn encode_with_title(settings: &Settings, pages: &[RgbaImage], title:
             settings.selected().len()
         }
     {
-        return Err("Some screenshot views did not finish rendering.".into());
+        return Err(tr!("screenshots.some_screenshot_views_did_not_finish_rendering").into());
     }
     if settings.format == Format::Pdf {
         return Ok(Export {
@@ -352,7 +356,7 @@ pub(crate) fn encode_with_title(settings: &Settings, pages: &[RgbaImage], title:
         zip.start_file(
             format!(
                 "{}.{}",
-                VIEW_LABELS[view].to_ascii_lowercase(),
+                VIEW_FILE_STEMS[view],
                 settings.format.extension()
             ),
             zip::write::SimpleFileOptions::default()
@@ -376,8 +380,8 @@ fn pdf(mm: [f64; 2], pages: &[RgbaImage], title:&str) -> Vec<u8> {
     let mut objects: Vec<Vec<u8>> = vec![b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(), Vec::new()];
     let logo_id=3+pages.len()*4;
     let font_id=logo_id+1;
-    let date=crate::estimate_pdf::generation_date().unwrap_or_else(|_| "Date unavailable".into());
-    let header=crate::pdf_header::layout(title,"Model Views",&date,[w,h],crate::pdf_header::base_width);
+    let date=crate::estimate_pdf::generation_date().unwrap_or_else(|_| tr!("screenshots.date_unavailable").into());
+    let header=crate::pdf_header::layout(title,tr!("screenshots.model_views"),&date,[w,h],crate::pdf_header::base_width);
     let mut kids = Vec::new();
     for page in pages {
         let id = objects.len() + 1;
@@ -389,7 +393,7 @@ fn pdf(mm: [f64; 2], pages: &[RgbaImage], title:&str) -> Vec<u8> {
         });
         objects.push(pdf_image_stream(
             DynamicImage::ImageRgb8(rgb),
-            "DeviceRGB",
+            tr!("screenshots.devicergb"),
             3,
             Some(id + 3),
         ));
@@ -413,7 +417,7 @@ fn pdf(mm: [f64; 2], pages: &[RgbaImage], title:&str) -> Vec<u8> {
         );
         objects.push(pdf_image_stream(
             DynamicImage::ImageLuma8(alpha),
-            "DeviceGray",
+            tr!("screenshots.devicegray"),
             1,
             None,
         ));
@@ -471,7 +475,7 @@ fn pdf_image_stream(
         }
         at += len + 12;
     }
-    let mask = mask.map_or_else(String::new, |id| format!(" /SMask {id} 0 R"));
+    let mask = mask.map_or_else(String::new, |id| tr!("screenshots.smask_0_r", id = id));
     let mut stream = format!("<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /{color_space} /BitsPerComponent 8 /Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors {channels} /BitsPerComponent 8 /Columns {} >>{mask} /Length {} >>\nstream\n", image.width(), image.height(), image.width(), compressed.len()).into_bytes();
     stream.extend(compressed);
     stream.extend_from_slice(b"\nendstream");

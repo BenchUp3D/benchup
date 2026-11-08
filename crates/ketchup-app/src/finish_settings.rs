@@ -1,4 +1,5 @@
 //! Reusable finishing-product prices, stored with the device's material catalog.
+use ketchup_core::tr;
 use super::*;
 use crate::inspector_table::{Column, InspectorTable};
 
@@ -33,16 +34,16 @@ impl FinishType {
 
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::PreStain => "Pre-stain",
-            Self::Stain => "Stain",
-            Self::Paint => "Paint",
-            Self::Varnish => "Varnish",
-            Self::Primer => "Primer",
-            Self::Sealer => "Sealer",
-            Self::Lacquer => "Lacquer",
-            Self::Oil => "Oil",
-            Self::Wax => "Wax",
-            Self::Other => "Other",
+            Self::PreStain => tr!("finish_settings.pre_stain"),
+            Self::Stain => tr!("finish_settings.stain"),
+            Self::Paint => tr!("finish_settings.paint"),
+            Self::Varnish => tr!("finish_settings.varnish"),
+            Self::Primer => tr!("finish_settings.primer"),
+            Self::Sealer => tr!("finish_settings.sealer"),
+            Self::Lacquer => tr!("finish_settings.lacquer"),
+            Self::Oil => tr!("finish_settings.oil"),
+            Self::Wax => tr!("finish_settings.wax"),
+            Self::Other => tr!("finish_settings.other"),
         }
     }
 }
@@ -72,11 +73,11 @@ impl ContainerUnit {
 
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::Milliliters => "mL",
-            Self::Liters => "L",
-            Self::UsFluidOunces => "US fl oz",
-            Self::UsQuarts => "US qt",
-            Self::UsGallons => "US gal",
+            Self::Milliliters => tr!("finish_settings.ml"),
+            Self::Liters => tr!("finish_settings.l"),
+            Self::UsFluidOunces => tr!("finish_settings.us_fl_oz"),
+            Self::UsQuarts => tr!("finish_settings.us_qt"),
+            Self::UsGallons => tr!("finish_settings.us_gal"),
             Self::Grams => "g",
             Self::Kilograms => "kg",
         }
@@ -101,7 +102,7 @@ impl Default for Finish {
     fn default() -> Self {
         Self {
             id: ketchup_core::MaterialId::new_v4(),
-            name: "Finishing product".into(),
+            name: tr!("finish_settings.finishing_product").into(),
             finish_type: FinishType::default(),
             container_size: 1.,
             container_unit: ContainerUnit::default(),
@@ -142,13 +143,13 @@ pub(super) fn selector(
     filter: &mut String,
 ) -> egui::Response {
     use super::searchable_selector::{Choice, SearchableSelector};
-    let selected = selected_id.map_or("No product", |id| {
+    let selected = selected_id.map_or(tr!("finish_settings.no_product"), |id| {
         products
             .iter()
             .find(|product| product.id == id)
-            .map_or("Unavailable product", |product| product.name.as_str())
+            .map_or(tr!("finish_settings.unavailable_product"), |product| product.name.as_str())
     });
-    let mut none = Choice::new(None, "No product");
+    let mut none = Choice::new(None, tr!("finish_settings.no_product"));
     none.always_visible = true;
     let mut choices = vec![none];
     choices.extend(products.iter().map(|product| {
@@ -163,8 +164,8 @@ pub(super) fn selector(
         selected_label: selected,
         width: ui.available_width(),
         popup_width: 260.,
-        hint: "Search name or type…",
-        empty_text: "No products match your search.",
+        hint: tr!("finish_settings.search_name_or_type"),
+        empty_text: tr!("finish_settings.no_products_match_your_search"),
     }
     .show(ui, selected_id, filter, choices)
     .response
@@ -173,13 +174,13 @@ pub(super) fn selector(
 pub(super) fn show(ui: &mut egui::Ui, finishes: &mut Vec<Finish>, currency: &str) {
     sidebar::inspector_section(
         ui,
-        "Finishing products",
+        tr!("finish_settings.finishing_products"),
         "settings/stock/finishes",
         true,
         |ui| {
-            ui.text_weak("Pre-stain conditioner, stain, paint, varnish, and other finishes. Enter the quantity and price for one container.");
+            ui.text_weak(tr!("finish_settings.pre_stain_conditioner_stain_paint_varnish_and_other"));
             if finishes.is_empty() {
-                ui.text_weak("No finishing products yet. Add a product to save its type, container size, and price.");
+                ui.text_weak(tr!("finish_settings.no_finishing_products_yet_add_a_product_to"));
             } else {
                 let key = "settings/stock/finishes/table";
                 let scroll = sidebar::restored_scroll_area(
@@ -207,12 +208,12 @@ pub(super) fn show(ui: &mut egui::Ui, finishes: &mut Vec<Finish>, currency: &str
                     table.header(
                         ui,
                         [
-                            "Product",
-                            "Type",
-                            "Quantity",
-                            "Unit",
-                            "Price / container",
-                            "m² / container / coat",
+                            tr!("finish_settings.product"),
+                            tr!("finish_settings.type"),
+                            tr!("finish_settings.quantity"),
+                            tr!("finish_settings.unit"),
+                            tr!("finish_settings.price_container"),
+                            tr!("finish_settings.m2_container_coat"),
                             "",
                         ],
                     );
@@ -221,7 +222,7 @@ pub(super) fn show(ui: &mut egui::Ui, finishes: &mut Vec<Finish>, currency: &str
                             0 => {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut finish.name)
-                                        .hint_text("e.g. Golden oak stain")
+                                        .hint_text(tr!("finish_settings.e_g_golden_oak_stain"))
                                         .char_limit(120),
                                 );
                             }
@@ -265,7 +266,7 @@ pub(super) fn show(ui: &mut egui::Ui, finishes: &mut Vec<Finish>, currency: &str
                             }
                             4 => {
                                 ui.add(currency::price_input(currency, &mut finish.price))
-                                    .on_hover_text(format!("{currency} per container"));
+                                    .on_hover_text(tr!("finish_settings.per_container", currency = currency));
                             }
                             5 => {
                                 let mut coverage = finish.coverage_m2_per_container.unwrap_or(0.);
@@ -273,7 +274,7 @@ pub(super) fn show(ui: &mut egui::Ui, finishes: &mut Vec<Finish>, currency: &str
                                     .range(0.0..=1_000_000.)
                                     .speed(0.1)
                                     .max_decimals(3))
-                                    .on_hover_text("Area covered by one container for one coat. Use the product label; 0 means unknown. Update this when changing the container size or unit.")
+                                    .on_hover_text(tr!("finish_settings.area_covered_by_one_container_for_one_coat"))
                                     .changed()
                                 {
                                     finish.coverage_m2_per_container = (coverage > 0.).then_some(coverage);
@@ -281,8 +282,8 @@ pub(super) fn show(ui: &mut egui::Ui, finishes: &mut Vec<Finish>, currency: &str
                             }
                             _ => {
                                 if ui
-                                    .button("×")
-                                    .on_hover_text(format!("Remove {}", finish.name))
+                                    .button(tr!("finish_settings.format"))
+                                    .on_hover_text(tr!("finish_settings.remove", finish.name))
                                     .clicked()
                                 {
                                     remove = Some(finish.id);
@@ -295,9 +296,9 @@ pub(super) fn show(ui: &mut egui::Ui, finishes: &mut Vec<Finish>, currency: &str
                 if let Some(id) = remove {
                     finishes.retain(|finish| finish.id != id);
                 }
-                ui.text_weak(format!("Prices in {currency} per container · Coverage in m² per container for one coat · 0 means unknown"));
+                ui.text_weak(tr!("finish_settings.prices_in_per_container_coverage_in_m2_per", currency = currency));
             }
-            if ui.button("+ Add finishing product").clicked() {
+            if ui.button(tr!("finish_settings.add_finishing_product")).clicked() {
                 finishes.push(Finish::default());
             }
         },

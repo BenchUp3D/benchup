@@ -17,11 +17,11 @@ pub enum SolidOperation {
 impl SolidOperation {
     pub fn label(self) -> &'static str {
         match self {
-            Self::OuterShell => "Combine",
-            Self::Union => "Union",
-            Self::Intersect => "Intersect",
-            Self::Trim => "Trim",
-            Self::Split => "Split",
+            Self::OuterShell => tr!("core.solids.combine"),
+            Self::Union => tr!("core.solids.union"),
+            Self::Intersect => tr!("core.solids.intersect"),
+            Self::Trim => tr!("core.solids.trim"),
+            Self::Split => tr!("core.solids.split"),
         }
     }
 }
@@ -38,11 +38,11 @@ impl Frame {
             .flat_map(|m| m.vertices.values().map(|v| v.position));
         let first = points
             .next()
-            .ok_or("Choose a closed solid with filled faces")?;
+            .ok_or(tr!("core.solids.choose_a_closed_solid_with_filled_faces"))?;
         let (lo, hi) = points.fold((first, first), |(lo, hi), p| (lo.min(p), hi.max(p)));
         let scale = (hi - lo).max_element();
         if scale < 1e-7 {
-            return Err("The solid is too small");
+            return Err(tr!("core.solids.the_solid_is_too_small"));
         }
         Ok(Self {
             center: (lo + hi) * 0.5,
@@ -99,7 +99,7 @@ fn indexed(
     epsilon: f64,
 ) -> Result<Indexed, &'static str> {
     if polygons.len() > 12_000 {
-        return Err("The result has too many surface fragments");
+        return Err(tr!("core.solids.the_result_has_too_many_surface_fragments"));
     }
     let mut pool = Pool {
         points: vec![],
@@ -119,7 +119,7 @@ fn indexed(
         pool.add(point);
     }
     if pool.points.len() > 4096 {
-        return Err("These solids have too many vertices for this operation");
+        return Err(tr!("core.solids.these_solids_have_too_many_vertices_for_this"));
     }
     // Split T-junctions introduced by clipping or by collinear triangulation vertices.
     for (ring, _) in &mut rings {
@@ -161,7 +161,7 @@ fn polygons(mesh: &Indexed, epsilon: f64) -> Result<Vec<Polygon>, &'static str> 
         .iter()
         .map(|(r, c)| {
             Polygon::new(r.iter().map(|&id| mesh.points[id]).collect(), *c, epsilon)
-                .ok_or("The solid contains a collapsed face")
+                .ok_or(tr!("core.solids.the_solid_contains_a_collapsed_face"))
         })
         .collect()
 }
@@ -183,7 +183,7 @@ fn components(mesh: &Indexed) -> Result<Vec<Vec<usize>>, &'static str> {
     let edges = edges(mesh);
     if edges.values().any(|v| v.len() != 2) {
         return Err(
-            "Each body must be a closed solid; fill missing faces and remove internal or stray geometry",
+            tr!("core.solids.each_body_must_be_a_closed_solid_fill"),
         );
     }
     let mut adjacency = vec![vec![]; mesh.polygons.len()];
@@ -228,10 +228,10 @@ fn inside(point: DVec3, surfaces: &[Polygon]) -> bool {
 }
 fn import_surfaces(model: &Model, frame: Frame) -> Result<Vec<Polygon>, &'static str> {
     if model.faces.is_empty() {
-        return Err("The body needs filled faces to form a closed solid");
+        return Err(tr!("core.solids.the_body_needs_filled_faces_to_form_a"));
     }
     if model.faces.len() > 4096 {
-        return Err("This solid has too many faces for this operation");
+        return Err(tr!("core.solids.this_solid_has_too_many_faces_for_this"));
     }
     let boundary: BTreeSet<_> = model
         .faces
@@ -249,7 +249,7 @@ fn import_surfaces(model: &Model, frame: Frame) -> Result<Vec<Polygon>, &'static
         .values()
         .any(|e| !boundary.contains(&(e.a.min(e.b), e.a.max(e.b))))
     {
-        return Err("Remove stray edges before using a solid tool");
+        return Err(tr!("core.solids.remove_stray_edges_before_using_a_solid_tool"));
     }
     let surfaces: Vec<_> = model
         .faces
@@ -265,7 +265,7 @@ fn import_surfaces(model: &Model, frame: Frame) -> Result<Vec<Polygon>, &'static
         })
         .collect();
     if surfaces.is_empty() {
-        return Err("Choose geometry with filled faces");
+        return Err(tr!("core.solids.choose_geometry_with_filled_faces"));
     }
     Ok(surfaces)
 }
@@ -288,7 +288,7 @@ pub(crate) fn import(model: &Model, frame: Frame) -> Result<Vec<Polygon>, &'stat
     for id in roots.iter().filter(|id| model.objects.contains_key(id)) {
         let contents = model
             .object_contents(*id)
-            .ok_or("Missing object contents")?;
+            .ok_or(tr!("core.solids.missing_object_contents"))?;
         let child = match import(&contents, frame) {
             Ok(child) => child,
             // Some models organize one shell's faces into separate objects.
@@ -298,7 +298,7 @@ pub(crate) fn import(model: &Model, frame: Frame) -> Result<Vec<Polygon>, &'stat
         surfaces = csg::apply(surfaces, child, Boolean::Union, frame.epsilon)?;
     }
     if surfaces.is_empty() {
-        return Err("The body needs filled faces to form a closed solid");
+        return Err(tr!("core.solids.the_body_needs_filled_faces_to_form_a"));
     }
     Ok(surfaces)
 }
@@ -326,7 +326,7 @@ fn import_mesh(model: &Model, frame: Frame) -> Result<Vec<Polygon>, &'static str
                 let flip = flips[a].unwrap() ^ opposite;
                 match flips[b] {
                     Some(previous) if previous != flip => {
-                        return Err("The solid has inconsistent surface topology");
+                        return Err(tr!("core.solids.the_solid_has_inconsistent_surface_topology"));
                     }
                     Some(_) => {}
                     None => {
@@ -352,7 +352,7 @@ fn import_mesh(model: &Model, frame: Frame) -> Result<Vec<Polygon>, &'static str
                 .collect::<Vec<_>>(),
         );
         if volume.abs() < 1e-15 {
-            return Err("The body has no enclosed volume");
+            return Err(tr!("core.solids.the_body_has_no_enclosed_volume"));
         }
         if volume < 0. {
             for &i in group {
@@ -394,14 +394,14 @@ fn import_mesh(model: &Model, frame: Frame) -> Result<Vec<Polygon>, &'static str
 fn planar_prism(mut surfaces: Vec<Polygon>, epsilon: f64) -> Result<Vec<Polygon>, &'static str> {
     let first = surfaces
         .first()
-        .ok_or("Choose geometry with filled faces")?;
+        .ok_or(tr!("core.solids.choose_geometry_with_filled_faces"))?;
     let (normal, w) = (first.normal, first.w);
     if surfaces.iter().any(|p| {
         p.vertices
             .iter()
             .any(|v| (normal.dot(*v) - w).abs() > epsilon)
     }) {
-        return Err("Open bodies must lie in the same plane to intersect each other");
+        return Err(tr!("core.solids.open_bodies_must_lie_in_the_same_plane"));
     }
     for p in &mut surfaces {
         if p.normal.dot(normal) < 0. {
@@ -433,7 +433,7 @@ fn planar_prism(mut surfaces: Vec<Polygon>, epsilon: f64) -> Result<Vec<Polygon>
                 result.push(side);
             }
         } else if adjacent.len() != 2 {
-            return Err("Remove overlapping faces inside the planar body");
+            return Err(tr!("core.solids.remove_overlapping_faces_inside_the_planar_body"));
         }
     }
     Ok(result)
@@ -452,7 +452,7 @@ fn merged_surfaces(mesh: &Indexed, epsilon: f64) -> Result<Vec<Surface>, &'stati
             *color,
             epsilon,
         )
-        .ok_or("The result contains a collapsed face")?;
+        .ok_or(tr!("core.solids.the_result_contains_a_collapsed_face"))?;
         if let Some(group) = planes.iter_mut().find(|(n, w, c, _)| {
             *c == *color
                 && n.dot(p.normal) > 1. - 1e-12
@@ -525,14 +525,14 @@ fn merged_surfaces(mesh: &Indexed, epsilon: f64) -> Result<Vec<Surface>, &'stati
                     ring.push(current);
                     let Some(neighbor) = next.remove(&current).and_then(|v| v.first().copied())
                     else {
-                        return Err("Cannot join the clipped face boundaries");
+                        return Err(tr!("core.solids.cannot_join_the_clipped_face_boundaries"));
                     };
                     current = neighbor;
                     if current == start {
                         break;
                     }
                     if ring.len() > mesh.points.len() {
-                        return Err("The clipped boundary crosses itself");
+                        return Err(tr!("core.solids.the_clipped_boundary_crosses_itself"));
                     }
                 }
                 if ring.len() >= 3 {
@@ -571,7 +571,7 @@ fn merged_surfaces(mesh: &Indexed, epsilon: f64) -> Result<Vec<Surface>, &'stati
                 });
             }
             if outers.is_empty() {
-                return Err("Cannot orient the clipped face boundaries");
+                return Err(tr!("core.solids.cannot_orient_the_clipped_face_boundaries"));
             }
         }
     }
@@ -590,7 +590,7 @@ pub(crate) fn output(
     }
     let mut mesh = indexed(&surfaces, [], frame.epsilon)?;
     let groups = if closed {
-        components(&mesh).map_err(|_| "The result cannot form a closed solid at this precision")?
+        components(&mesh).map_err(|_| tr!("core.solids.the_result_cannot_form_a_closed_solid_at"))?
     } else {
         vec![]
     };
@@ -654,7 +654,7 @@ pub(crate) fn output(
             holes: rings,
         };
         if model.face_area(&face) <= crate::document::EPS {
-            return Err("The result contains details smaller than the model precision");
+            return Err(tr!("core.solids.the_result_contains_details_smaller_than_the_model"));
         }
         model.faces.insert(id, face);
         entities.insert(id);
@@ -701,7 +701,7 @@ impl Model {
     pub fn solid_entities(&self, entity: u64) -> Result<BTreeSet<u64>, &'static str> {
         let entity = self
             .entity_in_context(entity)
-            .ok_or("Choose a body in the current editing context")?;
+            .ok_or(tr!("core.solids.choose_a_body_in_the_current_editing_context"))?;
         if self.objects.contains_key(&entity) {
             return Ok(BTreeSet::from([entity]));
         }
@@ -718,7 +718,7 @@ impl Model {
             );
         }
         if vertices.is_empty() {
-            return Err("Choose a closed solid group, component, or connected body");
+            return Err(tr!("core.solids.choose_a_closed_solid_group_component_or_connected"));
         }
         let mut adjacency: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
         for e in self
@@ -785,13 +785,13 @@ impl Model {
         }
         let (a_ids, b_ids) = (self.solid_entities(first)?, self.solid_entities(second)?);
         if !a_ids.is_disjoint(&b_ids) {
-            return Err("Choose two different solids");
+            return Err(tr!("core.solids.choose_two_different_solids"));
         }
         if self.selection_locked(&a_ids) || self.selection_locked(&b_ids) {
-            return Err("Unlock both solids before editing them");
+            return Err(tr!("core.solids.unlock_both_solids_before_editing_them"));
         }
         if a_ids.iter().chain(&b_ids).any(|id| self.is_hidden(*id)) {
-            return Err("Show both solids before editing them");
+            return Err(tr!("core.solids.show_both_solids_before_editing_them"));
         }
         let (a, b) = (self.copy_entities(&a_ids), self.copy_entities(&b_ids));
         let frame = Frame::new(&[&a, &b])?;
@@ -815,7 +815,7 @@ impl Model {
                             .any(|v| (plane.normal.dot(*v) - plane.w).abs() > frame.epsilon)
                     }) {
                         return Err(
-                            "Open bodies must lie in the same plane to intersect each other",
+                            tr!("core.solids.open_bodies_must_lie_in_the_same_plane"),
                         );
                     }
                     let prism = planar_prism(other, frame.epsilon)?;
@@ -824,15 +824,15 @@ impl Model {
                 _ => unreachable!(),
             };
             if overlap.is_empty() {
-                return Err("The bodies have no shared surface");
+                return Err(tr!("core.solids.the_bodies_have_no_shared_surface"));
             }
             let mut next = self.clone();
             next.erase(&a_ids.union(&b_ids).copied().collect());
-            let result = output(&mut next, overlap, frame, "Intersection", false, false)?
+            let result = output(&mut next, overlap, frame, tr!("core.solids.intersection"), false, false)?
                 .into_iter()
                 .collect();
             next.validate()
-                .map_err(|_| "The result cannot be represented as valid planar geometry")?;
+                .map_err(|_| tr!("core.solids.the_result_cannot_be_represented_as_valid_planar"))?;
             *self = next;
             return Ok(result);
         }
@@ -846,30 +846,30 @@ impl Model {
             SolidOperation::Intersect => {
                 let overlap = csg::apply(a, b, Boolean::Intersect, frame.epsilon)?;
                 if overlap.is_empty() || csg::volume(&overlap).abs() < 1e-15 {
-                    return Err("The solids have no shared volume");
+                    return Err(tr!("core.solids.the_solids_have_no_shared_volume"));
                 }
-                pieces.push((overlap, "Intersection"));
+                pieces.push((overlap, tr!("core.solids.intersection")));
             }
             SolidOperation::Trim | SolidOperation::Split => {
                 let overlap = csg::apply(a.clone(), b.clone(), Boolean::Intersect, frame.epsilon)?;
                 if overlap.is_empty() || csg::volume(&overlap).abs() < 1e-15 {
-                    return Err("Choose overlapping solids for this operation");
+                    return Err(tr!("core.solids.choose_overlapping_solids_for_this_operation"));
                 }
                 let remainder_b =
                     csg::apply(b.clone(), a.clone(), Boolean::Difference, frame.epsilon)?;
                 if operation == SolidOperation::Split {
                     pieces.push((
                         csg::apply(a, b, Boolean::Difference, frame.epsilon)?,
-                        "Split A",
+                        tr!("core.solids.split_a"),
                     ));
-                    pieces.push((overlap, "Split overlap"));
+                    pieces.push((overlap, tr!("core.solids.split_overlap")));
                 }
                 pieces.push((
                     remainder_b,
                     if operation == SolidOperation::Trim {
-                        "Trimmed"
+                        tr!("core.solids.trimmed")
                     } else {
-                        "Split B"
+                        tr!("core.solids.split_b")
                     },
                 ));
             }
@@ -894,10 +894,10 @@ impl Model {
             }
         }
         next.validate()
-            .map_err(|_| "The result cannot be represented as valid planar geometry")?;
+            .map_err(|_| tr!("core.solids.the_result_cannot_be_represented_as_valid_planar"))?;
         for &id in &result {
             next.solid_volume(id)
-                .map_err(|_| "The result cannot form a valid closed solid at this precision")?;
+                .map_err(|_| tr!("core.solids.the_result_cannot_form_a_valid_closed_solid"))?;
         }
         *self = next;
         Ok(result)

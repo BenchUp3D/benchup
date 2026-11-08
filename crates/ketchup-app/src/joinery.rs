@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 use super::*;
 use crate::inspector_table::inspector_field;
 use ketchup_core::connections::{Connection, ConnectionOperation};
@@ -300,13 +301,13 @@ fn fields(ui: &mut egui::Ui, settings: &mut JointSettings, model: &Model, member
         if let Some(pair) = supported.first() { selected = *pair; }
     }
     let stock_frame = model.joinery_frame(members[0]).ok();
-    let axis_prefix = if stock_frame.is_some_and(|frame| !frame.is_project_aligned()) { "Board " } else { "" };
+    let axis_prefix = if stock_frame.is_some_and(|frame| !frame.is_project_aligned()) { tr!("joinery.board") } else { "" };
     let label = |(depth, width): (usize, usize)|
-        format!("Depth {axis_prefix}{} / Width {axis_prefix}{}", ["X", "Y", "Z"][depth], ["X", "Y", "Z"][width]);
-    inspector_field(ui, "joint_orientation", "Orientation", |ui| {
+        tr!("joinery.depth_width", ["X", "Y", "Z"][depth], ["X", "Y", "Z"][width], axis_prefix = axis_prefix);
+    inspector_field(ui, "joint_orientation", tr!("joinery.orientation"), |ui| {
         ui.add_enabled_ui(!supported.is_empty(), |ui| {
             egui::ComboBox::from_id_salt("joint_orientation")
-                .selected_text(if supported.is_empty() { "No supported orientation".to_owned() } else { label(selected) })
+                .selected_text(if supported.is_empty() { tr!("joinery.no_supported_orientation").to_owned() } else { label(selected) })
                 .show_ui(ui, |ui| {
                     for pair in supported { ui.selectable_value(&mut selected, *pair, label(*pair)); }
                 }).response
@@ -320,7 +321,7 @@ fn fields(ui: &mut egui::Ui, settings: &mut JointSettings, model: &Model, member
         fraction(
             ui,
             "joint_width",
-            "Profile width (% of overlap)",
+            tr!("joinery.profile_width_of_overlap"),
             &mut settings.width_ratio,
         );
     }
@@ -328,12 +329,12 @@ fn fields(ui: &mut egui::Ui, settings: &mut JointSettings, model: &Model, member
         fraction(
             ui,
             "joint_height",
-            "Tenon height (% of overlap)",
+            tr!("joinery.tenon_height_of_overlap"),
             &mut settings.height_ratio,
         );
     }
     if settings.kind == JointKind::Finger {
-        inspector_field(ui, "joint_fingers", "Fingers on first part", |ui| {
+        inspector_field(ui, "joint_fingers", tr!("joinery.fingers_on_first_part"), |ui| {
             ui.add(egui::DragValue::new(&mut settings.fingers).range(2..=16))
         });
     }
@@ -347,78 +348,78 @@ fn fields(ui: &mut egui::Ui, settings: &mut JointSettings, model: &Model, member
         if new_joint && settings.dovetail_width.is_none() {
             settings.dovetail_width = Some(width_mm / 1000.);
         }
-        if inspector_field(ui, "joint_dovetail_width", "Tail width", |ui| {
-            ui.add(egui::DragValue::new(&mut width_mm).range(0.1..=10000.).speed(0.5).suffix(" mm"))
+        if inspector_field(ui, "joint_dovetail_width", tr!("joinery.tail_width"), |ui| {
+            ui.add(egui::DragValue::new(&mut width_mm).range(0.1..=10000.).speed(0.5).suffix(tr!("joinery.mm")))
         }).changed() {
             settings.dovetail_width = Some(width_mm / 1000.);
         }
         let mut pin_mm = settings.dovetail_pin_width * 1000.;
-        if inspector_field(ui, "joint_dovetail_pin_width", "Minimum pin width", |ui| {
-            ui.add(egui::DragValue::new(&mut pin_mm).range(0.1..=10000.).speed(0.5).suffix(" mm"))
-                .on_hover_text("Minimum wood left between receiving sockets after clearance. Smaller pins allow more tails.")
+        if inspector_field(ui, "joint_dovetail_pin_width", tr!("joinery.minimum_pin_width"), |ui| {
+            ui.add(egui::DragValue::new(&mut pin_mm).range(0.1..=10000.).speed(0.5).suffix(tr!("joinery.mm")))
+                .on_hover_text(tr!("joinery.minimum_wood_left_between_receiving_sockets_after_clearance"))
         }).changed() {
             settings.dovetail_pin_width = pin_mm / 1000.;
             settings.dovetail_width = Some(width_mm / 1000.);
         }
-        if settings.dovetail_width.is_none() && ui.button("Fit maximum tails")
-            .on_hover_text("Keep the tail width and fit as many tails as the pin spacing allows.").clicked() {
+        if settings.dovetail_width.is_none() && ui.button(tr!("joinery.fit_maximum_tails"))
+            .on_hover_text(tr!("joinery.keep_the_tail_width_and_fit_as_many")).clicked() {
             settings.dovetail_width = Some(width_mm / 1000.);
         }
         if let Some((count, _)) = settings.dovetail_layout(span) {
             ui.text_weak(if settings.dovetail_width.is_some() {
-                format!("{count} tails fit across this joint.")
-            } else { format!("{count} tails in the saved layout.") });
+                tr!("joinery.tails_fit_across_this_joint", count = count)
+            } else { tr!("joinery.tails_in_the_saved_layout", count = count) });
         } else if span > 0. {
-            ui.text_weak("Tail and pin widths must fit the joint and produce 1–64 tails.");
+            ui.text_weak(tr!("joinery.tail_and_pin_widths_must_fit_the_joint"));
         }
-        inspector_field(ui, "joint_taper", "Dovetail angle", |ui| {
+        inspector_field(ui, "joint_taper", tr!("joinery.dovetail_angle"), |ui| {
             ui.add(
                 egui::DragValue::new(&mut settings.taper_degrees)
                     .range(1. ..=30.)
-                    .suffix("°"),
+                    .suffix(tr!("joinery.degree_symbol")),
             )
         });
     }
     let mut mm = settings.clearance * 1000.;
-    if inspector_field(ui, "joint_clearance", "Receiver clearance per side", |ui| {
+    if inspector_field(ui, "joint_clearance", tr!("joinery.receiver_clearance_per_side"), |ui| {
         ui.add(
             egui::DragValue::new(&mut mm)
                 .range(0. ..=10.)
                 .speed(0.01)
-                .suffix(" mm"),
+                .suffix(tr!("joinery.mm")),
         )
     })
     .changed()
     {
         settings.clearance = mm / 1000.;
     }
-    inspector_field(ui, "joint_trim_board", "Trim excess", |ui| {
+    inspector_field(ui, "joint_trim_board", tr!("joinery.trim_excess"), |ui| {
         egui::ComboBox::from_id_salt("joint_trim_board").selected_text(settings.trim.label())
             .show_ui(ui, |ui| {
                 for choice in [TrimBoard::None, TrimBoard::First, TrimBoard::Second] {
                     ui.selectable_value(&mut settings.trim, choice, choice.label());
                 }
             }).response
-            .on_hover_text("Shorten the selected board past the joint, following an angled outer face where possible.")
+            .on_hover_text(tr!("joinery.shorten_the_selected_board_past_the_joint_following"))
     });
     if settings.trim != TrimBoard::None {
-        inspector_field(ui, "joint_trim_axis", "Trim direction", |ui| {
-            let label = |axis: Option<usize>| axis.map_or("Automatic (longest axis)", |axis| ["Board X", "Board Y", "Board Z"][axis]);
+        inspector_field(ui, "joint_trim_axis", tr!("joinery.trim_direction"), |ui| {
+            let label = |axis: Option<usize>| axis.map_or(tr!("joinery.automatic_longest_axis"), |axis| [tr!("joinery.board_x"), tr!("joinery.board_y"), tr!("joinery.board_z")][axis]);
             egui::ComboBox::from_id_salt("joint_trim_axis").selected_text(label(settings.trim_axis))
                 .show_ui(ui, |ui| {
                     for choice in [None, Some(0), Some(1), Some(2)] {
                         ui.selectable_value(&mut settings.trim_axis, choice, label(choice));
                     }
-                }).response.on_hover_text("Direction in the selected board's local axes.")
+                }).response.on_hover_text(tr!("joinery.direction_in_the_selected_board_s_local_axes"))
         });
-        inspector_field(ui, "joint_trim_keep_end", "Keep end", |ui| {
+        inspector_field(ui, "joint_trim_keep_end", tr!("joinery.keep_end"), |ui| {
             egui::ComboBox::from_id_salt("joint_trim_keep_end").selected_text(settings.keep_end.label())
                 .show_ui(ui, |ui| {
                     for choice in [KeepEnd::Lower, KeepEnd::Upper] {
                         ui.selectable_value(&mut settings.keep_end, choice, choice.label());
                     }
                 }).response
-                .on_hover_text("Keep the lower or upper end along the selected trim direction.")
+                .on_hover_text(tr!("joinery.keep_the_lower_or_upper_end_along_the"))
         });
     }
 }
@@ -495,8 +496,8 @@ impl KetchupApp {
                 Rect::from_center_size(point, egui::vec2(28., 28.)),
                 egui::Button::new("").fill(ui.visuals().window_fill().to_opaque()),
             ).on_hover_cursor(egui::CursorIcon::Default)
-                .on_hover_text(error.as_ref().map_or_else(|| format!("Edit wood joint #{id}"),
-                    |message| format!("Wood joint #{id}: {message}\nClick to edit")));
+                .on_hover_text(error.as_ref().map_or_else(|| tr!("joinery.edit_wood_joint", id = id),
+                    |message| tr!("joinery.wood_joint_click_to_edit", id = id, message = message)));
             if error.is_some() {
                 ui.painter().add(egui::Shape::convex_polygon(
                     vec![point + egui::vec2(0., -10.), point + egui::vec2(10., 9.), point + egui::vec2(-10., 9.)],
@@ -535,7 +536,7 @@ impl KetchupApp {
                 || self.doc.model.is_hidden(*member)
         }) { return false; }
         if self.doc.model.selection_protected(&pair) {
-            self.say(ctx, "Unlock both objects before editing their joint.");
+            self.say(ctx, tr!("joinery.unlock_both_objects_before_editing_their_joint"));
             return false;
         }
         if self.project.blocked() || self.screenshot.open || self.history_preview.is_some() {
@@ -598,7 +599,7 @@ impl KetchupApp {
                     Err(errors.iter()
                         .map(|(_, e)| e.as_str())
                         .collect::<Vec<_>>()
-                        .join(" · "))
+                        .join(tr!("joinery.diagnostic_separator")))
                 }
             });
         self.joinery_dialog.preview = Some(Preview {
@@ -622,7 +623,7 @@ impl KetchupApp {
             || preview.source != self.doc.model
             || preview.settings != self.joinery.settings
         {
-            self.say(ctx,"The boards or permissions changed. Review the updated joint preview before applying.");
+            self.say(ctx,tr!("joinery.the_boards_or_permissions_changed_review_the_updated"));
             return false;
         }
         if preview.result.is_err() {
@@ -636,7 +637,7 @@ impl KetchupApp {
         let before = self.doc.model.clone();
         match self.doc.model.add_connection(connection) {
             Ok(_) => {
-                self.finish_edit("Create dynamic wood joint", before, ctx);
+                self.finish_edit(tr!("joinery.create_dynamic_wood_joint"), before, ctx);
                 self.joinery_dialog.preview = None;
                 true
             }
@@ -667,14 +668,14 @@ impl KetchupApp {
         for (id, original) in connections {
             ui.separator();
             ui.push_id(("wood_joint", id), |ui| {
-                ui.text_heading(format!("Dynamic wood joint #{id}"));
+                ui.text_heading(tr!("joinery.dynamic_wood_joint", id = id));
                 let mut changed = original.clone();
                 let mut remove = false;
                 let eligible = self.fastener_pair_eligible(ui.ctx(), original.members);
                 if !eligible {
                     warning(ui, self.fastener_pair_block_reason(ui.ctx(), original.members));
                     if self.account.sharing_available() && self.doc.shared_project.is_some()
-                        && ui.button("Review sharing status…").clicked() {
+                        && ui.button(tr!("joinery.review_sharing_status")).clicked() {
                         self.sharing.preferences.open = true;
                     }
                 }
@@ -694,10 +695,10 @@ impl KetchupApp {
                         }
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("Swap parts").clicked() {
+                        if ui.button(tr!("joinery.swap_parts")).clicked() {
                             changed.members.swap(0, 1);
                         }
-                        remove = ui.button("Delete joint").clicked();
+                        remove = ui.button(tr!("joinery.delete_joint")).clicked();
                     });
                 });
                 for (_, error) in errors.iter().filter(|(key, _)| *key == id) {
@@ -710,7 +711,7 @@ impl KetchupApp {
                     } else {
                         self.doc.model.connections.insert(id, changed);
                     }
-                    self.finish_edit("Edit dynamic wood joint", before, ui.ctx());
+                    self.finish_edit(tr!("joinery.edit_dynamic_wood_joint"), before, ui.ctx());
                     self.joinery_dialog.preview = None;
                 }
             });
@@ -726,10 +727,10 @@ impl KetchupApp {
                 .content_margin(18)
                 .auto_shrink([false, false]),
         ).show(ui, |ui| {
-            sidebar::inspector_section(ui, "Wood Joinery", "connections/wood_joinery", true, |ui| {
-        ui.text_weak("Create a dynamic relation. Moving either board updates the joint automatically.");
+            sidebar::inspector_section(ui, tr!("joinery.wood_joinery"), "connections/wood_joinery", true, |ui| {
+        ui.text_weak(tr!("joinery.create_a_dynamic_relation_moving_either_board_updates"));
                     let Some(members)=self.joinery_dialog.members else {
-                        ui.text_weak("Select exactly two boards and reopen Wood Joinery from the Tools menu.");return;
+                        ui.text_weak(tr!("joinery.select_exactly_two_boards_and_reopen_wood_joinery"));return;
                     };
                     self.joint_connections(ui,members);
                     if !self.doc.model.has_joinery_between(members) {
@@ -737,14 +738,14 @@ impl KetchupApp {
                         let eligible = self.fastener_pair_eligible(&ctx, members);
                         if !eligible { warning(ui, self.fastener_pair_block_reason(&ctx, members)); }
                         ui.add_enabled_ui(eligible, |ui| {
-                            ui.checkbox(&mut self.joinery.reverse, "Swap first and second boards");
+                            ui.checkbox(&mut self.joinery.reverse, tr!("joinery.swap_first_and_second_boards"));
                             let mut ordered = members;
                             if self.joinery.reverse { ordered.swap(0, 1); }
                             fields(ui, &mut self.joinery.settings, &self.doc.model, ordered,
                                 &mut self.joinery_dialog.orientations, self.joinery_dialog.diagnostics.revision, true);
                         });
                         if eligible && self.refresh_joint_preview() { ctx.request_repaint(); }
-                        if ui.add_enabled(eligible, egui::Button::new("Apply")
+                        if ui.add_enabled(eligible, egui::Button::new(tr!("common.apply"))
                             .min_size(egui::vec2(ui.available_width(), ui.spacing().interact_size.y))).clicked() {
                             self.apply_joint_preview(&ctx);
                         }
@@ -765,7 +766,7 @@ impl KetchupApp {
             let (text, background) = warning_colors(p.ctx().global_style().visuals.dark_mode);
             let mut position = rect.left_top() + egui::vec2(16., 18.);
             for (id, error) in evaluation.errors.iter().take(4) {
-                let galley = p.layout(format!("Wood joint #{id} suspended: {error}"),
+                let galley = p.layout(tr!("joinery.wood_joint_suspended", id = id, error = error),
                     FontId::proportional(12.), text, (rect.width() - 48.).max(1.));
                 let bounds = Rect::from_min_size(position, galley.size());
                 p.rect_filled(bounds.expand(6.), 4, background);

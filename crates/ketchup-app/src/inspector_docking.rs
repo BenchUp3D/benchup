@@ -1,5 +1,6 @@
 //! Persistent, nested split areas for inspector sections. A center drop joins
 //! the hovered stack; a drop within 15 points inside an edge splits that area.
+use ketchup_core::tr;
 use super::*;
 
 const SNAP_RANGE: f32 = 15.;
@@ -649,7 +650,7 @@ impl KetchupApp {
             });
             let header = header.interact(egui::Sense::click_and_drag())
                 .on_hover_cursor(egui::CursorIcon::Grab)
-                .on_hover_text("Drop within 15px inside an area's edge to split; cross a section's vertical midpoint to reorder, or drop in another area's center to join");
+                .on_hover_text(tr!("inspector_docking.drop_within_15px_inside_an_area_s_edge"));
             if let Some(rect) = action_rect {
                 // Use the header's layer so the button follows sticky and floating headers.
                 let mut action_ui = panel_ui.new_child(
@@ -671,12 +672,12 @@ impl KetchupApp {
                         egui::Button::new(icons::ellipsis_atom(colors.muted))
                             .min_size(rect.size()),
                     )
-                    .on_hover_text("Section actions");
+                    .on_hover_text(tr!("inspector_docking.section_actions"));
                 menu_button.widget_info(|| {
                     egui::WidgetInfo::labeled(
                         egui::Role::Button,
                         action_ui.is_enabled(),
-                        "Section actions",
+                        tr!("inspector_docking.section_actions"),
                     )
                 });
                 egui::Popup::menu(&menu_button)
@@ -685,9 +686,9 @@ impl KetchupApp {
                     .show(|ui| {
                         if section == InspectorSection::Materials {
                             if ui
-                                .button("Settings")
+                                .button(tr!("inspector_docking.settings"))
                                 .on_hover_text(
-                                    "Manage available stock materials, sizes, and prices",
+                                    tr!("inspector_docking.manage_available_stock_materials_sizes_and_prices"),
                                 )
                                 .clicked()
                             {
@@ -696,8 +697,8 @@ impl KetchupApp {
                                 ui.close();
                             }
                         } else if ui
-                            .add_enabled(!self.project.blocked(), egui::Button::new("Generate PDF"))
-                            .on_hover_text("Export time and cost estimates as PDF")
+                            .add_enabled(!self.project.blocked(), egui::Button::new(tr!("inspector_docking.generate_pdf")))
+                            .on_hover_text(tr!("inspector_docking.export_time_and_cost_estimates_as_pdf"))
                             .clicked()
                         {
                             self.export_time_estimates(ui.ctx());

@@ -1,4 +1,5 @@
 //! One currency preference and one price format for catalogs and estimates.
+use ketchup_core::tr;
 #[cfg(test)]
 use crate::test_ui::ContextExt as _;
 use super::searchable_selector::{Choice, SearchableSelector};
@@ -8,41 +9,41 @@ pub(super) const DEFAULT: &str = "USD";
 pub(super) const RESULTS_SCROLL_KEY: &str = "settings/stock/currency/results";
 
 const CURRENCIES: &[(&str, &str)] = &[
-    ("AED", "UAE dirham"),
-    ("AUD", "Australian dollar"),
-    ("BRL", "Brazilian real"),
-    ("CAD", "Canadian dollar"),
-    ("CHF", "Swiss franc"),
-    ("CLP", "Chilean peso"),
-    ("CNY", "Chinese yuan"),
-    ("COP", "Colombian peso"),
-    ("CZK", "Czech koruna"),
-    ("DKK", "Danish krone"),
-    ("EUR", "Euro"),
-    ("GBP", "British pound"),
-    ("HKD", "Hong Kong dollar"),
-    ("HUF", "Hungarian forint"),
-    ("IDR", "Indonesian rupiah"),
-    ("ILS", "Israeli shekel"),
-    ("INR", "Indian rupee"),
-    ("JPY", "Japanese yen"),
-    ("KRW", "South Korean won"),
-    ("MXN", "Mexican peso"),
-    ("MYR", "Malaysian ringgit"),
-    ("NOK", "Norwegian krone"),
-    ("NZD", "New Zealand dollar"),
-    ("PHP", "Philippine peso"),
-    ("PLN", "Polish zloty"),
-    ("RON", "Romanian leu"),
-    ("SAR", "Saudi riyal"),
-    ("SEK", "Swedish krona"),
-    ("SGD", "Singapore dollar"),
-    ("THB", "Thai baht"),
-    ("TRY", "Turkish lira"),
-    ("TWD", "Taiwan dollar"),
-    ("USD", "US dollar"),
-    ("VND", "Vietnamese dong"),
-    ("ZAR", "South African rand"),
+    ("AED", tr!("currency.uae_dirham")),
+    ("AUD", tr!("currency.australian_dollar")),
+    ("BRL", tr!("currency.brazilian_real")),
+    ("CAD", tr!("currency.canadian_dollar")),
+    ("CHF", tr!("currency.swiss_franc")),
+    ("CLP", tr!("currency.chilean_peso")),
+    ("CNY", tr!("currency.chinese_yuan")),
+    ("COP", tr!("currency.colombian_peso")),
+    ("CZK", tr!("currency.czech_koruna")),
+    ("DKK", tr!("currency.danish_krone")),
+    ("EUR", tr!("currency.euro")),
+    ("GBP", tr!("currency.british_pound")),
+    ("HKD", tr!("currency.hong_kong_dollar")),
+    ("HUF", tr!("currency.hungarian_forint")),
+    ("IDR", tr!("currency.indonesian_rupiah")),
+    ("ILS", tr!("currency.israeli_shekel")),
+    ("INR", tr!("currency.indian_rupee")),
+    ("JPY", tr!("currency.japanese_yen")),
+    ("KRW", tr!("currency.south_korean_won")),
+    ("MXN", tr!("currency.mexican_peso")),
+    ("MYR", tr!("currency.malaysian_ringgit")),
+    ("NOK", tr!("currency.norwegian_krone")),
+    ("NZD", tr!("currency.new_zealand_dollar")),
+    ("PHP", tr!("currency.philippine_peso")),
+    ("PLN", tr!("currency.polish_zloty")),
+    ("RON", tr!("currency.romanian_leu")),
+    ("SAR", tr!("currency.saudi_riyal")),
+    ("SEK", tr!("currency.swedish_krona")),
+    ("SGD", tr!("currency.singapore_dollar")),
+    ("THB", tr!("currency.thai_baht")),
+    ("TRY", tr!("currency.turkish_lira")),
+    ("TWD", tr!("currency.taiwan_dollar")),
+    ("USD", tr!("currency.us_dollar")),
+    ("VND", tr!("currency.vietnamese_dong")),
+    ("ZAR", tr!("currency.south_african_rand")),
 ];
 
 // Saved preferences used to allow arbitrary text. Upgrade familiar symbols and
@@ -83,7 +84,7 @@ fn label(value: &str) -> String {
     CURRENCIES
         .iter()
         .find(|(code, _)| *code == value)
-        .map(|(code, name)| format!("{code} — {name}"))
+        .map(|(code, name)| tr!("currency.code_and_name", code = code, name = name))
         .unwrap_or_else(|| value.to_owned())
 }
 
@@ -121,7 +122,7 @@ pub(super) fn selector(
     choices.extend(
         CURRENCIES
             .iter()
-            .map(|(code, name)| Choice::new((*code).to_owned(), format!("{code} — {name}"))),
+            .map(|(code, name)| Choice::new((*code).to_owned(), tr!("currency.code_and_name", code = code, name = name))),
     );
     SearchableSelector {
         id_salt: egui::IdSalt::new("settings_material_currency"),
@@ -129,8 +130,8 @@ pub(super) fn selector(
         selected_label: &label(currency),
         width: 220.,
         popup_width: 220.,
-        hint: "Search code or name…",
-        empty_text: "No currencies match your search.",
+        hint: tr!("currency.search_code_or_name"),
+        empty_text: tr!("currency.no_currencies_match_your_search"),
     }
     .show(ui, currency, filter, choices)
     .response

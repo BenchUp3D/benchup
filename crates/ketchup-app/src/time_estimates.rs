@@ -1,7 +1,8 @@
 //! Stock, finishing, and whole-project joinery estimates.
+use ketchup_core::tr;
 use super::*;
 use crate::inspector_table::{Column, InspectorTable, product_cell_text};
-use ketchup_core::Model;
+use ketchup_core::{Model, surface_treatment::Task};
 use ketchup_core::{connections::ConnectionOperation, joinery::JointKind};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -30,8 +31,8 @@ pub(super) use ketchup_core::surface_treatment::{Duration, Settings, Step};
 
 pub(super) const JOINERY_SECTION_KEY: &str = "time_estimates_joinery";
 const JOINERY_SCOPE: &str =
-    "Counts all configured wood joints, regardless of selection, visibility, or editing context.";
-const JOINERY_ALLOWANCE_NOTE: &str = "Allowances cover layout, cutting, and fitting both parts of each joint. Defaults assume shop power tools and jigs. Actual time varies by tooling and workflow.";
+    tr!("time_estimates.counts_all_configured_wood_joints_regardless_of_selection");
+const JOINERY_ALLOWANCE_NOTE: &str = tr!("time_estimates.allowances_cover_layout_cutting_and_fitting_both_parts");
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct JoineryRates(BTreeMap<JointKind, f64>);
@@ -82,7 +83,7 @@ impl JoineryRow {
 }
 
 struct TimeBreakdown {
-    finishing: Vec<(String, Duration, usize)>,
+    finishing: Vec<(Task, Duration, usize)>,
     joinery: [JoineryRow; JointKind::ALL.len()],
     joinery_work: f64,
     duration: Duration,
@@ -298,49 +299,26 @@ fn object_tasks(
     model: &Model,
     areas: &std::collections::BTreeMap<u64, f64>,
     defaults: &Settings,
-) -> Vec<(String, Duration, usize)> {
-    let mut groups = std::collections::BTreeMap::<String, (Duration, usize)>::new();
+) -> Vec<(Task, Duration, usize)> {
+    let mut groups = BTreeMap::<Task, (Duration, usize)>::new();
     for (id, area) in areas {
         let mut settings = model.objects[id]
             .surface_treatment_override()
             .unwrap_or(defaults)
             .clone();
         settings.sanitize();
-        for (title, duration) in settings.task_estimates(*area) {
-            let (total, count) = groups.entry(title).or_default();
+        for (task, duration) in settings.tasks(*area) {
+            let (total, count) = groups.entry(task).or_default();
             total.work += duration.work;
             // Objects dry together after each coat; wait for the slowest one.
             total.wait = total.wait.max(duration.wait);
             *count += 1;
         }
     }
-    let mut tasks: Vec<_> = groups
+    groups
         .into_iter()
-        .map(|(title, (duration, count))| (title, duration, count))
-        .collect();
-    // Keep the treatment sequence, including sanding between individual coats.
-    tasks.sort_by_key(|(title, _, _)| {
-        let number = |text: &str| {
-            text.split(|c: char| !c.is_ascii_digit())
-                .find(|part| !part.is_empty())
-                .and_then(|part| part.parse::<u32>().ok())
-                .unwrap_or(0)
-        };
-        if title.starts_with("Sanding") {
-            if let Some((_, coat)) = title.split_once("after coat ") {
-                (3, number(coat), number(title))
-            } else {
-                (0, 0, number(title))
-            }
-        } else if title.starts_with("Pre-stain") {
-            (1, number(title), 0)
-        } else if title.starts_with("Stain") {
-            (2, number(title), 0)
-        } else {
-            (3, number(title), 0)
-        }
-    });
-    tasks
+        .map(|(task, (duration, count))| (task, duration, count))
+        .collect()
 }
 
 fn time_breakdown(
@@ -423,16 +401,16 @@ fn finishing_costs(
                 return FinishCost {
                     product_id: id,
                     name: if id.is_some() {
-                        "Unavailable finishing product"
+                        tr!("time_estimates.unavailable_finishing_product")
                     } else {
-                        "Unassigned finishing product"
+                        tr!("time_estimates.unassigned_finishing_product")
                     }
                     .into(),
                     kind: None,
                     containers: None,
                     price: None,
                     amount: None,
-                    issue: Some("Choose a product for each enabled finishing step."),
+                    issue: Some(tr!("time_estimates.choose_a_product_for_each_enabled_finishing_step")),
                 };
             };
             // Coverage is specified for the exact configured container, regardless of
@@ -455,11 +433,11 @@ fn finishing_costs(
                 price,
                 amount,
                 issue: if containers.is_none() {
-                    Some("Coverage missing: set m² per container per coat in Settings → Material.")
+                    Some(tr!("time_estimates.coverage_missing_set_m2_per_container_per_coat"))
                 } else if price.is_none() {
-                    Some("Price missing: set the price per container in Settings → Material.")
+                    Some(tr!("time_estimates.price_missing_set_the_price_per_container_in"))
                 } else if amount.is_none() {
-                    Some("Cost exceeds estimate range.")
+                    Some(tr!("time_estimates.cost_exceeds_estimate_range"))
                 } else {
                     None
                 },
@@ -497,7 +475,7 @@ fn finishing_cost_rows(
         }
         cost_group(
             ui,
-            kind.map_or("Unresolved finishing products", |kind| kind.label()),
+            kind.map_or(tr!("time_estimates.unresolved_finishing_products"), |kind| kind.label()),
         );
         for (index, cost) in costs
             .iter()
@@ -509,7 +487,7 @@ fn finishing_cost_rows(
                     0 => cost.name.clone(),
                     1 => cost
                         .containers
-                        .map(|value| format!("{value:.0}"))
+                        .map(|value| tr!("time_estimates.container_count", value = value))
                         .unwrap_or_else(|| "—".into()),
                     2 => cost
                         .price
@@ -539,19 +517,19 @@ fn finishing_cost_rows(
 fn format_minutes(minutes: f64) -> String {
     // Keep fractional-minute work visible without inflating the total of zero steps.
     if !minutes.is_finite() || minutes >= u64::MAX as f64 {
-        return "Exceeds estimate range".into();
+        return tr!("time_estimates.exceeds_estimate_range").into();
     }
     if minutes > 0. && minutes < 1. {
         return "<1 min".into();
     }
     let rounded = minutes.round() as u64;
-    format!("{} h {} min", rounded / 60, rounded % 60)
+    tr!("time_estimates.h_min", rounded / 60, rounded % 60)
 }
 
 fn joinery_controls(ui: &mut egui::Ui, rows: &[JoineryRow], rates: &mut JoineryRates) {
     sidebar::inspector_section(
         ui,
-        "Joinery · Whole project",
+        tr!("time_estimates.joinery_whole_project"),
         JOINERY_SECTION_KEY,
         true,
         |ui| {
@@ -568,7 +546,7 @@ fn joinery_controls(ui: &mut egui::Ui, rows: &[JoineryRow], rates: &mut JoineryR
             .striped();
             table.row(ui, "joinery_headers", |column, ui| {
                 ui.text_label(
-                    RichText::new(["Joint", "Count", "Min / joint", "Hands-on"][column]).strong(),
+                    RichText::new([tr!("time_estimates.joint"), tr!("time_estimates.count"), tr!("time_estimates.min_joint"), tr!("time_estimates.hands_on")][column]).strong(),
                 );
             });
             for row in rows {
@@ -588,8 +566,8 @@ fn joinery_controls(ui: &mut egui::Ui, rows: &[JoineryRow], rates: &mut JoineryR
                                     .speed(0.5)
                                     .range(0.0..=f64::MAX),
                             )
-                            .on_hover_text(format!(
-                                "Default allowance is {} minutes per joint.",
+                            .on_hover_text(tr!(
+                                "time_estimates.default_allowance_is_minutes_per_joint",
                                 JoineryRates::default_minutes(row.kind)
                             ))
                             .changed()
@@ -624,13 +602,14 @@ fn wait_input(ui: &mut egui::Ui, hours: &mut f64) {
 fn finish_controls(
     ui: &mut egui::Ui,
     title: &str,
+    wait_label: &str,
     key: &'static str,
     step: &mut Step,
     products: &[finish_settings::Finish],
     filter: &mut String,
 ) {
     sidebar::inspector_section(ui, title, key, false, |ui| {
-        ui.checkbox(&mut step.enabled, "Include in estimate");
+        ui.checkbox(&mut step.enabled, tr!("time_estimates.include_in_estimate"));
         if !step.enabled {
             return;
         }
@@ -638,14 +617,10 @@ fn finish_controls(
             InspectorTable::new(ui.available_width(), [Column::flex(0.4), Column::flex(0.6)])
                 .centered();
         for (row, label) in [
-            "Product",
-            "Minutes / m²",
-            "Coats",
-            if title == "Pre-stain" {
-                "Soak per coat"
-            } else {
-                "Wait per coat"
-            },
+            tr!("time_estimates.product"),
+            tr!("time_estimates.minutes_m2"),
+            tr!("time_estimates.coats"),
+            wait_label,
         ]
         .into_iter()
         .enumerate()
@@ -674,16 +649,16 @@ fn finish_controls(
             });
         }
         if products.is_empty() {
-            ui.text_weak("Add finishing products in Settings → Material.");
+            ui.text_weak(tr!("time_estimates.add_finishing_products_in_settings_material"));
         } else if step
             .product_id
             .is_some_and(|id| !products.iter().any(|product| product.id == id))
         {
-            ui.text_weak("The selected product is no longer in Settings → Material. Choose a replacement or clear it.");
+            ui.text_weak(tr!("time_estimates.the_selected_product_is_no_longer_in_settings"));
         }
         let mut separate = step.final_drying_hours.is_some();
         if ui
-            .checkbox(&mut separate, "Different wait after final coat")
+            .checkbox(&mut separate, tr!("time_estimates.different_wait_after_final_coat"))
             .changed()
         {
             step.final_drying_hours = separate.then_some(step.drying_hours);
@@ -691,7 +666,7 @@ fn finish_controls(
         if let Some(hours) = &mut step.final_drying_hours {
             table.row(ui, (key, "final_wait"), |column, ui| {
                 if column == 0 {
-                    ui.text_label("Final wait");
+                    ui.text_label(tr!("time_estimates.final_wait"));
                 } else {
                     wait_input(ui, hours);
                 }
@@ -726,7 +701,7 @@ pub(super) fn treatment_controls(
             "entity/treatment/varnish",
         ]
     };
-    sidebar::inspector_section(ui, "Sanding", keys[0], false, |ui| {
+    sidebar::inspector_section(ui, tr!("time_estimates.sanding"), keys[0], false, |ui| {
         settings.sanitize();
         let mut remove = None;
         for i in 0..settings.sanding_grits.len() {
@@ -735,16 +710,16 @@ pub(super) fn treatment_controls(
             let section_key = sidebar::item_section_key(ui.ctx(), &alias);
             if sidebar::inspector_section_with_remove(
                 ui,
-                &format!("{grit} grit"),
+                &tr!("time_estimates.grit_2", grit = grit),
                 &section_key,
                 |ui| {
-                    ui.checkbox(&mut settings.sanding[i].enabled, "Include in estimate");
+                    ui.checkbox(&mut settings.sanding[i].enabled, tr!("time_estimates.include_in_estimate"));
                     let mut table = InspectorTable::new(
                         ui.available_width(),
                         [Column::flex(0.4), Column::flex(0.6)],
                     )
                     .centered();
-                    for (row, label) in ["Grit", "Minutes / m²", "Between coats"]
+                    for (row, label) in [tr!("time_estimates.grit_3"), tr!("time_estimates.minutes_m2"), tr!("time_estimates.between_coats")]
                         .into_iter()
                         .enumerate()
                     {
@@ -759,7 +734,7 @@ pub(super) fn treatment_controls(
                                                 .range(1..=u32::MAX)
                                                 .speed(1.),
                                         )
-                                        .on_hover_text("Enter any positive grit number, including values above 320");
+                                        .on_hover_text(tr!("time_estimates.enter_any_positive_grit_number_including_values_above"));
                                     }
                                     1 => {
                                         ui.add_enabled_ui(settings.sanding[i].enabled, |ui| {
@@ -768,7 +743,7 @@ pub(super) fn treatment_controls(
                                 }
                                 _ => {
                                     ui.checkbox(&mut settings.sanding_after_varnish[i], "")
-                                        .on_hover_text("Between varnish coats: sand after each coat except the last, instead of before finishing.");
+                                        .on_hover_text(tr!("time_estimates.between_varnish_coats_sand_after_each_coat_except"));
                                 }
                             }
                         }
@@ -802,7 +777,7 @@ pub(super) fn treatment_controls(
         if ui
             .add_sized(
                 egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
-                egui::Button::new("Add grit"),
+                egui::Button::new(tr!("time_estimates.add_grit")),
             )
             .clicked()
         {
@@ -828,22 +803,29 @@ pub(super) fn treatment_controls(
         }
         ui.text_label(
             RichText::new(
-                "Between coats applies to varnish only. Enable varnish with at least 2 coats.",
+                tr!("time_estimates.between_coats_applies_to_varnish_only_enable_varnish"),
             )
             .small()
             .color(colors.muted),
         );
     });
     ui.add_space(8.);
-    sidebar::inspector_section(ui, "Finishing", keys[1], false, |ui| {
-        for (title, key, step) in [
-            ("Pre-stain", keys[2], &mut settings.pre_stain),
-            ("Stain", keys[3], &mut settings.stain),
-            ("Varnish", keys[4], &mut settings.varnish),
+    sidebar::inspector_section(ui, tr!("time_estimates.finishing"), keys[1], false, |ui| {
+        let wait = tr!("time_estimates.wait_per_coat");
+        for (title, wait_label, key, step) in [
+            (
+                tr!("time_estimates.pre_stain"),
+                tr!("time_estimates.soak_per_coat"),
+                keys[2],
+                &mut settings.pre_stain,
+            ),
+            (tr!("time_estimates.stain"), wait, keys[3], &mut settings.stain),
+            (tr!("time_estimates.varnish"), wait, keys[4], &mut settings.varnish),
         ] {
             finish_controls(
                 ui,
                 title,
+                wait_label,
                 key,
                 step,
                 products,
@@ -905,15 +887,15 @@ impl KetchupApp {
                 .has_joints()
                 .then(|| {
                     [
-                        "Joinery (whole project)".into(),
+                        tr!("time_estimates.joinery_whole_project_2").into(),
                         format_minutes(time.joinery_work),
                         format_minutes(0.),
                     ]
                 })
                 .into_iter()
-                .chain(time.finishing.iter().map(|(title, duration, count)| {
+                .chain(time.finishing.iter().map(|(task, duration, count)| {
                     [
-                        format!("{title} ({count} objects)"),
+                        tr!("time_estimates.objects", count = *count, title = task.label()),
                         format_minutes(duration.work),
                         format_minutes(duration.wait),
                     ]
@@ -939,15 +921,17 @@ impl KetchupApp {
             ],
             ..Default::default()
         };
-        report.notes.push(format!("{} - {} wood surfaces. Finishing applies only to objects assigned a material from Settings > Material > Wood.",
-            self.doc.display.units.format_area(area), if self.selected.is_empty() { "Visible" } else { "Selected" }));
-        report.notes.push(format!(
-            "Joinery (whole project). {JOINERY_SCOPE} {JOINERY_ALLOWANCE_NOTE}"
+        report.notes.push(tr!("time_estimates.wood_surfaces_finishing_applies_only_to_objects_assigned",
+            self.doc.display.units.format_area(area), if self.selected.is_empty() { tr!("time_estimates.visible") } else { tr!("time_estimates.selected") }));
+        report.notes.push(tr!(
+            "time_estimates.joinery_whole_project_3",
+            JOINERY_SCOPE = JOINERY_SCOPE,
+            JOINERY_ALLOWANCE_NOTE = JOINERY_ALLOWANCE_NOTE,
         ));
-        report.notes.push(format!("Kerf {} - Rotation {}. Stock uses each part's full bounding box, including cutting waste; notches and cutouts do not reduce the blank.",
+        report.notes.push(tr!("time_estimates.kerf_rotation_stock_uses_each_part_s_full",
             self.doc.display.units.format_length(self.project.cutting_plan_layout.kerf_mm / 1000.),
-            if self.project.cutting_plan_layout.allow_rotation { "on" } else { "off" }));
-        report.notes.push("Finishes: whole containers purchased. Surface area and coats are combined across objects and steps for each product before rounding. Coverage is per configured container per coat. Labor is not included in the price.".into());
+            if self.project.cutting_plan_layout.allow_rotation { tr!("time_estimates.rotation_on") } else { tr!("time_estimates.rotation_off") }));
+        report.notes.push(tr!("time_estimates.finishes_whole_containers_purchased_surface_area_and_coats").into());
         match self.estimate_cache.materials(
             &self.doc.model,
             &self.selected,
@@ -956,13 +940,13 @@ impl KetchupApp {
             Ok(plan) => {
                 partial |= plan.skipped > 0;
                 if plan.skipped > 0 {
-                    report.notes.push(format!(
-                        "Estimate incomplete: {} assigned items omitted: no usable thickness.",
-                        plan.skipped
+                    report.notes.push(tr!(
+                        "time_estimates.estimate_incomplete_items_omitted",
+                        count = plan.skipped
                     ));
                 }
                 let mut group = Group {
-                    title: "Wood stock".into(),
+                    title: tr!("time_estimates.wood_stock").into(),
                     rows: Vec::new(),
                 };
                 for required in &plan.requirements {
@@ -977,28 +961,20 @@ impl KetchupApp {
                     partial |= price.is_none() || required.excluded > 0;
                     let mut item = required.material.name.clone();
                     if price.is_none() {
-                        item.push_str("\nPrice unavailable. Add a price in Settings > Material.");
+                        item.push_str(tr!("time_estimates.price_unavailable_add_a_price_in_settings_material"));
                     }
                     if required.excluded > 0 {
-                        item.push_str(&format!(
-                            "\n{} cuts do not fit - Excluded from cost.",
-                            required.excluded
+                        item.push_str(&tr!(
+                            "time_estimates.cuts_excluded_note",
+                            count = required.excluded
                         ));
                     }
                     group.rows.push([
                         item,
-                        format!(
-                            "{} {}",
-                            required.quantity,
-                            if required.quantity == 1 {
-                                "piece"
-                            } else {
-                                "pieces"
-                            }
-                        ),
+                        tr!("common.pieces", count = required.quantity),
                         price
                             .map(|value| currency::format_value(&catalog.currency, value))
-                            .unwrap_or_else(|| "Unavailable".into()),
+                            .unwrap_or_else(|| tr!("time_estimates.unavailable").into()),
                         price
                             .map(|value| {
                                 currency::format_value(
@@ -1006,7 +982,7 @@ impl KetchupApp {
                                     required.quantity as f64 * value,
                                 )
                             })
-                            .unwrap_or_else(|| "Unavailable".into()),
+                            .unwrap_or_else(|| tr!("time_estimates.unavailable").into()),
                     ]);
                 }
                 if !group.rows.is_empty() {
@@ -1015,7 +991,7 @@ impl KetchupApp {
             }
             Err(message) => {
                 partial = true;
-                report.notes.push(format!("No stock estimate yet: {message}. Assign stock materials to solid parts and configure stock sizes/prices in Settings > Material."));
+                report.notes.push(tr!("time_estimates.no_stock_estimate_yet_assign_stock_materials_to", message = message));
             }
         }
         for kind in finish_settings::FinishType::ALL
@@ -1025,7 +1001,7 @@ impl KetchupApp {
         {
             let mut group = Group {
                 title: kind
-                    .map_or("Unresolved finishing products", |kind| kind.label())
+                    .map_or(tr!("time_estimates.unresolved_finishing_products"), |kind| kind.label())
                     .into(),
                 rows: Vec::new(),
             };
@@ -1035,38 +1011,29 @@ impl KetchupApp {
                     .product_id
                     .and_then(|id| catalog.finishes.iter().find(|product| product.id == id))
                 {
-                    item.push_str(&format!(
-                        "\nContainer: {} {}",
+                    item.push_str(&tr!(
+                        "time_estimates.container",
                         product.container_size,
                         product.container_unit.label()
                     ));
                     if let Some(coverage) = product.coverage_m2_per_container {
-                        item.push_str(&format!("; coverage {coverage} m² per container per coat"));
+                        item.push_str(&tr!("time_estimates.coverage_m2_per_container_per_coat", coverage = coverage));
                     }
                 }
                 if let Some(issue) = cost.issue {
-                    item.push_str(&format!("\n{issue}"));
+                    item.push_str(&tr!("time_estimates.product_issue", issue = issue));
                 }
                 group.rows.push([
                     item,
                     cost.containers
-                        .map(|value| {
-                            format!(
-                                "{value:.0} {}",
-                                if value == 1. {
-                                    "container"
-                                } else {
-                                    "containers"
-                                }
-                            )
-                        })
-                        .unwrap_or_else(|| "Unknown".into()),
+                        .map(|value| tr!("time_estimates.containers", count = value))
+                        .unwrap_or_else(|| tr!("time_estimates.unknown").into()),
                     cost.price
                         .map(|value| currency::format_value(&catalog.currency, value))
-                        .unwrap_or_else(|| "Unavailable".into()),
+                        .unwrap_or_else(|| tr!("time_estimates.unavailable").into()),
                     cost.amount
                         .map(|value| currency::format_value(&catalog.currency, value))
-                        .unwrap_or_else(|| "Unavailable".into()),
+                        .unwrap_or_else(|| tr!("time_estimates.unavailable").into()),
                 ]);
             }
             if !group.rows.is_empty() {
@@ -1075,27 +1042,27 @@ impl KetchupApp {
         }
         if area <= 0. {
             report.notes.push(
-                "No visible surfaces with assigned wood materials in the current scope.".into(),
+                tr!("time_estimates.no_visible_surfaces_with_assigned_wood_materials_in").into(),
             );
         } else if time.finishing.is_empty() {
-            report.notes.push("No treatment tasks enabled. Choose sanding grits or finishes for objects in Materials.".into());
+            report.notes.push(tr!("time_estimates.no_treatment_tasks_enabled_choose_sanding_grits_or").into());
         }
         report.summary = [
             if report.costs.is_empty() && partial {
-                "Unavailable".into()
+                tr!("time_estimates.unavailable").into()
             } else {
                 format!(
                     "{} {}{}",
                     report.currency,
                     currency::format_value(&catalog.currency, total),
-                    if partial { " (partial)" } else { "" }
+                    if partial { tr!("time_estimates.partial") } else { "" }
                 )
             },
             format_minutes(duration.work),
             format_minutes(duration.wait),
         ];
         if partial {
-            report.notes.insert(0, "Estimate incomplete: the priced subtotal excludes items with missing prices/coverage and cuts that do not fit. Review all item warnings.".into());
+            report.notes.insert(0, tr!("time_estimates.estimate_incomplete_the_priced_subtotal_excludes_items_with").into());
         }
         report
     }
@@ -1150,7 +1117,7 @@ impl KetchupApp {
             object.surface_treatment_customized = true;
         }
         if self.doc.model != before {
-            self.finish_edit("Apply materials to children", before, ctx);
+            self.finish_edit(tr!("time_estimates.apply_materials_to_children"), before, ctx);
         }
     }
 
@@ -1213,7 +1180,7 @@ impl KetchupApp {
             .inner_margin(10)
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.text_label(RichText::new("Cost estimate").small().color(colors.muted));
+                ui.text_label(RichText::new(tr!("time_estimates.cost_estimate")).small().color(colors.muted));
                 ui.separator();
                 let mut table = InspectorTable::new(
                     ui.available_width(),
@@ -1227,13 +1194,13 @@ impl KetchupApp {
                 .striped();
                 let currency = currency::code(&catalog.currency);
                 let headers = [
-                    "Item".to_owned(),
-                    "Quantity".to_owned(),
-                    format!("Unit price ({currency})"),
-                    format!("Amount ({currency})"),
+                    tr!("time_estimates.item").to_owned(),
+                    tr!("time_estimates.quantity").to_owned(),
+                    tr!("time_estimates.unit_price", currency = currency),
+                    tr!("time_estimates.amount", currency = currency),
                 ];
                 table.header(ui, headers.each_ref().map(String::as_str));
-                if !requirements.is_empty() { cost_group(ui, "Wood stock"); }
+                if !requirements.is_empty() { cost_group(ui, tr!("time_estimates.wood_stock")); }
                 for (required, price) in &requirements {
                     let values = [
                         required.quantity.to_string(),
@@ -1258,16 +1225,16 @@ impl KetchupApp {
                                     vec![RichText::new(&required.material.name).strong()];
                                 if price.is_none() {
                                     lines.push(
-                                        RichText::new("Price unavailable")
+                                        RichText::new(tr!("time_estimates.price_unavailable"))
                                             .small()
                                             .color(colors.accent),
                                     );
                                 }
                                 if required.excluded > 0 {
                                     lines.push(
-                                        RichText::new(format!(
-                                            "{} cuts do not fit · Excluded from cost",
-                                            required.excluded,
+                                        RichText::new(tr!(
+                                            "time_estimates.cuts_excluded_label",
+                                            count = required.excluded,
                                         ))
                                         .small()
                                         .color(colors.accent),
@@ -1282,11 +1249,11 @@ impl KetchupApp {
                 }
                 finishing_cost_rows(ui, &mut table, &finish_costs, currency);
                 if let Some(message) = stock_issue {
-                    ui.text_label(RichText::new("No stock estimate yet").small().color(colors.muted))
+                    ui.text_label(RichText::new(tr!("time_estimates.no_stock_estimate_yet")).small().color(colors.muted))
                         .on_hover_text(message);
                 }
                 if !finish_costs.is_empty() {
-                    ui.text_label(RichText::new("Finishes: whole containers · Needs combined across objects and coats before rounding")
+                    ui.text_label(RichText::new(tr!("time_estimates.finishes_whole_containers_needs_combined_across_objects_and"))
                         .small().color(colors.muted));
                 }
             });
@@ -1298,24 +1265,24 @@ impl KetchupApp {
                 .inner_margin(10)
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
-                    ui.text_label(RichText::new("Estimate incomplete").strong().color(colors.accent));
+                    ui.text_label(RichText::new(tr!("time_estimates.estimate_incomplete")).strong().color(colors.accent));
                     if unpriced > 0 {
-                        ui.text_label(format!("{unpriced} stock pieces have no price. Add prices in Settings → Material."));
+                        ui.text_label(tr!("time_estimates.stock_pieces_without_price", count = unpriced));
                     }
                     if excluded > 0 {
-                        ui.text_label("Some cuts need larger stock. Their cost is excluded.");
+                        ui.text_label(tr!("time_estimates.some_cuts_need_larger_stock_their_cost_is"));
                     }
                     if plan.skipped > 0 {
-                        ui.text_label(format!("{} assigned items omitted: no usable thickness.", plan.skipped));
+                        ui.text_label(tr!("time_estimates.assigned_items_omitted", count = plan.skipped));
                     }
                 });
             ui.add_space(6.);
         }
-        ui.text_label(RichText::new(format!("Kerf {} · Rotation {}",
+        ui.text_label(RichText::new(tr!("time_estimates.kerf_rotation",
             self.doc.display.units.format_length(self.project.cutting_plan_layout.kerf_mm / 1000.),
-            if self.project.cutting_plan_layout.allow_rotation { "on" } else { "off" }
+            if self.project.cutting_plan_layout.allow_rotation { tr!("time_estimates.rotation_on") } else { tr!("time_estimates.rotation_off") }
         )).small().color(colors.muted))
-            .on_hover_text("Uses each part's full bounding box with the same stock packing and settings as Prepare cutting plan. Notches and cutouts do not reduce the required blank. Prices cover purchased material, including cutting waste. Labor is not included. Finishing products are estimated separately from surface area, coats and container coverage.");
+            .on_hover_text(tr!("time_estimates.uses_each_part_s_full_bounding_box_with"));
     }
 
     pub(super) fn surface_treatment_info(&mut self, ui: &mut egui::Ui) {
@@ -1359,7 +1326,7 @@ impl KetchupApp {
                 .is_none()
         });
         if mixed {
-            ui.text_weak("Mixed sanding and finishing settings. Changes apply to selected wood objects, including nested wood objects.");
+            ui.text_weak(tr!("time_estimates.mixed_sanding_and_finishing_settings_changes_apply_to"));
         }
         let mut reset = false;
         let mut apply_children = false;
@@ -1381,14 +1348,14 @@ impl KetchupApp {
                 &mut self.finish_product_filters,
             );
             apply_children = ui
-                .add_enabled(has_children, egui::Button::new("Apply to all children")
+                .add_enabled(has_children, egui::Button::new(tr!("time_estimates.apply_to_all_children"))
                     .min_size(egui::vec2(ui.available_width(), ui.spacing().interact_size.y)))
-                .on_hover_text("Copy each selected object's stock material, sanding and finishing settings to all descendant groups and components. Nested selected objects keep their own settings.")
+                .on_hover_text(tr!("time_estimates.copy_each_selected_object_s_stock_material_sanding"))
                 .clicked();
             reset = ui
-                .add_enabled(!all_defaults, egui::Button::new("Revert to defaults")
+                .add_enabled(!all_defaults, egui::Button::new(tr!("time_estimates.revert_to_defaults"))
                     .min_size(egui::vec2(ui.available_width(), ui.spacing().interact_size.y)))
-                .on_hover_text("Restore sanding and finishing defaults from Settings for the selected wood objects.")
+                .on_hover_text(tr!("time_estimates.restore_sanding_and_finishing_defaults_from_settings_for"))
                 .clicked();
         });
         if reset || settings != original {
@@ -1408,7 +1375,7 @@ impl KetchupApp {
                     object.surface_treatment_customized = true;
                 }
             }
-            self.finish_edit("Change sanding and finishing", before, ui.ctx());
+            self.finish_edit(tr!("time_estimates.change_sanding_and_finishing"), before, ui.ctx());
         }
         if apply_children {
             self.apply_materials_to_children(ui.ctx());
@@ -1433,8 +1400,8 @@ impl KetchupApp {
             && self.doc.model.faces.is_empty()
             && self.doc.model.objects.is_empty()
         {
-            crate::empty_state::EmptyState::new("No estimates yet",
-                "Draw or import parts to estimate time and cost.").show(ui);
+            crate::empty_state::EmptyState::new(tr!("time_estimates.no_estimates_yet"),
+                tr!("time_estimates.draw_or_import_parts_to_estimate_time_and")).show(ui);
             ui.add_space(8.);
             joinery_controls(ui, &time.joinery, &mut self.joinery_rates);
             return;
@@ -1472,15 +1439,15 @@ impl KetchupApp {
                     "{} {}{}",
                     currency::code(&catalog.currency),
                     currency::format_value(&catalog.currency, total),
-                    if partial { " (partial)" } else { "" },
+                    if partial { tr!("time_estimates.partial") } else { "" },
                 )
             }
-            Err(_) if !finish_costs.is_empty() => format!(
-                "{} {} (partial)",
+            Err(_) if !finish_costs.is_empty() => tr!(
+                "time_estimates.partial_2",
                 currency::code(&catalog.currency),
                 currency::format_value(&catalog.currency, finish_total),
             ),
-            Err(_) => "Unavailable".to_owned(),
+            Err(_) => tr!("time_estimates.unavailable").to_owned(),
         };
         let mut summary = InspectorTable::new(
             ui.available_width(),
@@ -1488,18 +1455,18 @@ impl KetchupApp {
         )
         .striped()
         .cell_padding(8.);
-        summary.header(ui, ["Estimate", "Value"]);
+        summary.header(ui, [tr!("time_estimates.estimate"), tr!("time_estimates.value")]);
         for (key, label, value, accent) in [
-            ("price", "Price", material_summary, colors.green),
+            ("price", tr!("time_estimates.price"), material_summary, colors.green),
             (
                 "work",
-                "Hands-on work",
+                tr!("time_estimates.hands_on_work"),
                 format_minutes(duration.work),
                 colors.accent,
             ),
             (
                 "wait",
-                "Drying / Waiting",
+                tr!("time_estimates.drying_waiting"),
                 format_minutes(duration.wait),
                 colors.muted,
             ),
@@ -1534,9 +1501,9 @@ impl KetchupApp {
         }
         ui.text_label(
             RichText::new(if self.selected.is_empty() {
-                "Materials · All visible parts"
+                tr!("time_estimates.materials_all_visible_parts")
             } else {
-                "Materials · Selected parts"
+                tr!("time_estimates.materials_selected_parts")
             })
             .small()
             .color(colors.muted),
@@ -1544,7 +1511,7 @@ impl KetchupApp {
         ui.add_space(8.);
         ui.text_label(
             RichText::new(
-                "Time includes whole-project joinery, sanding, finishing, and final drying.",
+                tr!("time_estimates.time_includes_whole_project_joinery_sanding_finishing_and"),
             )
             .small()
             .color(colors.muted),
@@ -1556,15 +1523,15 @@ impl KetchupApp {
             ui.text_label(RichText::new(self.doc.display.units.format_area(area)).strong());
             ui.text_label(
                 RichText::new(if self.selected.is_empty() {
-                    "Visible wood surfaces"
+                    tr!("time_estimates.visible_wood_surfaces")
                 } else {
-                    "Selected wood surfaces"
+                    tr!("time_estimates.selected_wood_surfaces")
                 })
                 .small()
                 .color(colors.muted),
             );
         });
-        ui.text_label(RichText::new("Finishing applies only to objects assigned a material from Settings → Material → Wood.").small().color(colors.muted));
+        ui.text_label(RichText::new(tr!("time_estimates.finishing_applies_only_to_objects_assigned_a_material")).small().color(colors.muted));
         ui.add_space(6.);
         egui::Frame::new()
             .fill(colors.canvas)
@@ -1574,16 +1541,16 @@ impl KetchupApp {
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 if area <= 0. {
-                    crate::empty_state::EmptyState::new("No surfaces to estimate",
-                        if self.selected.is_empty() { "No visible surfaces with assigned wood materials." }
-                        else { "Select faces or groups with assigned wood materials." }).show(ui);
+                    crate::empty_state::EmptyState::new(tr!("time_estimates.no_surfaces_to_estimate"),
+                        if self.selected.is_empty() { tr!("time_estimates.no_visible_surfaces_with_assigned_wood_materials") }
+                        else { tr!("time_estimates.select_faces_or_groups_with_assigned_wood_materials") }).show(ui);
                 } else if time.finishing.is_empty() {
-                    crate::empty_state::EmptyState::new("No finishing tasks",
-                        "Choose sanding grits or finishes for objects in Materials.").show(ui);
+                    crate::empty_state::EmptyState::new(tr!("time_estimates.no_finishing_tasks"),
+                        tr!("time_estimates.choose_sanding_grits_or_finishes_for_objects_in")).show(ui);
                 }
                 if time.has_joints() || !time.finishing.is_empty() {
                     ui.text_label(
-                        RichText::new("Sequential total")
+                        RichText::new(tr!("time_estimates.sequential_total"))
                             .small()
                             .color(colors.muted),
                     );
@@ -1599,10 +1566,10 @@ impl KetchupApp {
                         [Column::flex(1.), Column::flex(1.), Column::flex(1.)],
                     )
                     .striped();
-                    table.header(ui, ["Task", "Hands-on", "Drying / Waiting"]);
+                    table.header(ui, [tr!("time_estimates.task"), tr!("time_estimates.hands_on"), tr!("time_estimates.drying_waiting")]);
                     if time.has_joints() {
                         let values = [
-                            "Joinery (whole project)".into(),
+                            tr!("time_estimates.joinery_whole_project_2").into(),
                             format_minutes(time.joinery_work),
                             "-".into(),
                         ];
@@ -1610,18 +1577,16 @@ impl KetchupApp {
                             ui.text_label(RichText::new(&values[column]).small());
                         });
                     }
-                    for (index, (title, task, _)) in time.finishing.iter().enumerate() {
+                    for (index, (task, duration, _)) in time.finishing.iter().enumerate() {
                         table.row(ui, ("task", index), |column, ui| {
                             if column == 0 {
                                 ui.text_label(
-                                    RichText::new(
-                                        title.strip_prefix("Sanding · ").unwrap_or(title),
-                                    )
+                                    RichText::new(task.short_label())
                                     .small(),
                                 )
-                                .on_hover_text(title.as_str());
+                                .on_hover_text(task.label());
                             } else {
-                                let minutes = if column == 1 { task.work } else { task.wait };
+                                let minutes = if column == 1 { duration.work } else { duration.wait };
                                 ui.text_label(
                                     RichText::new(if minutes == 0. {
                                         "-".to_owned()
@@ -1636,7 +1601,7 @@ impl KetchupApp {
                     ui.separator();
                     table.row(ui, "total", |column, ui| {
                         let text = match column {
-                            0 => "Total".to_owned(),
+                            0 => tr!("time_estimates.total").to_owned(),
                             _ => {
                                 let minutes = if column == 1 {
                                     duration.work
@@ -1653,7 +1618,7 @@ impl KetchupApp {
                         ui.text_label(RichText::new(text).small().strong());
                     });
                     ui.text_label(
-                        RichText::new("Includes final drying · Objects dry together between steps")
+                        RichText::new(tr!("time_estimates.includes_final_drying_objects_dry_together_between_steps"))
                             .small()
                             .color(colors.muted),
                     );

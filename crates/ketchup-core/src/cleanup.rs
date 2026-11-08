@@ -13,7 +13,7 @@ impl Model {
             return Ok(0);
         }
         if self.selection_protected(selected) {
-            return Err("Unlock the selection before cleaning it");
+            return Err(tr!("core.cleanup.unlock_the_selection_before_cleaning_it"));
         }
         if self.edit_context.is_some() {
             return self.edit_in_context(|contents| contents.clean_collinear_vertices(selected));

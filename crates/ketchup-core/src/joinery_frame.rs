@@ -44,14 +44,14 @@ impl Model {
         let object = self
             .objects
             .get(&member)
-            .ok_or("Choose two groups or components")?;
+            .ok_or(tr!("core.joinery_frame.choose_two_groups_or_components"))?;
         if object
             .entities
             .iter()
             .any(|id| !self.edges.contains_key(id) && !self.faces.contains_key(id))
         {
             return Err(
-                "Each part must contain only board geometry; select individual boards, not assemblies",
+                tr!("core.joinery_frame.each_part_must_contain_only_board_geometry_select"),
             );
         }
         let normals: Vec<_> = object
@@ -91,7 +91,7 @@ impl Model {
                 return Ok(JoineryFrame { basis });
             }
         }
-        let x = *normals.first().ok_or("The board has no geometry")?;
+        let x = *normals.first().ok_or(tr!("core.joinery_frame.the_board_has_no_geometry"))?;
         let y = normals
             .iter()
             .find(|normal| normal.dot(x).abs() < 1e-9)
@@ -103,7 +103,7 @@ impl Model {
                     .filter_map(|id| self.faces.get(id))
                     .find_map(|face| crate::faces::plane(self, &face.vertices).map(|plane| plane.u))
             })
-            .ok_or("The board has no planar faces")?;
+            .ok_or(tr!("core.joinery_frame.the_board_has_no_planar_faces"))?;
         let y = (y - x * x.dot(y)).normalize();
         let axes = [x, y, x.cross(y).normalize_or_zero()];
         let permutations = [

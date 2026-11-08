@@ -14,8 +14,8 @@ return new Promise((resolve, reject) => {
             if (event.data.error) reject(new Error(event.data.error));
             else resolve(event.data.model);
         };
-        worker.onerror = event => { cleanup(); reject(new Error(event.message || 'SketchUp worker failed')); };
-        worker.onmessageerror = () => { cleanup(); reject(new Error('Could not receive the SketchUp model')); };
+        worker.onerror = event => { cleanup(); reject(new Error(event.message || 'ketchup.skp.worker_failed')); };
+        worker.onmessageerror = () => { cleanup(); reject(new Error('ketchup.skp.worker_message')); };
         worker.postMessage(bytes.buffer, [bytes.buffer]);
     } catch (error) { cleanup(); reject(error); }
 });

@@ -15,9 +15,9 @@ pub enum FastenerKind {
 impl FastenerKind {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Screw => "Screw",
-            Self::Nail => "Nail",
-            Self::InclinedScrew => "Angled screw",
+            Self::Screw => tr!("core.connections.screw"),
+            Self::Nail => tr!("core.connections.nail"),
+            Self::InclinedScrew => tr!("core.connections.angled_screw"),
         }
     }
 }
@@ -121,19 +121,19 @@ struct Member {
 impl Member {
     fn read(model: &Model, id: u64) -> Result<Self, String> {
         if !model.objects.contains_key(&id) {
-            return Err("Part is missing or has been deleted".into());
+            return Err(tr!("core.connections.part_is_missing_or_has_been_deleted").into());
         }
         model
             .copy_entities(&BTreeSet::from([id]))
             .solid_volume(id)?;
-        let geometry = model.object_contents(id).ok_or("Part is missing")?;
+        let geometry = model.object_contents(id).ok_or(tr!("core.connections.part_is_missing"))?;
         let entities = model.expand_entities(&BTreeSet::from([id]));
         let mut edges = BTreeMap::new();
         let mut planes = Vec::new();
         let mut points = Vec::new();
         for face in entities.iter().filter_map(|id| model.faces.get(id)) {
             if face.vertices.len() < 3 {
-                return Err("Degenerate face".into());
+                return Err(tr!("core.connections.degenerate_face").into());
             }
             let p: Vec<_> = face
                 .vertices
@@ -141,12 +141,12 @@ impl Member {
                 .filter_map(|id| model.vertices.get(id).map(|v| v.position))
                 .collect();
             if p.len() != face.vertices.len() || p.iter().any(|v| !v.is_finite()) {
-                return Err("Invalid vertices".into());
+                return Err(tr!("core.connections.invalid_vertices").into());
             }
             let n = (1..p.len() - 1)
                 .map(|i| (p[i] - p[0]).cross(p[i + 1] - p[0]))
                 .find(|n| n.length() > TOL)
-                .ok_or("Degenerate face")?
+                .ok_or(tr!("core.connections.degenerate_face"))?
                 .normalize();
             for ring in std::iter::once(&face.vertices).chain(&face.holes) {
                 for i in 0..ring.len() {
@@ -163,7 +163,7 @@ impl Member {
             });
         }
         if planes.len() < 4 || edges.values().any(|n| *n != 2) {
-            return Err("The part must be a closed solid".into());
+            return Err(tr!("core.connections.the_part_must_be_a_closed_solid").into());
         }
         let center = points.iter().copied().sum::<DVec3>() / points.len() as f64;
         // Convex parts retain their half-space clipping. Machined parts use
@@ -178,7 +178,7 @@ impl Member {
                 .iter()
                 .any(|p| plane.normal.dot(*p - plane.origin).abs() > TOL)
             {
-                return Err("Only planar faces are supported".into());
+                return Err(tr!("core.connections.only_planar_faces_are_supported").into());
             }
             if points
                 .iter()
@@ -278,7 +278,7 @@ impl Model {
     pub fn add_connection(&mut self, mut connection: Connection) -> Result<u64, String> {
         if matches!(connection.operation, ConnectionOperation::Joinery(_)) {
             if self.has_joinery_between(connection.members) {
-                return Err("These pieces already have a wood joint. Edit or delete the existing joint first.".into());
+                return Err(tr!("core.connections.these_pieces_already_have_a_wood_joint_edit").into());
             }
             let pair = BTreeSet::from(connection.members);
             if pair.len() != 2
@@ -288,7 +288,7 @@ impl Model {
                     .iter()
                     .any(|id| self.is_hidden(*id) || self.entity_in_context(*id) != Some(*id))
             {
-                return Err("Select two visible, editable boards in the current context".into());
+                return Err(tr!("core.connections.select_two_visible_editable_boards_in_the_current").into());
             }
         }
         let evaluation = connection.evaluate(self);
@@ -296,7 +296,7 @@ impl Model {
             || (matches!(connection.operation, ConnectionOperation::Fasteners(_))
                 && evaluation.placements.is_empty())
         {
-            return Err(evaluation.errors.join(" · "));
+            return Err(evaluation.errors.join(tr!("core.connections.format")));
         }
         connection.entry_face = evaluation.entry_face;
         let id = self.id();
@@ -341,7 +341,7 @@ impl Connection {
         if !settings.valid() || self.members[0] == self.members[1] {
             result
                 .errors
-                .push("Invalid settings or pair of parts".into());
+                .push(tr!("core.connections.invalid_settings_or_pair_of_parts").into());
             return result;
         }
         let (a, b) = match (
@@ -382,7 +382,7 @@ impl Connection {
         let Some(face) = face else {
             result
                 .errors
-                .push("The entry face is missing or does not belong to the first part".into());
+                .push(tr!("core.connections.the_entry_face_is_missing_or_does_not").into());
             return result;
         };
         result.entry_face = Some(face.id);
@@ -393,7 +393,7 @@ impl Connection {
             .find(|d| d.length() > TOL)
             .map(|d| d.normalize())
         else {
-            result.errors.push("Degenerate face".into());
+            result.errors.push(tr!("core.connections.degenerate_face").into());
             return result;
         };
         let v = face.normal.cross(u).normalize();
@@ -425,7 +425,7 @@ impl Connection {
         };
         let (ur, vr) = (overlap(u), overlap(v));
         if ur.1 - ur.0 <= TOL || vr.1 - vr.0 <= TOL {
-            result.errors.push("No shared area on this face".into());
+            result.errors.push(tr!("core.connections.no_shared_area_on_this_face").into());
             return result;
         }
         let (columns, rows) = match settings.pattern {
@@ -437,7 +437,7 @@ impl Connection {
         if columns * rows > 1000 {
             result
                 .errors
-                .push("Maximum of 1,000 fasteners per connection".into());
+                .push(tr!("core.connections.maximum_of_1_000_fasteners_per_connection").into());
             return result;
         }
         for (range, n, spacing) in [
@@ -453,7 +453,7 @@ impl Connection {
             if n > 1 && step < settings.diameter - TOL {
                 result
                     .errors
-                    .push("Fasteners overlap or there is not enough space for this pattern".into());
+                    .push(tr!("core.connections.fasteners_overlap_or_there_is_not_enough_space").into());
                 return result;
             }
         }
@@ -473,8 +473,8 @@ impl Connection {
                 let head =
                     face.origin + u * (x - face.origin.dot(u)) + v * (y - face.origin.dot(v));
                 let Some((entry, exit)) = a.interval(head, direction) else {
-                    result.errors.push(format!(
-                        "Fastener {} is outside the entry face",
+                    result.errors.push(tr!(
+                        "core.connections.fastener_is_outside_the_entry_face",
                         result.placements.len() + 1
                     ));
                     continue;
@@ -482,13 +482,13 @@ impl Connection {
                 let Some((start, end)) = b.interval(head, direction) else {
                     result
                         .errors
-                        .push("Fastener is outside the second part".into());
+                        .push(tr!("core.connections.fastener_is_outside_the_second_part").into());
                     continue;
                 };
                 if entry.abs() > TOL || exit <= TOL || start > exit + TOL || end <= exit + TOL {
                     result
                         .errors
-                        .push("The parts have no usable contact in this direction".into());
+                        .push(tr!("core.connections.the_parts_have_no_usable_contact_in_this").into());
                     continue;
                 }
                 let length = if settings.length > 0. {
@@ -498,10 +498,10 @@ impl Connection {
                 };
                 let mut warnings = Vec::new();
                 if length <= exit + TOL {
-                    warnings.push("No penetration into the second part".into());
+                    warnings.push(tr!("core.connections.no_penetration_into_the_second_part").into());
                 }
                 if length > end + TOL {
-                    warnings.push("The tip protrudes beyond the second part".into());
+                    warnings.push(tr!("core.connections.the_tip_protrudes_beyond_the_second_part").into());
                 }
                 let interface = head + direction * exit;
                 let tip = head + direction * length;
@@ -521,7 +521,7 @@ impl Connection {
                         if ends.iter().any(|p| {
                             -plane.normal.dot(*p - plane.origin) < settings.clearance + radius - TOL
                         }) {
-                            warnings.push("Close to an edge: check the geometric clearance".into());
+                            warnings.push(tr!("core.connections.close_to_an_edge_check_the_geometric_clearance").into());
                             break;
                         }
                     }

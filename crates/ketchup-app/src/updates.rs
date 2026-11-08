@@ -1,4 +1,5 @@
 //! Desktop updates. Network and package work never runs on the editor thread.
+use ketchup_core::tr;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -125,7 +126,7 @@ impl Updater {
                     automatic_updates: false,
                     ..Default::default()
                 },
-                Some(format!("Could not read update preferences: {error}")),
+                Some(tr!("updates.could_not_read_update_preferences", error = error)),
             ),
         };
         let mut updater = Self {
@@ -160,7 +161,7 @@ impl Updater {
         self.preferences.automatic_updates = enabled;
         if let Err(error) = self.preferences.save() {
             self.preferences.automatic_updates = previous;
-            self.error = Some(format!("Could not save update preferences: {error}"));
+            self.error = Some(tr!("updates.could_not_save_update_preferences", error = error));
         } else {
             self.error = None;
             if enabled {
@@ -180,7 +181,7 @@ impl Updater {
         // continuously. A manual check always bypasses the daily limit.
         self.preferences.last_check = Some(now());
         if let Err(error) = self.preferences.save() {
-            self.error = Some(format!("Could not save update preferences: {error}"));
+            self.error = Some(tr!("updates.could_not_save_update_preferences", error = error));
             return;
         }
         self.error = None;
@@ -208,7 +209,7 @@ impl Updater {
                         }
                         UpdateCheck::NoUpdateAvailable => Ok(None),
                         UpdateCheck::RemoteIsEmpty => {
-                            Err("No updates have been published for this platform yet.".into())
+                            Err(tr!("updates.no_updates_have_been_published_for_this_platform").into())
                         }
                     }
                 })();
@@ -236,7 +237,7 @@ impl Updater {
                 Err(TryRecvError::Disconnected) => {
                     self.worker = None;
                     self.state = State::Failed(
-                        "The update check did not complete. Please try again.".into(),
+                        tr!("updates.the_update_check_did_not_complete_please_try").into(),
                     );
                 }
             }
@@ -251,19 +252,19 @@ impl Updater {
 
     pub fn status(&self) -> String {
         match &self.state {
-            State::Unavailable => "Automatic updates are available in the packaged desktop app. Download it from GitHub Releases.".into(),
-            State::Idle => "Ready to check for updates.".into(),
-            State::Checking => "Checking for updates…".into(),
-            State::Downloading(version) => format!("Downloading KetchUp3D {version}… You can keep working."),
-            State::Current => "KetchUp3D is up to date.".into(),
-            State::Ready(asset) => format!("KetchUp3D {} is ready. It will install on your next launch, or you can restart now.", asset.Version),
-            State::Failed(error) => format!("Could not update KetchUp3D: {error}"),
+            State::Unavailable => tr!("updates.automatic_updates_are_available_in_the_packaged_desktop").into(),
+            State::Idle => tr!("updates.ready_to_check_for_updates").into(),
+            State::Checking => tr!("updates.checking_for_updates").into(),
+            State::Downloading(version) => tr!("updates.downloading_ketchup3d_you_can_keep_working", version = version),
+            State::Current => tr!("updates.ketchup3d_is_up_to_date").into(),
+            State::Ready(asset) => tr!("updates.ketchup3d_is_ready_it_will_install_on_your", asset.Version),
+            State::Failed(error) => tr!("updates.could_not_update_ketchup3d", error = error),
         }
     }
 
     pub fn restart(&mut self) -> Result<(), String> {
         let (Some(manager), State::Ready(asset)) = (&self.manager, &self.state) else {
-            return Err("No downloaded update is ready.".into());
+            return Err(tr!("updates.no_downloaded_update_is_ready").into());
         };
         // Let eframe exit normally so its shutdown and window cleanup run.
         manager

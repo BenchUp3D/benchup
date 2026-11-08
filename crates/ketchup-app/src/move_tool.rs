@@ -1,4 +1,5 @@
 //! Move-copy previews and editable linear arrays share the original model snapshot.
+use ketchup_core::tr;
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -26,17 +27,17 @@ impl CopyArray {
         } else if let Some(n) = input.strip_suffix(['x', 'X', '*']) {
             (n, false)
         } else {
-            return Err("Enter an array count, such as /3 or 3x");
+            return Err(tr!("move_tool.enter_an_array_count_such_as_3_or"));
         };
         let number = number.trim();
         if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit()) {
-            return Err("Enter a whole array count from 1 to 1000");
+            return Err(tr!("move_tool.enter_a_whole_array_count_from_1_to"));
         }
         let count = number
             .parse::<usize>()
             .ok()
             .filter(|n| (1..=1000).contains(n))
-            .ok_or("Enter a whole array count from 1 to 1000")?;
+            .ok_or(tr!("move_tool.enter_a_whole_array_count_from_1_to"))?;
         Ok(Self { count, divide })
     }
 }
@@ -50,9 +51,9 @@ pub(super) struct MoveCopy {
 impl KetchupApp {
     pub(super) fn move_copy_key(ctx: &egui::Context) -> &'static str {
         if ctx.os() == egui::os::OperatingSystem::Mac {
-            "Option"
+            tr!("move_tool.option")
         } else {
-            "Ctrl"
+            tr!("move_tool.ctrl")
         }
     }
 
@@ -90,7 +91,7 @@ impl KetchupApp {
 
     pub(super) fn move_delta(edit: &Modeling, value: f64) -> Result<DVec3, &'static str> {
         if !value.is_finite() {
-            return Err("Enter a finite displacement");
+            return Err(tr!("move_tool.enter_a_finite_displacement"));
         }
         if value.abs() < 1e-7 {
             Ok(DVec3::ZERO)
@@ -98,7 +99,7 @@ impl KetchupApp {
             Ok(edit
                 .direction
                 .try_normalize()
-                .ok_or("Move the pointer to choose a direction first")?
+                .ok_or(tr!("move_tool.move_the_pointer_to_choose_a_direction_first"))?
                 * value)
         }
     }
@@ -120,7 +121,7 @@ impl KetchupApp {
             selected = model.paste_entities(source, delta * factor);
             if selected.is_empty() {
                 return Err(
-                    "Cannot copy this geometry here; check the distance and component nesting",
+                    tr!("move_tool.cannot_copy_this_geometry_here_check_the_distance"),
                 );
             }
         }

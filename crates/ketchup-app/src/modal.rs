@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 #[cfg(test)]
 use crate::test_ui::ContextExt as _;
 use crate::{icons, theme::Palette};
@@ -389,7 +390,7 @@ impl ModalSlots<'_> {
                                     egui::WidgetInfo::labeled(
                                         egui::Role::Button,
                                         true,
-                                        "Close dialog",
+                                        tr!("modal.close_dialog"),
                                     )
                                 });
                                 icons::line_icon(
@@ -401,7 +402,7 @@ impl ModalSlots<'_> {
                                 close_hovered = response.hovered();
                                 if response
                                     .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    .on_hover_text("Close (Esc)")
+                                    .on_hover_text(tr!("modal.close_esc"))
                                     .clicked()
                                 {
                                     ui.close();

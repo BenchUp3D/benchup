@@ -1,4 +1,5 @@
 //! Deterministic, kerf-aware guillotine stock packing.
+use ketchup_core::tr;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -33,7 +34,7 @@ impl Settings {
             || !self.kerf_mm.is_finite()
             || !(0. ..=100.).contains(&self.kerf_mm)
         {
-            return Err("Stock dimensions must be 1-1,000,000 mm and saw kerf 0-100 mm.".into());
+            return Err(tr!("cutting_layout.stock_dimensions_must_be_1_1_000_000").into());
         }
         Ok(())
     }

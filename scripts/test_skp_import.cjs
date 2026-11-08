@@ -82,9 +82,9 @@ test('recursive definitions and missing references fail', () => {
     const convert=new Function('source', `const ketchupModules={openskp:{parseSkp:()=>source}};${adapter};return ketchupImport(new Uint8Array(0));`);
     const root={id:1,vertices:[],edges:[],faces:[],instances:[{refIdx:1,matrix:[]}]};
     const source={root,materials:[],layers:[],definitions:new Map([[1,root]])};
-    assert.throws(()=>convert(source), /recursive/i);
+    assert.throws(()=>convert(source), /^Error: ketchup\.skp\.nested_components$/);
     source.definitions.clear();
-    assert.throws(()=>convert(source), /missing definition/i);
+    assert.throws(()=>convert(source), /^Error: ketchup\.skp\.missing_definition$/);
 });
 
 

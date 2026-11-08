@@ -1,4 +1,5 @@
 //! Support diagnostics captured on demand and copied only by user action.
+use ketchup_core::tr;
 use crate::{modal::Modal, natural_text::TextUi as _};
 use eframe::egui;
 use std::fmt::Write as _;
@@ -37,8 +38,10 @@ fn issue_url(report: &str) -> String {
             .max(2)
             + 1,
     );
-    let body = format!(
-        "Describe your feature suggestion or bug here.\n\n---\n\n## System Information\n\n{fence}text\n{report}\n{fence}\n"
+    let body = tr!(
+        "system_info.describe_your_feature_suggestion_or_bug_here_system",
+        fence = fence,
+        report = report,
     );
     let mut url = String::from("https://github.com/Ketchup3D/app/issues/new?body=");
     // Percent-encode UTF-8 bytes as a query value, including newlines and reserved characters.
@@ -53,20 +56,20 @@ fn issue_url(report: &str) -> String {
 }
 
 fn collect(ctx: &egui::Context, frame: &eframe::Frame) -> String {
-    let mut text = format!(
-        "KetchUp3D {}\nBuild: {}\n",
+    let mut text = tr!(
+        "system_info.ketchup3d_build",
         env!("CARGO_PKG_VERSION"),
         if cfg!(debug_assertions) {
-            "Debug"
+            tr!("system_info.debug")
         } else {
-            "Release"
+            tr!("system_info.release")
         }
     );
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = writeln!(
             text,
-            "Runtime: Desktop\nOS: {}\nArchitecture: {}",
+            tr!("system_info.runtime_desktop_os_architecture"),
             std::env::consts::OS,
             std::env::consts::ARCH
         );
@@ -76,40 +79,41 @@ fn collect(ctx: &egui::Context, frame: &eframe::Frame) -> String {
                 .lines()
                 .find_map(|line| line.strip_prefix("PRETTY_NAME="))
         {
-            let _ = writeln!(text, "OS version: {}", name.trim_matches('"'));
+            let _ = writeln!(text, tr!("system_info.os_version"), name.trim_matches('"'));
         }
         if let Ok(threads) = std::thread::available_parallelism() {
-            let _ = writeln!(text, "Available logical CPUs: {threads}");
+            let _ = writeln!(text, tr!("system_info.available_logical_cpus"), threads = threads);
         }
     }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = writeln!(
             text,
-            "Runtime: Browser (WebAssembly)\nBrowser / OS: {}",
+            tr!("system_info.runtime_browser_webassembly_browser_os"),
             frame.info().web_info.user_agent
         );
     }
-    let _ = writeln!(text, "Platform: {:?}", ctx.os());
+    let _ = writeln!(text, tr!("system_info.platform"), ctx.os());
     let bounds = ctx.viewport_rect();
     let scale = ctx.pixels_per_point();
     let _ = writeln!(
         text,
-        "Window: {:.0} × {:.0} pixels\nUI scale: {scale:.2} pixels/point\nUI zoom: {:.0}%\nTheme: {}",
+        tr!("system_info.window_pixels_ui_scale_pixels_point_ui_zoom"),
         bounds.width() * scale,
         bounds.height() * scale,
         ctx.zoom_factor() * 100.,
         if ctx.global_style().visuals.dark_mode {
-            "Dark"
+            tr!("system_info.dark")
         } else {
-            "Light"
-        }
+            tr!("system_info.light")
+        },
+        scale = scale,
     );
     if let Some(render) = frame.wgpu_render_state() {
         let adapter = render.adapter.get_info();
         let _ = writeln!(
             text,
-            "Renderer: wgpu\nGraphics backend: {:?}\nGPU: {}\nGPU type: {:?}\nGPU vendor/device: {:04x}/{:04x}\nDriver: {}\nDriver details: {}\nSurface format: {:?}",
+            tr!("system_info.renderer_wgpu_graphics_backend_gpu_gpu_type_gpu"),
             adapter.backend,
             adapter.name,
             adapter.device_type,
@@ -120,7 +124,7 @@ fn collect(ctx: &egui::Context, frame: &eframe::Frame) -> String {
             render.target_format
         );
     } else {
-        text.push_str("Graphics adapter information: unavailable\n");
+        text.push_str(tr!("system_info.graphics_adapter_information_unavailable"));
     }
     text
 }
@@ -140,10 +144,10 @@ pub(crate) fn show(ctx: &egui::Context, frame: &eframe::Frame) {
     }
     let response = Modal::new("system_information", 560.).show(ctx, |modal| {
         modal.header(|ui| {
-            ui.text_heading("System information");
+            ui.text_heading(tr!("system_info.system_information"));
         });
         modal.body(|ui| {
-            ui.text_label("Include these details when reporting a bug.");
+            ui.text_label(tr!("system_info.include_these_details_when_reporting_a_bug"));
             ui.add_space(8.);
             egui::ScrollArea::vertical()
                 .max_height(400.)
@@ -157,14 +161,14 @@ pub(crate) fn show(ctx: &egui::Context, frame: &eframe::Frame) {
         });
         modal.footer(|ui| {
             // Footer flows right to left: Close is the rightmost action.
-            if ui.button("Close").clicked() {
+            if ui.button(tr!("common.close")).clicked() {
                 ui.close();
             }
             if ui
                 .button(if report.copied {
-                    "Copied"
+                    tr!("system_info.copied")
                 } else {
-                    "Copy to clipboard"
+                    tr!("system_info.copy_to_clipboard")
                 })
                 .clicked()
             {

@@ -1,4 +1,5 @@
 //! Printable, selectable-text estimate reports. Shared by native and WASM exports.
+use ketchup_core::tr;
 use eframe::egui;
 use skrifa::{
     FontRef, MetadataProvider,
@@ -27,6 +28,26 @@ const RIGHT: f64 = 553.;
 const BOTTOM: f64 = 55.;
 const INK: &str = "0.15 0.20 0.17";
 const BORDER: &str = "0.73 0.79 0.74";
+
+enum RowStyle {
+    Plain,
+    Striped,
+    Total,
+}
+
+impl RowStyle {
+    fn alternating(index: usize) -> Self {
+        if index % 2 == 0 { Self::Striped } else { Self::Plain }
+    }
+
+    fn fill(&self) -> &'static str {
+        match self {
+            Self::Plain => "1 1 1",
+            Self::Striped => "0.97 0.98 0.97",
+            Self::Total => "0.88 0.92 0.89",
+        }
+    }
+}
 
 struct Pdf<'a> {
     font: FontRef<'a>,
@@ -109,7 +130,7 @@ impl<'a> Pdf<'a> {
         if !self.page.is_empty() {
             self.pages.push(std::mem::take(&mut self.page));
         }
-        let header=crate::pdf_header::layout(&self.header_name,"Time & Cost Estimates",&self.header_date,[595.,842.],|text,size|self.width(text,size));
+        let header=crate::pdf_header::layout(&self.header_name,tr!("estimate_pdf.time_cost_estimates"),&self.header_date,[595.,842.],|text,size|self.width(text,size));
         self.page.push_str(&header.graphics);
         for text in header.text {self.text(text.x,text.y,text.size,&text.value);}
         self.y=header.body_top;
@@ -184,7 +205,7 @@ impl<'a> Pdf<'a> {
         widths: &[f64],
         headers: &[String],
         group: &str,
-        stripe: bool,
+        style: RowStyle,
     ) {
         let lines: Vec<_> = cells
             .iter()
@@ -196,20 +217,13 @@ impl<'a> Pdf<'a> {
         while start < count {
             if self.y - 25. < BOTTOM {
                 self.new_page();
-                self.group_heading(&format!("{group} (continued)"));
+                self.group_heading(&tr!("estimate_pdf.continued", group = group));
                 self.table_header(headers, widths);
             }
             let available = (((self.y - BOTTOM - 10.) / 13.).floor() as usize).max(1);
             let end = count.min(start + available);
             let height = (end - start) as f64 * 13. + 9.;
-            let fill = if cells.first().is_some_and(|cell| cell == "Total") {
-                "0.88 0.92 0.89"
-            } else if stripe {
-                "0.97 0.98 0.97"
-            } else {
-                "1 1 1"
-            };
-            self.table_panel(self.y + 9., self.y - height + 9., widths, fill);
+            self.table_panel(self.y + 9., self.y - height + 9., widths, style.fill());
             let mut x = LEFT;
             for (cell, width) in lines.iter().zip(widths) {
                 let visible = cell.len().min(end).saturating_sub(start);
@@ -240,9 +254,9 @@ impl<'a> Pdf<'a> {
                 LEFT,
                 29.,
                 8.,
-                "KetchUp3D - Planning estimate, verify before purchasing",
+                tr!("estimate_pdf.ketchup3d_planning_estimate_verify_before_purchasing"),
             );
-            self.text(480., 29., 8., &format!("{} / {count}", index + 1));
+            self.text(480., 29., 8., &tr!("estimate_pdf.page_number", index + 1, count = count));
             self.pages[index].push_str(&self.page);
         }
         let mut cids = vec![(0_u16, 0_f64); self.chars.len() + 1];
@@ -330,7 +344,7 @@ pub(crate) fn generation_date() -> Result<String, String> {
     #[cfg(not(target_arch = "wasm32"))]
     let days = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|error| format!("Could not read the generation date: {error}"))?
+        .map_err(|error| tr!("estimate_pdf.could_not_read_the_generation_date", error = error))?
         .as_secs()
         / 86_400;
     #[cfg(target_arch = "wasm32")]
@@ -352,22 +366,24 @@ fn date_from_unix_days(days: i64) -> String {
     let month = month_prime + if month_prime < 10 { 3 } else { -9 };
     year += i64::from(month <= 2);
     let months = [
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
+        tr!("estimate_pdf.january"),
+        tr!("estimate_pdf.february"),
+        tr!("estimate_pdf.march"),
+        tr!("estimate_pdf.april"),
+        tr!("estimate_pdf.may"),
+        tr!("estimate_pdf.june"),
+        tr!("estimate_pdf.july"),
+        tr!("estimate_pdf.august"),
+        tr!("estimate_pdf.september"),
+        tr!("estimate_pdf.october"),
+        tr!("estimate_pdf.november"),
+        tr!("estimate_pdf.december"),
     ];
-    format!(
-        "Generated: {day} {} {year} (UTC)",
-        months[(month - 1) as usize]
+    tr!(
+        "estimate_pdf.generated_utc",
+        months[(month - 1) as usize],
+        day = day,
+        year = year,
     )
 }
 
@@ -376,10 +392,10 @@ pub(crate) fn render(report: &Report) -> Result<Vec<u8>, String> {
     let data = &definitions.font_data["Ubuntu-Light"].font;
     let data: &[u8] = data.as_ref().as_ref();
     let font =
-        FontRef::new(data).map_err(|error| format!("Could not load report font: {error}"))?;
+        FontRef::new(data).map_err(|error| tr!("estimate_pdf.could_not_load_report_font", error = error))?;
     let fallback_data: &[u8] = definitions.font_data["Hack"].font.as_ref().as_ref();
     let fallback = FontRef::new(fallback_data)
-        .map_err(|error| format!("Could not load report symbol font: {error}"))?;
+        .map_err(|error| tr!("estimate_pdf.could_not_load_report_symbol_font", error = error))?;
     let mut text = vec![report.name.as_str(), report.currency.as_str()];
     text.extend(report.summary.iter().map(String::as_str));
     text.extend(report.notes.iter().map(String::as_str));
@@ -396,15 +412,16 @@ pub(crate) fn render(report: &Report) -> Result<Vec<u8>, String> {
         .filter(|ch| !ch.is_control())
         .collect();
     if chars.len() > 65_000 {
-        return Err("Too many distinct characters for one estimate PDF.".into());
+        return Err(tr!("estimate_pdf.too_many_distinct_characters_for_one_estimate_pdf").into());
     }
     if let Some(ch) = chars
         .iter()
         .find(|ch| font.charmap().map(**ch).is_none() && fallback.charmap().map(**ch).is_none())
     {
-        return Err(format!(
-            "The PDF font cannot display '{ch}' (U+{:04X}). Replace this character before exporting; the report was not truncated.",
-            *ch as u32
+        return Err(tr!(
+            "estimate_pdf.the_pdf_font_cannot_display_u_replace_this",
+            *ch as u32,
+            ch = ch,
         ));
     }
     let mut pdf = Pdf {
@@ -430,15 +447,15 @@ pub(crate) fn render(report: &Report) -> Result<Vec<u8>, String> {
     let height = summary_height as f64 * 21. + 34. + 2. * vertical_padding;
     pdf.ensure(height + 81.);
     pdf.y -= 16.;
-    pdf.heading("Summary");
+    pdf.heading(tr!("estimate_pdf.summary"));
     let top = pdf.y;
     let bottom = top - height;
     let metrics = pdf.font.metrics(Size::new(17.), LocationRef::default());
     for (column, (label, lines)) in [
-        "Materials",
-        "Hands-on work",
-        "Drying / Waiting",
-        "Sequential total",
+        tr!("estimate_pdf.materials"),
+        tr!("estimate_pdf.hands_on_work"),
+        tr!("estimate_pdf.drying_waiting"),
+        tr!("estimate_pdf.sequential_total"),
     ]
     .iter()
     .zip(&summary_lines)
@@ -483,12 +500,12 @@ pub(crate) fn render(report: &Report) -> Result<Vec<u8>, String> {
     }
     pdf.ensure(135.);
     pdf.y -= 16.;
-    pdf.heading("Cost estimate");
+    pdf.heading(tr!("estimate_pdf.cost_estimate"));
     let headers = [
-        "Item".into(),
-        "Quantity".into(),
-        format!("Unit price ({})", report.currency),
-        format!("Amount ({})", report.currency),
+        tr!("estimate_pdf.item").into(),
+        tr!("estimate_pdf.quantity").into(),
+        tr!("estimate_pdf.unit_price", report.currency),
+        tr!("estimate_pdf.amount", report.currency),
     ];
     let widths = [245., 65., 100., 101.];
     for group in &report.costs {
@@ -497,50 +514,52 @@ pub(crate) fn render(report: &Report) -> Result<Vec<u8>, String> {
         pdf.group_heading(&group.title);
         pdf.table_header(&headers, &widths);
         for (index, row) in group.rows.iter().enumerate() {
-            pdf.table_row(row, &widths, &headers, &group.title, index % 2 == 0);
+            pdf.table_row(row, &widths, &headers, &group.title, RowStyle::alternating(index));
         }
         pdf.y -= 12.;
     }
     pdf.ensure(150.);
     pdf.y -= 16.;
-    pdf.heading("Sequential total");
-    let headers = ["Task".into(), "Hands-on".into(), "Drying / Waiting".into()];
+    pdf.heading(tr!("estimate_pdf.sequential_total"));
+    let headers = [tr!("estimate_pdf.task").into(), tr!("estimate_pdf.hands_on").into(), tr!("estimate_pdf.drying_waiting").into()];
     let widths = [285., 113., 113.];
     pdf.y -= 14.; // Align the table's top edge with the shared section content top.
     pdf.table_header(&headers, &widths);
     for (index, row) in report.tasks.iter().enumerate() {
-        pdf.table_row(row, &widths, &headers, "Sequential total", index % 2 == 0);
+        pdf.table_row(
+            row, &widths, &headers, tr!("estimate_pdf.sequential_total"), RowStyle::alternating(index),
+        );
     }
     pdf.table_row(
         &[
-            "Total".into(),
+            tr!("estimate_pdf.total").into(),
             report.totals[1].clone(),
             report.totals[2].clone(),
         ],
         &widths,
         &headers,
-        "Sequential total",
-        true,
+        tr!("estimate_pdf.sequential_total"),
+        RowStyle::Total,
     );
     pdf.y -= 16.;
-    pdf.note("Includes final drying. Objects dry together between steps.");
+    pdf.note(tr!("estimate_pdf.includes_final_drying_objects_dry_together_between_steps"));
     pdf.ensure(125.);
     pdf.y -= 16.;
-    let title = "Joinery (whole project)";
+    let title = tr!("estimate_pdf.joinery_whole_project");
     pdf.heading(title);
     if report.joinery.is_empty() {
-        pdf.note("No configured wood joints.");
+        pdf.note(tr!("estimate_pdf.no_configured_wood_joints"));
     } else {
         let headers = [
-            "Joint".into(),
-            "Count".into(),
-            "Minutes / joint".into(),
-            "Hands-on".into(),
+            tr!("estimate_pdf.joint").into(),
+            tr!("estimate_pdf.count").into(),
+            tr!("estimate_pdf.minutes_joint").into(),
+            tr!("estimate_pdf.hands_on").into(),
         ];
         let widths = [245., 65., 100., 101.];
         pdf.table_header(&headers, &widths);
         for (index, row) in report.joinery.iter().enumerate() {
-            pdf.table_row(row, &widths, &headers, title, index % 2 == 0);
+            pdf.table_row(row, &widths, &headers, title, RowStyle::alternating(index));
         }
     }
     pdf.finish(data, fallback_data)
@@ -599,7 +618,7 @@ mod tests {
                 "Amount".into(),
             ],
             "Paint",
-            true,
+            RowStyle::Striped,
         );
         assert!(pdf.page.contains("48.000 695.500 Tm"));
         assert!(pdf.page.contains("293.000 682.500 Tm"));

@@ -1,4 +1,5 @@
 //! Portable project files are separate from the local recovery/autosave document.
+use ketchup_core::tr;
 use crate::cutting_plan::{CutReport, CuttingPlan};
 use ketchup_core::Document;
 use std::{path::PathBuf, sync::mpsc};
@@ -64,7 +65,7 @@ fn portable_name(name: &str) -> String {
         .collect();
     let name = name.trim_matches([' ', '.']);
     if name.is_empty() {
-        "Untitled model"
+        tr!("project_files.untitled_model")
     } else {
         name
     }
@@ -84,7 +85,7 @@ fn exchange_name(name: &str, extension: &str) -> String {
 }
 
 pub fn decode(bytes: &[u8]) -> Result<Document, String> {
-    let json = std::str::from_utf8(bytes).map_err(|_| "The project is not UTF-8 text")?;
+    let json = std::str::from_utf8(bytes).map_err(|_| tr!("project_files.the_project_is_not_utf_8_text"))?;
     Document::from_json(json)
 }
 
@@ -106,8 +107,8 @@ fn run(
 pub fn open(ctx: &eframe::egui::Context) -> Pending {
     run(ctx, || {
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Open KetchUp3D project")
-            .add_filter("KetchUp3D project", PROJECT_EXTENSIONS)
+            .set_title(tr!("project_files.open_ketchup3d_project"))
+            .add_filter(tr!("project_files.ketchup3d_project"), PROJECT_EXTENSIONS)
             .pick_file()
         else {
             return Ok(Outcome::Cancelled);
@@ -165,8 +166,8 @@ pub fn save(
             path
         } else {
             let Some(path) = rfd::FileDialog::new()
-                .set_title("Save KetchUp3D project as")
-                .add_filter("KetchUp3D project", PROJECT_EXTENSIONS)
+                .set_title(tr!("project_files.save_ketchup3d_project_as"))
+                .add_filter(tr!("project_files.ketchup3d_project"), PROJECT_EXTENSIONS)
                 .set_file_name(file_name(&name))
                 .save_file()
             else {
@@ -201,9 +202,10 @@ fn extension_path(path: PathBuf, extension: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(name);
     // The picker confirmed overwriting the selected path, not an appended path.
     if path.exists() {
-        return Err(format!(
-            "{} already exists. Select that .{extension} file in the save dialog to replace it.",
-            path.display()
+        return Err(tr!(
+            "project_files.already_exists_select_that_file_in_the_save",
+            path.display(),
+            extension = extension,
         ));
     }
     Ok(path)
@@ -215,7 +217,7 @@ pub fn open(ctx: &eframe::egui::Context) -> Pending {
     let ctx = ctx.clone();
     wasm_bindgen_futures::spawn_local(async move {
         let result = if let Some(file) = rfd::AsyncFileDialog::new()
-            .add_filter("KetchUp3D project", PROJECT_EXTENSIONS)
+            .add_filter(tr!("project_files.ketchup3d_project"), PROJECT_EXTENSIONS)
             .pick_file()
             .await
         {
@@ -227,7 +229,7 @@ pub fn open(ctx: &eframe::egui::Context) -> Pending {
                     set_document_name(&mut doc, std::path::Path::new(&file.file_name()));
                     Outcome::BrowserOpened(Box::new(doc), file.file_name(), format!("{}:{}:{}", file.file_name(), file.inner().size(), file.inner().last_modified()))
                 }),
-                Err(_) => Err("The browser could not read this project".into()),
+                Err(_) => Err(tr!("project_files.the_browser_could_not_read_this_project").into()),
             }
         } else {
             Ok(Outcome::Cancelled)
@@ -252,13 +254,17 @@ pub fn save(
             .and_then(|name| name.to_str())
             .unwrap_or(&name),
     );
-    let launch = js_sys::Function::new_with_args("name, contents", include_str!("project_save.js"));
+    let launch = js_sys::Function::new_with_args(
+        "name, contents, description",
+        include_str!("project_save.js"),
+    );
     // Open the picker before spawning the async task, while the save action
     // still has the browser's user activation.
-    let result = launch.call2(
+    let result = launch.call3(
         &eframe::wasm_bindgen::JsValue::NULL,
         &eframe::wasm_bindgen::JsValue::from_str(&name),
         &eframe::wasm_bindgen::JsValue::from_str(&contents),
+        &eframe::wasm_bindgen::JsValue::from_str(tr!("project_files.ketchup3d_project")),
     );
     match result {
         Ok(value) if !value.is_null() => {
@@ -294,7 +300,7 @@ fn browser_save_error(error: eframe::wasm_bindgen::JsValue) -> String {
         .ok()
         .and_then(|message| message.as_string())
         .or_else(|| error.as_string())
-        .unwrap_or_else(|| "The browser could not save this project".into())
+        .unwrap_or_else(|| tr!("project_files.the_browser_could_not_save_this_project").into())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -317,13 +323,13 @@ fn download_bytes(
     mime: &str,
 ) -> Result<(), eframe::wasm_bindgen::JsValue> {
     use eframe::wasm_bindgen::{JsCast, JsValue, closure::Closure};
-    let window = web_sys::window().ok_or_else(|| JsValue::from_str("No browser window"))?;
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str(tr!("project_files.no_browser_window")))?;
     let document = window
         .document()
-        .ok_or_else(|| JsValue::from_str("No browser document"))?;
+        .ok_or_else(|| JsValue::from_str(tr!("project_files.no_browser_document")))?;
     let body = document
         .body()
-        .ok_or_else(|| JsValue::from_str("No browser document body"))?;
+        .ok_or_else(|| JsValue::from_str(tr!("project_files.no_browser_document_body")))?;
     let anchor = document
         .create_element("a")?
         .dyn_into::<web_sys::HtmlAnchorElement>()?;
@@ -358,7 +364,7 @@ fn blob_url(contents: &[u8], mime: &str) -> Result<String, eframe::wasm_bindgen:
 #[cfg(target_arch = "wasm32")]
 fn open_pdf(contents: &[u8]) -> Result<(), eframe::wasm_bindgen::JsValue> {
     use eframe::wasm_bindgen::JsValue;
-    let window = web_sys::window().ok_or_else(|| JsValue::from_str("No browser window"))?;
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str(tr!("project_files.no_browser_window")))?;
     let url = blob_url(contents, "application/pdf")?;
     // Keep this synchronous with Generate PDF so user activation is available.
     let opened = window.open_with_url_and_target(&url, "_blank");
@@ -373,7 +379,7 @@ fn open_pdf(contents: &[u8]) -> Result<(), eframe::wasm_bindgen::JsValue> {
             match result {
                 Err(error) => Err(error),
                 _ => Err(JsValue::from_str(
-                    "Allow pop-ups for KetchUp3D, then generate the PDF again.",
+                    tr!("project_files.allow_pop_ups_for_ketchup3d_then_generate_the"),
                 )),
             }
         }
@@ -429,8 +435,8 @@ pub fn import(
 ) -> Pending {
     run(ctx, move || {
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Import geometry (STL: mm; OBJ: metres; DXF: declared units or mm)")
-            .add_filter("Geometry", &[extension.as_str()])
+            .set_title(tr!("project_files.import_geometry_stl_mm_obj_metres_dxf_declared"))
+            .add_filter(tr!("project_files.geometry"), &[extension.as_str()])
             .pick_file()
         else {
             return Ok(Outcome::Cancelled);
@@ -438,13 +444,13 @@ pub fn import(
         if std::fs::metadata(&path).map_err(|e| e.to_string())?.len()
             > crate::interchange::MAX_SKP_BYTES as u64
         {
-            return Err("Geometry import is limited to 64 MiB per file".into());
+            return Err(tr!("project_files.geometry_import_is_limited_to_64_mib_per").into());
         }
         let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
         let name = path
             .file_stem()
             .and_then(|n| n.to_str())
-            .unwrap_or("SketchUp import");
+            .unwrap_or(tr!("project_files.sketchup_import"));
         (if extension == "skp" {
             crate::interchange::import_skp(&bytes, name)
         } else {
@@ -464,13 +470,13 @@ pub fn import(
     let ctx = ctx.clone();
     wasm_bindgen_futures::spawn_local(async move {
         let result = if let Some(file) = rfd::AsyncFileDialog::new()
-            .set_title("Import geometry (STL: mm; OBJ: metres; DXF: declared units or mm)")
-            .add_filter("Geometry", &[extension.as_str()])
+            .set_title(tr!("project_files.import_geometry_stl_mm_obj_metres_dxf_declared"))
+            .add_filter(tr!("project_files.geometry"), &[extension.as_str()])
             .pick_file()
             .await
         {
             if file.inner().size() > crate::interchange::MAX_SKP_BYTES as f64 {
-                Err("Geometry import is limited to 64 MiB per file".into())
+                Err(tr!("project_files.geometry_import_is_limited_to_64_mib_per").into())
             } else {
                 match wasm_bindgen_futures::JsFuture::from(file.inner().array_buffer()).await {
                     Ok(buffer) => {
@@ -478,7 +484,7 @@ pub fn import(
                         let name = std::path::Path::new(&name)
                             .file_stem()
                             .and_then(|n| n.to_str())
-                            .unwrap_or("SketchUp import");
+                            .unwrap_or(tr!("project_files.sketchup_import"));
                         (if extension == "skp" {
                             crate::interchange::import_skp_async(
                                 &js_sys::Uint8Array::new(&buffer).to_vec(),
@@ -494,7 +500,7 @@ pub fn import(
                         })
                         .and_then(|imported| prepare_import(model, &imported))
                     }
-                    Err(_) => Err("The browser could not read this geometry file".into()),
+                    Err(_) => Err(tr!("project_files.the_browser_could_not_read_this_geometry_file").into()),
                 }
             }
         } else {
@@ -511,8 +517,8 @@ pub fn export(ctx: &eframe::egui::Context, name: String, contents: Vec<u8>, stl:
     run(ctx, move || {
         let extension = if stl { "stl" } else { "obj" };
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Export geometry")
-            .add_filter("Geometry", &[extension])
+            .set_title(tr!("project_files.export_geometry"))
+            .add_filter(tr!("project_files.geometry"), &[extension])
             .set_file_name(exchange_name(&name, extension))
             .save_file()
         else {
@@ -534,7 +540,7 @@ pub fn export(ctx: &eframe::egui::Context, name: String, contents: Vec<u8>, stl:
     .map(|_| Outcome::Exported)
     .map_err(|e| {
         e.as_string()
-            .unwrap_or_else(|| "The browser could not download this OBJ file".into())
+            .unwrap_or_else(|| tr!("project_files.the_browser_could_not_download_this_obj_file").into())
     });
     let _ = sender.send(result);
     ctx.request_repaint();
@@ -550,7 +556,7 @@ pub fn prepare_import(
     imported.validate().map_err(str::to_owned)?;
     let selected = model.paste_entities(imported, ketchup_core::DVec3::ZERO);
     if selected.is_empty() {
-        return Err("The imported geometry cannot be inserted in this editing context".into());
+        return Err(tr!("project_files.the_imported_geometry_cannot_be_inserted_in_this").into());
     }
     model.validate().map_err(str::to_owned)?;
     Ok(Outcome::Imported(Box::new(model), selected))
@@ -586,13 +592,13 @@ pub fn export_cut_report(
     run(ctx, move || {
         let contents = render_cut_report(report, &name, &model, &selected, layout_settings)?;
         let (title, suffix) = match report {
-            CutReport::CuttingPlan => ("Export woodworking cutting plan", "cutting plan"),
-            CutReport::WorkshopLabels => ("Export workshop labels", "workshop labels"),
+            CutReport::CuttingPlan => (tr!("project_files.export_woodworking_cutting_plan"), tr!("project_files.cutting_plan")),
+            CutReport::WorkshopLabels => (tr!("project_files.export_workshop_labels"), tr!("project_files.workshop_labels")),
         };
         let Some(path) = rfd::FileDialog::new()
             .set_title(title)
-            .add_filter("PDF document", &["pdf"])
-            .set_file_name(exchange_name(&format!("{name} - {suffix}"), "pdf"))
+            .add_filter(tr!("project_files.pdf_document"), &["pdf"])
+            .set_file_name(exchange_name(&tr!("project_files.report_name", name = name, suffix = suffix), "pdf"))
             .save_file()
         else {
             return Ok(Outcome::Cancelled);
@@ -600,9 +606,10 @@ pub fn export_cut_report(
         let path = extension_path(path, "pdf")?;
         write(&path, &contents)?;
         open_pdf(&path).map_err(|error| {
-            format!(
-                "PDF saved to {}, but its viewer could not be opened: {error}",
-                path.display()
+            tr!(
+                "project_files.pdf_saved_to_but_its_viewer_could_not",
+                path.display(),
+                error = error,
             )
         })?;
         Ok(Outcome::Exported)
@@ -625,7 +632,7 @@ pub fn export_cut_report(
                 .map(|_| Outcome::Exported)
                 .map_err(|e| {
                     e.as_string()
-                        .unwrap_or_else(|| "The browser could not open this PDF".into())
+                        .unwrap_or_else(|| tr!("project_files.the_browser_could_not_open_this_pdf").into())
                 })
         });
     let _ = sender.send(result);
@@ -643,10 +650,10 @@ pub fn export_screenshots(
     run(ctx, move || {
         let export = crate::screenshots::encode_with_title(&settings, &pages, &name)?;
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Export screenshot")
-            .add_filter("Screenshot", &[export.extension])
+            .set_title(tr!("project_files.export_screenshot"))
+            .add_filter(tr!("project_files.screenshot"), &[export.extension])
             .set_file_name(exchange_name(
-                &format!("{name} - screenshot"),
+                &tr!("project_files.screenshot_2", name = name),
                 export.extension,
             ))
             .save_file()
@@ -668,14 +675,14 @@ pub fn export_screenshots(
     let (sender, receiver) = mpsc::channel();
     let result = crate::screenshots::encode_with_title(&settings, &pages, &name).and_then(|export| {
         download_bytes(
-            &exchange_name(&format!("{name} - screenshot"), export.extension),
+            &exchange_name(&tr!("project_files.screenshot_2", name = name), export.extension),
             &export.bytes,
             export.mime,
         )
         .map(|_| Outcome::Exported)
         .map_err(|e| {
             e.as_string()
-                .unwrap_or_else(|| "The browser could not download this screenshot".into())
+                .unwrap_or_else(|| tr!("project_files.the_browser_could_not_download_this_screenshot").into())
         })
     });
     let _ = sender.send(result);
@@ -691,9 +698,9 @@ pub fn export_estimate_pdf(
 ) -> Pending {
     run(ctx, move || {
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Export time and cost estimates")
-            .add_filter("PDF document", &["pdf"])
-            .set_file_name(exchange_name(&format!("{name} - estimates"), "pdf"))
+            .set_title(tr!("project_files.export_time_and_cost_estimates"))
+            .add_filter(tr!("project_files.pdf_document"), &["pdf"])
+            .set_file_name(exchange_name(&tr!("project_files.estimates", name = name), "pdf"))
             .save_file()
         else {
             return Ok(Outcome::Cancelled);
@@ -701,9 +708,10 @@ pub fn export_estimate_pdf(
         let path = extension_path(path, "pdf")?;
         write(&path, &contents)?;
         open_pdf(&path).map_err(|error| {
-            format!(
-                "PDF saved to {}, but its viewer could not be opened: {error}",
-                path.display()
+            tr!(
+                "project_files.pdf_saved_to_but_its_viewer_could_not",
+                path.display(),
+                error = error,
             )
         })?;
         Ok(Outcome::Exported)
@@ -723,7 +731,7 @@ pub fn export_estimate_pdf(
         .map_err(|error| {
             error
                 .as_string()
-                .unwrap_or_else(|| "The browser could not open this PDF".into())
+                .unwrap_or_else(|| tr!("project_files.the_browser_could_not_open_this_pdf").into())
         });
     let _ = sender.send(result);
     ctx.request_repaint();

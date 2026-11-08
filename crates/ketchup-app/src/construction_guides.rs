@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 use super::*;
 use ketchup_core::ConstructionGuide;
 
@@ -200,7 +201,7 @@ impl KetchupApp {
     pub(super) fn delete_construction_guides(&mut self, ctx: &egui::Context) {
         let before = self.doc.model.clone();
         self.doc.model.clear_guides();
-        self.finish_edit("Delete guides", before, ctx);
+        self.finish_edit(tr!("construction_guides.delete_guides"), before, ctx);
     }
 
     pub(super) fn paint_construction_guides(&self, p: &egui::Painter, rect: Rect) {

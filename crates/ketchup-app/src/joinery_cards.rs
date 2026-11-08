@@ -1,15 +1,16 @@
 //! Exploded vector schematics of supported profiles, using two contrasting parts.
 //! These describe joint topology; dimensions still come from the settings/model.
+use ketchup_core::tr;
 use super::*;
 
 fn description(kind: JointKind) -> &'static str {
     match kind {
-        JointKind::MortiseTenon => "A tenon with shoulders fits into a rectangular mortise.",
-        JointKind::HalfLap => "Opposing half-depth cuts let the two parts overlap.",
-        JointKind::TongueGroove => "A continuous thin tongue fits into a matching groove.",
-        JointKind::Rabbet => "A stepped edge fits against the complementary rebate.",
-        JointKind::Dovetail => "A flared tail fits into a matching tapered socket.",
-        JointKind::Finger => "Alternating straight fingers interlock across the joint.",
+        JointKind::MortiseTenon => tr!("joinery_cards.a_tenon_with_shoulders_fits_into_a_rectangular"),
+        JointKind::HalfLap => tr!("joinery_cards.opposing_half_depth_cuts_let_the_two_parts"),
+        JointKind::TongueGroove => tr!("joinery_cards.a_continuous_thin_tongue_fits_into_a_matching"),
+        JointKind::Rabbet => tr!("joinery_cards.a_stepped_edge_fits_against_the_complementary_rebate"),
+        JointKind::Dovetail => tr!("joinery_cards.a_flared_tail_fits_into_a_matching_tapered"),
+        JointKind::Finger => tr!("joinery_cards.alternating_straight_fingers_interlock_across_the_joint"),
     }
 }
 

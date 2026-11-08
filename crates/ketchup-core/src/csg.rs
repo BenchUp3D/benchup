@@ -59,7 +59,7 @@ impl Budget {
         self.left = self
             .left
             .checked_sub(n)
-            .ok_or("These solids are too complex for this operation")?;
+            .ok_or(tr!("core.csg.these_solids_are_too_complex_for_this_operation"))?;
         Ok(())
     }
 }
@@ -137,7 +137,7 @@ impl Node {
             return Ok(());
         }
         if depth > 256 {
-            return Err("These solids need too many clipping planes");
+            return Err(tr!("core.csg.these_solids_need_too_many_clipping_planes"));
         }
         if self.plane.is_none() {
             // Sampling balances the tree without a quadratic plane search.

@@ -1,4 +1,5 @@
 //! Shared entity menu and commands for the app bar, viewport, and Outliner.
+use ketchup_core::tr;
 use super::*;
 
 #[derive(Clone, Copy)]
@@ -74,16 +75,16 @@ impl KetchupApp {
                 if !selected.is_empty() {
                     self.set_tool(Tool::Select);
                     self.selected = selected;
-                    self.finish_edit("Duplicate", before, ctx);
+                    self.finish_edit(tr!("context_menu.duplicate"), before, ctx);
                 }
             }
             CleanAligned if !locked && !self.selected.is_empty() => {
                 let before = self.doc.model.clone();
                 match self.doc.model.clean_collinear_vertices(&self.selected) {
-                    Ok(0) => self.say(ctx, "No redundant aligned vertices in the selection"),
+                    Ok(0) => self.say(ctx, tr!("context_menu.no_redundant_aligned_vertices_in_the_selection")),
                     Ok(count) => {
-                        self.finish_edit("Clean aligned vertices", before, ctx);
-                        self.say(ctx, format!("Removed {count} redundant vertices"));
+                        self.finish_edit(tr!("context_menu.clean_aligned_vertices"), before, ctx);
+                        self.say(ctx, tr!("context_menu.removed_redundant_vertices", count = count));
                     }
                     Err(error) => self.say(ctx, error),
                 }
@@ -115,7 +116,7 @@ impl KetchupApp {
                         .map(|s| s.point)
                         .unwrap_or(clipboard.anchor);
                     self.paste_preview = Some(PastePreview { clipboard, point });
-                    self.say(ctx, "Click to place the copy · Escape to cancel");
+                    self.say(ctx, tr!("context_menu.click_to_place_the_copy_escape_to_cancel"));
                 }
             }
             Ungroup | Explode if !locked => {
@@ -126,9 +127,9 @@ impl KetchupApp {
                     .dissolve_objects(&self.selected, matches!(action, Ungroup));
                 self.finish_edit(
                     if matches!(action, Ungroup) {
-                        "Ungroup"
+                        tr!("context_menu.ungroup")
                     } else {
-                        "Explode"
+                        tr!("context_menu.explode")
                     },
                     before,
                     ctx,
@@ -148,9 +149,9 @@ impl KetchupApp {
                 }
                 self.finish_context_state_edit(
                     if matches!(action, Hide) {
-                        "Hide"
+                        tr!("context_menu.hide")
                     } else {
-                        "Lock"
+                        tr!("context_menu.lock")
                     },
                     before,
                     ctx,
@@ -160,7 +161,7 @@ impl KetchupApp {
                 let before = self.doc.model.clone();
                 let ids = self.doc.model.expand_entities(&self.selected);
                 self.doc.model.locked.retain(|id| !ids.contains(id));
-                self.finish_context_state_edit("Unlock", before, ctx);
+                self.finish_context_state_edit(tr!("context_menu.unlock"), before, ctx);
             }
             Unhide => {
                 let before = self.doc.model.clone();
@@ -168,7 +169,7 @@ impl KetchupApp {
                     .model
                     .hidden
                     .retain(|id| !self.selected.contains(id));
-                self.finish_context_state_edit("Unhide", before, ctx);
+                self.finish_context_state_edit(tr!("context_menu.unhide"), before, ctx);
             }
             _ => {}
         }
@@ -332,7 +333,7 @@ impl KetchupApp {
         };
         item(
             ui,
-            "Rename…",
+            tr!("context_menu.rename"),
             editable && self.selected.len() == 1 && objects,
             ContextAction::Rename,
         );
@@ -342,14 +343,14 @@ impl KetchupApp {
                 .first()
                 .is_some_and(|id| self.doc.model.texts.contains_key(id))
         {
-            item(ui, "Edit Text…", editable, ContextAction::EditText);
+            item(ui, tr!("context_menu.edit_text"), editable, ContextAction::EditText);
         }
         if self.selected.len() == 1 && objects {
             let object = &self.doc.model.objects[self.selected.first().unwrap()];
             let label = if object.kind == ObjectKind::Group {
-                "Edit Group"
+                tr!("context_menu.edit_group")
             } else {
-                "Edit Component"
+                tr!("context_menu.edit_component")
             };
             item(
                 ui,
@@ -362,47 +363,47 @@ impl KetchupApp {
         if self.doc.model.edit_context.is_some() {
             item(
                 ui,
-                "Close Editing Context",
+                tr!("context_menu.close_editing_context"),
                 true,
                 ContextAction::CloseContext,
             );
             ui.separator();
         }
-        item(ui, "Make Group…", editable, ContextAction::Group);
-        item(ui, "Create Component…", editable, ContextAction::Component);
-        item(ui, "Ungroup", editable && groups, ContextAction::Ungroup);
-        item(ui, "Explode", editable && objects, ContextAction::Explode);
+        item(ui, tr!("context_menu.make_group"), editable, ContextAction::Group);
+        item(ui, tr!("context_menu.create_component"), editable, ContextAction::Component);
+        item(ui, tr!("context_menu.ungroup"), editable && groups, ContextAction::Ungroup);
+        item(ui, tr!("context_menu.explode"), editable && objects, ContextAction::Explode);
         ui.separator();
         if fasteners::AVAILABLE {
             let pair_editable = self.selected_fastener_pair(ui.ctx()).is_some();
-            item(ui, "Automatic Fasteners", pair_editable, ContextAction::AutomaticFasteners);
+            item(ui, tr!("context_menu.automatic_fasteners"), pair_editable, ContextAction::AutomaticFasteners);
             ui.separator();
         }
-        item(ui, "Cut", editable, ContextAction::Cut);
-        item(ui, "Copy", selected, ContextAction::Copy);
-        item(ui, "Duplicate", editable, ContextAction::Duplicate);
-        item(ui, "Paste", self.clipboard.is_some(), ContextAction::Paste);
+        item(ui, tr!("context_menu.cut"), editable, ContextAction::Cut);
+        item(ui, tr!("context_menu.copy"), selected, ContextAction::Copy);
+        item(ui, tr!("context_menu.duplicate"), editable, ContextAction::Duplicate);
+        item(ui, tr!("context_menu.paste"), self.clipboard.is_some(), ContextAction::Paste);
         item(
             ui,
-            "Paste in Place",
+            tr!("context_menu.paste_in_place"),
             self.clipboard.is_some(),
             ContextAction::PasteInPlace,
         );
-        item(ui, "Delete", editable, ContextAction::Delete);
+        item(ui, tr!("common.delete"), editable, ContextAction::Delete);
         ui.separator();
         if self
             .selected
             .iter()
             .any(|id| self.doc.model.hidden.contains(id))
         {
-            item(ui, "Unhide", selected, ContextAction::Unhide);
+            item(ui, tr!("context_menu.unhide"), selected, ContextAction::Unhide);
         } else {
-            item(ui, "Hide", editable, ContextAction::Hide);
+            item(ui, tr!("context_menu.hide"), editable, ContextAction::Hide);
         }
         if self.doc.model.selection_locked(&self.selected) {
-            item(ui, "Unlock", selected, ContextAction::Unlock);
+            item(ui, tr!("context_menu.unlock"), selected, ContextAction::Unlock);
         } else {
-            item(ui, "Lock", selected, ContextAction::Lock);
+            item(ui, tr!("context_menu.lock"), selected, ContextAction::Lock);
         }
         extra(self, ui);
         if let Some(action) = action {
@@ -422,11 +423,11 @@ impl KetchupApp {
         let mut cancel = false;
         let response = Modal::new("rename_object", 360.).show(ctx, |modal| {
             modal.header(|ui| {
-                ui.text_heading("Rename");
-                ui.text_weak("Choose a name for this object.");
+                ui.text_heading(tr!("context_menu.rename_2"));
+                ui.text_weak(tr!("context_menu.choose_a_name_for_this_object"));
             });
             modal.body(|ui| {
-                ui.text_label("Name");
+                ui.text_label(tr!("common.name"));
                 let input = Self::name_input(ui, &mut name, egui::Id::unique("rename_object_name"));
                 if name.len() > 1024 {
                     name.truncate(name.floor_char_boundary(1024));
@@ -434,9 +435,9 @@ impl KetchupApp {
                 save = input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
             });
             modal.footer(|ui| {
-                cancel = ui.button("Cancel").clicked();
+                cancel = ui.button(tr!("common.cancel")).clicked();
                 let valid = !name.trim().is_empty();
-                save = (primary_button(ui, "Save", valid).clicked() || save) && valid;
+                save = (primary_button(ui, tr!("common.save"), valid).clicked() || save) && valid;
             });
         });
         if save {
@@ -457,6 +458,6 @@ impl KetchupApp {
         }
         let before = self.doc.model.clone();
         self.doc.model.objects.get_mut(&id).unwrap().name = name.to_owned();
-        self.finish_context_state_edit("Rename", before, ctx);
+        self.finish_context_state_edit(tr!("context_menu.rename_2"), before, ctx);
     }
 }

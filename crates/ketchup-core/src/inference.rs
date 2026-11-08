@@ -17,9 +17,9 @@ impl Axis {
     }
     pub fn label(self) -> &'static str {
         match self {
-            Self::X => "Red axis",
-            Self::Y => "Green axis",
-            Self::Z => "Blue axis",
+            Self::X => tr!("core.inference.red_axis"),
+            Self::Y => tr!("core.inference.green_axis"),
+            Self::Z => tr!("core.inference.blue_axis"),
         }
     }
 }
@@ -77,20 +77,20 @@ pub enum Inference {
 impl Inference {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Plane => "On plane",
-            Self::Endpoint => "Endpoint",
-            Self::Midpoint => "Midpoint",
-            Self::FaceCenter => "Face center",
-            Self::Origin => "Origin",
-            Self::OnEdge => "On edge",
-            Self::OnGuide => "On guide",
-            Self::GuidePoint => "Guide point",
-            Self::OnFace => "On face",
-            Self::OnAxis(Axis::X) => "On red axis",
-            Self::OnAxis(Axis::Y) => "On green axis",
-            Self::OnAxis(Axis::Z) => "On blue axis",
+            Self::Plane => tr!("core.inference.on_plane"),
+            Self::Endpoint => tr!("core.inference.endpoint"),
+            Self::Midpoint => tr!("core.inference.midpoint"),
+            Self::FaceCenter => tr!("core.inference.face_center"),
+            Self::Origin => tr!("core.inference.origin"),
+            Self::OnEdge => tr!("core.inference.on_edge"),
+            Self::OnGuide => tr!("core.inference.on_guide"),
+            Self::GuidePoint => tr!("core.inference.guide_point"),
+            Self::OnFace => tr!("core.inference.on_face"),
+            Self::OnAxis(Axis::X) => tr!("core.inference.on_red_axis"),
+            Self::OnAxis(Axis::Y) => tr!("core.inference.on_green_axis"),
+            Self::OnAxis(Axis::Z) => tr!("core.inference.on_blue_axis"),
             Self::Axis(a) => a.label(),
-            Self::Aligned => "Aligned axes",
+            Self::Aligned => tr!("core.inference.aligned_axes"),
         }
     }
 }

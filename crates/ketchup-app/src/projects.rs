@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 use super::*;
 use crate::project_files::{self, Outcome};
 use std::{path::PathBuf, sync::mpsc::TryRecvError};
@@ -80,11 +81,11 @@ impl RecentProject {
     }
     fn description(&self) -> String {
         let location = if let Some(path) = &self.path { path.display().to_string() }
-        else if let Some(file) = &self.browser_file { format!("Browser file: {file} (browser hides the full path; reselect to open)") }
+        else if let Some(file) = &self.browser_file { tr!("projects.browser_file_browser_hides_the_full_path_reselect", file = file) }
         else { String::new() };
         if let Some((server, id)) = &self.server {
             let url = format!("{}/share/{id}", server.trim_end_matches('/'));
-            if location.is_empty() { url } else { format!("{location}\n{url}") }
+            if location.is_empty() { url } else { tr!("projects.location_and_share_link", location = location, url = url) }
         } else { location }
     }
 }
@@ -117,8 +118,8 @@ impl KetchupApp {
     }
 
     pub(super) fn recent_projects_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        Self::menu_submenu(ui, "Recent Projects", None, |ui| {
-            if self.project.recent.is_empty() { ui.label("No recent projects"); }
+        Self::menu_submenu(ui, tr!("projects.recent_projects"), None, |ui| {
+            if self.project.recent.is_empty() { ui.label(tr!("projects.no_recent_projects")); }
             let mut chosen = None;
             let mut remove = None;
             for (index, entry) in self.project.recent.iter().enumerate() {
@@ -129,7 +130,7 @@ impl KetchupApp {
                     color: ui.visuals().text_color(),
                     ..Default::default()
                 });
-                label.append(&format!("\n{detail}"), 0., egui::TextFormat {
+                label.append(&tr!("projects.recent_project_detail", detail = detail), 0., egui::TextFormat {
                     font_id: egui::TextStyle::Small.resolve(ui.style()),
                     color: ui.visuals().weak_text_color(),
                     ..Default::default()
@@ -138,8 +139,8 @@ impl KetchupApp {
                     if ui.add(Self::menu_item_button(ui, label, None).wrap()).on_hover_text(detail).clicked() {
                         chosen = Some(index);
                     }
-                    if ui.small_button("Remove")
-                        .on_hover_text("Remove from recent projects")
+                    if ui.small_button(tr!("common.remove"))
+                        .on_hover_text(tr!("projects.remove_from_recent_projects"))
                         .clicked()
                     {
                         remove = Some(index);
@@ -246,11 +247,11 @@ impl KetchupApp {
                     let _ = path;
                 }
                 if entry.browser_file.is_some() {
-                    self.say(ctx, &format!("Reselect {} to reopen this browser file", entry.name));
+                    self.say(ctx, &tr!("projects.reselect_to_reopen_this_browser_file", entry.name));
                     self.perform_project(Action::Open, ctx);
                 } else if let Some((server, id)) = entry.server {
                     if server.trim_end_matches('/') != self.account.server.trim_end_matches('/') {
-                        self.project.error = Some(format!("This project belongs to {server}. Connect to that server in Account before opening it."));
+                        self.project.error = Some(tr!("projects.this_project_belongs_to_connect_to_that_server", server = server));
                     } else {
                         self.sharing.preferences.invitation = id;
                         self.sharing.preferences.open = true;
@@ -280,7 +281,7 @@ impl KetchupApp {
         }
         let geometry=self.doc.model.evaluate_joinery();
         if !geometry.errors.is_empty() {
-            self.project.error=Some(geometry.errors.into_iter().map(|(id,error)|format!("Wood joint #{id}: {error}")).collect::<Vec<_>>().join(" · "));
+            self.project.error=Some(geometry.errors.into_iter().map(|(id,error)|tr!("projects.wood_joint", id = id, error = error)).collect::<Vec<_>>().join(tr!("projects.joint_error_separator")));
             return;
         }
         match if self.project.export_stl {
@@ -317,7 +318,7 @@ impl KetchupApp {
         };
         if selection && selected.is_empty() {
             self.project.error =
-                Some("Select at least one part, or choose the whole project.".into());
+                Some(tr!("projects.select_at_least_one_part_or_choose_the").into());
             return;
         }
         self.project.operation = Operation::CutReport(report);
@@ -351,7 +352,7 @@ impl KetchupApp {
         let contents = match serde_json::to_string(&self.doc) {
             Ok(contents) => contents,
             Err(error) => {
-                self.project.error = Some(format!("Could not save project: {error}"));
+                self.project.error = Some(tr!("projects.could_not_save_project", error = error));
                 self.project.after_save = None;
                 return;
             }
@@ -378,7 +379,7 @@ impl KetchupApp {
         let result = match pending.try_recv() {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => Err("The file operation did not complete".into()),
+            Err(TryRecvError::Disconnected) => Err(tr!("projects.the_file_operation_did_not_complete").into()),
         };
         self.project.pending = None;
         let operation = self.project.operation;
@@ -393,7 +394,7 @@ impl KetchupApp {
             Ok(Outcome::Opened(doc, path)) => {
                 self.replace_project(*doc, path, ctx);
                 self.remember_recent_project(browser_file);
-                self.say(ctx, "Project opened");
+                self.say(ctx, tr!("projects.project_opened"));
             }
             Ok(Outcome::Saved(path)) => {
                 let downloaded = cfg!(target_arch = "wasm32") && path.is_none();
@@ -409,9 +410,9 @@ impl KetchupApp {
                 self.say(
                     ctx,
                     if downloaded {
-                        "Project download started"
+                        tr!("projects.project_download_started")
                     } else {
-                        "Project saved"
+                        tr!("projects.project_saved")
                     },
                 );
                 if let Some(action) = self.project.after_save.take() {
@@ -426,35 +427,35 @@ impl KetchupApp {
                 self.selected = selected;
                 self.finish_edit(
                     if self.project.import_format == "skp" {
-                        "Import SketchUp"
+                        tr!("projects.import_sketchup")
                     } else {
-                        "Import geometry"
+                        tr!("projects.import_geometry")
                     },
                     before,
                     ctx,
                 );
                 self.fit(ctx);
-                self.say(ctx, "Geometry imported as editable groups");
+                self.say(ctx, tr!("projects.geometry_imported_as_editable_groups"));
             }
             Ok(Outcome::Exported) => self.say(
                 ctx,
                 match (operation, cfg!(target_arch = "wasm32")) {
                     (Operation::CutReport(CutReport::CuttingPlan), true) => {
-                        "Cutting plan PDF opened in a new tab"
+                        tr!("projects.cutting_plan_pdf_opened_in_a_new_tab")
                     }
                     (Operation::CutReport(CutReport::CuttingPlan), false) => {
-                        "Cutting plan PDF saved and opened"
+                        tr!("projects.cutting_plan_pdf_saved_and_opened")
                     }
                     (Operation::CutReport(CutReport::WorkshopLabels), true) => {
-                        "Workshop labels PDF opened in a new tab"
+                        tr!("projects.workshop_labels_pdf_opened_in_a_new_tab")
                     }
                     (Operation::CutReport(CutReport::WorkshopLabels), false) => {
-                        "Workshop labels PDF saved and opened"
+                        tr!("projects.workshop_labels_pdf_saved_and_opened")
                     }
-                    (Operation::Screenshot, true) => "Screenshot download started",
-                    (Operation::Screenshot, false) => "Screenshot exported",
-                    (_, true) => "Geometry download started",
-                    (_, false) => "Geometry exported",
+                    (Operation::Screenshot, true) => tr!("projects.screenshot_download_started"),
+                    (Operation::Screenshot, false) => tr!("projects.screenshot_exported"),
+                    (_, true) => tr!("projects.geometry_download_started"),
+                    (_, false) => tr!("projects.geometry_exported"),
                 },
             ),
             #[cfg(target_arch = "wasm32")]
@@ -462,7 +463,7 @@ impl KetchupApp {
             Ok(Outcome::Cancelled) => self.project.after_save = None,
             Err(error) => {
                 self.project.after_save = None;
-                self.project.error = Some(format!("Could not complete file operation: {error}"));
+                self.project.error = Some(tr!("projects.could_not_complete_file_operation", error = error));
             }
         }
     }
@@ -473,13 +474,13 @@ impl KetchupApp {
             let (id, title, description) = match report {
                 CutReport::CuttingPlan => (
                     "woodworking_cutting_plan",
-                    "Woodworking cutting plan",
-                    "Create a PDF with quantities and finished cut sizes.",
+                    tr!("projects.woodworking_cutting_plan"),
+                    tr!("projects.create_a_pdf_with_quantities_and_finished_cut"),
                 ),
                 CutReport::WorkshopLabels => (
                     "workshop_labels",
-                    "Workshop Labels",
-                    "Create one label per piece with its cutting-plan mark, name, and finished thickness, width, and length. Print at actual size on A4 paper.",
+                    tr!("projects.workshop_labels"),
+                    tr!("projects.create_one_label_per_piece_with_its_cutting"),
                 ),
             };
             let response = Modal::new(id, 480.).show(ctx, |modal| {
@@ -489,27 +490,27 @@ impl KetchupApp {
                 });
                 modal.body(|ui| {
                     ui.add_enabled_ui(!self.selected.is_empty(), |ui| {
-                        ui.radio_value(&mut selection, true, "Selected parts / assemblies (visible only)");
+                        ui.radio_value(&mut selection, true, tr!("projects.selected_parts_assemblies_visible_only"));
                     });
-                    ui.radio_value(&mut selection, false, "Whole project (visible only)");
+                    ui.radio_value(&mut selection, false, tr!("projects.whole_project_visible_only"));
                     ui.add_space(10.);
                     if report == CutReport::CuttingPlan {
                         ui.horizontal(|ui| {
-                            ui.text_label("Saw kerf (cut width)");
+                            ui.text_label(tr!("projects.saw_kerf_cut_width"));
                             ui.add(egui::DragValue::new(&mut self.project.cutting_plan_layout.kerf_mm)
-                                .speed(0.1).range(0. ..=100.).suffix(" mm"));
+                                .speed(0.1).range(0. ..=100.).suffix(tr!("projects.mm")));
                         });
-                        ui.checkbox(&mut self.project.cutting_plan_layout.allow_rotation, "Allow rotating pieces 90 degrees")
-                            .on_hover_text("Leave off when the length must follow the stock grain.");
+                        ui.checkbox(&mut self.project.cutting_plan_layout.allow_rotation, tr!("projects.allow_rotating_pieces_90_degrees"))
+                            .on_hover_text(tr!("projects.leave_off_when_the_length_must_follow_the"));
                     }
-                    ui.text_weak("Only visible parts with assigned stock materials are included. Assign materials in Entity Info using the stock pricing table. Nested parts inherit their assembly’s material unless assigned separately.");
+                    ui.text_weak(tr!("projects.only_visible_parts_with_assigned_stock_materials_are"));
                     if report == CutReport::CuttingPlan {
-                        ui.text_weak("Layouts use assigned stock dimensions and saw kerf. Confirm grain, joinery and irregular shapes against the model; this is a practical layout, not a guaranteed minimum.");
+                        ui.text_weak(tr!("projects.layouts_use_assigned_stock_dimensions_and_saw_kerf"));
                     }
                 });
                 modal.footer(|ui| {
-                    if ui.button("Cancel").clicked() { Some(false) }
-                    else if primary_button(ui, "Generate PDF…", true).clicked() { Some(true) }
+                    if ui.button(tr!("common.cancel")).clicked() { Some(false) }
+                    else if primary_button(ui, tr!("projects.generate_pdf"), true).clicked() { Some(true) }
                     else { None }
                 })
             });
@@ -532,48 +533,48 @@ impl KetchupApp {
                 .dismissible(false)
                 .show(ctx, |modal| {
                     modal.header(|ui| {
-                        ui.text_heading("Project file");
+                        ui.text_heading(tr!("projects.project_file"));
                     });
                     modal.body(|ui| {
                         ui.horizontal(|ui| {
                             ui.spinner();
                             ui.text_label(match self.project.operation {
-                                Operation::Open => "Opening project…",
-                                Operation::Save => "Saving project…",
-                                Operation::Import => "Importing geometry…",
-                                Operation::Export => "Exporting geometry…",
-                                Operation::CutReport(CutReport::CuttingPlan) => "Preparing cutting plan PDF…",
-                                Operation::CutReport(CutReport::WorkshopLabels) => "Preparing workshop labels PDF…",
-                                Operation::Screenshot => "Exporting screenshot…",
+                                Operation::Open => tr!("projects.opening_project"),
+                                Operation::Save => tr!("projects.saving_project"),
+                                Operation::Import => tr!("projects.importing_geometry"),
+                                Operation::Export => tr!("projects.exporting_geometry"),
+                                Operation::CutReport(CutReport::CuttingPlan) => tr!("projects.preparing_cutting_plan_pdf"),
+                                Operation::CutReport(CutReport::WorkshopLabels) => tr!("projects.preparing_workshop_labels_pdf"),
+                                Operation::Screenshot => tr!("projects.exporting_screenshot"),
                             });
                         });
                     });
                     modal.footer(|ui| {
-                        ui.text_weak("Please wait…");
+                        ui.text_weak(tr!("projects.please_wait"));
                     });
                 });
         }
         if let Some(action) = self.project.confirm {
             let response = Modal::new("project_unsaved", 480.).show(ctx, |modal| {
                 modal.header(|ui| {
-                    ui.text_heading("Save project changes?");
+                    ui.text_heading(tr!("projects.save_project_changes"));
                 });
                 modal.body(|ui| {
-                    ui.text_label(format!(
-                        "Save changes to “{}” as a project file before continuing?",
+                    ui.text_label(tr!(
+                        "projects.save_changes_to_as_a_project_file_before",
                         self.doc.name
                     ));
                 });
                 modal.footer(|ui| {
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(tr!("common.cancel")).clicked() {
                         Some(2)
-                    } else if primary_button(ui, "Save", true).clicked() {
+                    } else if primary_button(ui, tr!("common.save"), true).clicked() {
                         Some(0)
                     } else if ui
                         .button(match action {
                             #[cfg(not(target_arch = "wasm32"))]
-                            Action::RestartForUpdate => "Restart with local recovery",
-                            _ => "Discard changes",
+                            Action::RestartForUpdate => tr!("projects.restart_with_local_recovery"),
+                            _ => tr!("projects.discard_changes"),
                         })
                         .clicked()
                     {
@@ -600,7 +601,7 @@ impl KetchupApp {
         if let Some(error) = &self.project.error {
             let response = Modal::new("project_file_error", 480.).show(ctx, |modal| {
                 modal.header(|ui| {
-                    ui.text_heading("Project file");
+                    ui.text_heading(tr!("projects.project_file"));
                 });
                 modal.body(|ui| {
                     ui.text_label(error);

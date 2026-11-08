@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#d94836" />
     <meta name="description" content="KetchUp3D — a precise little space for your next big idea. A Rust 3D modeler for desktop and web." />
-    <title>Untitled model - KetchUp3D</title>
+    <title>KetchUp3D</title>
     <script>
       // Match theme.rs before the loading screen paints; other values follow the system.
       try {
@@ -19,6 +19,7 @@
     </script>
     <link data-trunk rel="rust" href="crates/ketchup-app/Cargo.toml" data-bin="ketchup-app" />
     <link data-trunk rel="copy-dir" href="assets/branding" data-target-path="assets/branding" />
+    <link data-trunk rel="copy-dir" href="assets/i18n" data-target-path="assets/i18n" />
     <link rel="icon" type="image/x-icon" href="assets/branding/favicon.ico" sizes="16x16 32x32 48x48 64x64 128x128 256x256" />
     <link rel="icon" type="image/png" sizes="32x32" href="assets/branding/icon-32.png" />
     <link rel="icon" type="image/svg+xml" sizes="any" href="assets/branding/logo.svg" />
@@ -47,7 +48,7 @@
   </head>
   <body>
     <div id="ketchup-workspace">
-      <canvas id="ketchup-canvas" tabindex="0" aria-label="KetchUp3D modeling workspace"></canvas>
+      <canvas id="ketchup-canvas" tabindex="0"></canvas>
     </div>
     <script id="workspace-shortcuts">
       (() => {
@@ -113,28 +114,24 @@
     <div id="loading">
       <img src="assets/branding/logo.svg" alt="" width="72" height="72" />
       <strong>KetchUp3D<span>.</span></strong>
-      <p id="loading-label" role="status">Making room for your next big idea…</p>
+      <p id="loading-label" role="status"></p>
       <div class="loading-progress" role="progressbar" aria-labelledby="loading-label"></div>
     </div>
-    <script>
-      (() => {
-        const phrases = [
-          "Making room for your next big idea…",
-          "Shape your ideas with KetchUp3D…",
-          "A little squeeze of inspiration…",
-          "Warming up your creative corner…",
-          "Good things are taking shape…",
-          "Putting a fresh spin on things…",
-          "Your imagination is welcome here…",
-          "Sketch a little, dream a lot…",
-          "Rolling out the welcome grid…",
-          "Adding a dash of possibility…",
-          "Pull up a chair and a fresh canvas…",
-          "Almost thyme to create…",
-        ];
-        document.getElementById("loading-label").textContent =
-          phrases[Math.floor(Math.random() * phrases.length)];
-      })();
+    <script id="startup-messages">
+      fetch("assets/i18n/en.json")
+        .then(response => response.ok ? response.json() : null)
+        .then(messages => {
+          if (!messages) return;
+          document.getElementById("ketchup-canvas")
+            .setAttribute("aria-label", messages["web.canvas_label"]);
+          // The app owns the title and any error as soon as it leaves the loading screen.
+          const loading = document.getElementById("loading-label");
+          if (!loading) return;
+          document.title = messages["web.initial_title"];
+          const phrases = Object.keys(messages).filter(key => key.startsWith("web.loading."));
+          loading.textContent = messages[phrases[Math.floor(Math.random() * phrases.length)]];
+        })
+        .catch(() => {}); // Loading the application is independent of this request.
     </script>
   </body>
 </html>

@@ -1,9 +1,17 @@
 #[cfg(test)]
 use crate::test_ui::ContextExt as _;
 use eframe::egui::{self, Key};
+use ketchup_core::tr;
 
 pub(super) fn valid_tool_key(name: &str) -> bool {
     name == "Space" || (name.len() == 1 && name.as_bytes()[0].is_ascii_uppercase())
+}
+
+pub(super) fn key_label(name: &str) -> &str {
+    match name {
+        "Space" => tr!("shortcuts.space"),
+        _ => name,
+    }
 }
 
 /// A focused key recorder. Listening is transient; the caller persists only a
@@ -20,12 +28,11 @@ pub(super) fn shortcut_input(
         let listening_button = ui
             .ctx()
             .data_mut(|data| data.get_temp::<egui::Id>(state_id));
-        let mut listening =
-            listening_button.is_some_and(|id| {
-                ui.memory(|memory| memory.has_focus(id))
+        let mut listening = listening_button.is_some_and(|id| {
+            ui.memory(|memory| memory.has_focus(id))
                     // egui may surrender focus on Escape before this recorder runs.
                     || ui.input(|input| input.key_pressed(Key::Escape))
-            });
+        });
         let mut assigned = None;
         let mut finished = false;
         if listening {
@@ -54,8 +61,9 @@ pub(super) fn shortcut_input(
                 });
             });
         }
+        let current = key_label(current);
         let label = if listening && !finished {
-            "Press a key…"
+            tr!("shortcuts.press_a_key")
         } else {
             current
         };
@@ -65,17 +73,18 @@ pub(super) fn shortcut_input(
                 egui::Button::new(egui::RichText::new(label).monospace())
                     .selected(listening && !finished),
             )
-            .on_hover_text("Click, then press a letter or Space. Escape cancels.");
+            .on_hover_text(tr!("shortcuts.recorder_tooltip"));
         response.widget_info(|| {
             egui::WidgetInfo::labeled(
                 egui::Role::Button,
                 ui.is_enabled(),
-                format!(
-                    "Shortcut {current}. {}",
-                    if listening {
-                        "Press a letter or Space; Escape cancels"
+                tr!(
+                    "shortcuts.recorder_accessibility",
+                    key = current,
+                    action = if listening {
+                        tr!("shortcuts.recorder_listening")
                     } else {
-                        "Click to change"
+                        tr!("shortcuts.recorder_idle")
                     }
                 ),
             )

@@ -62,6 +62,20 @@ Open <http://127.0.0.1:8080>. Keep the app on the same origin/port to restore th
 
 Development builds use light optimization for application code and stronger optimization for dependencies and the geometry core, on both desktop and WebAssembly. Debug symbols, debug assertions, and overflow checks remain enabled. These optimizations target the cost of menu hovering, scrolling, and rendering in debug mode. The profile takes effect on the next development compilation; changing it recompiles affected dependencies once.
 
+## Application messages
+
+The English catalog is [assets/i18n/en.json](assets/i18n/en.json). Use
+`tr!("area.message")` for a label and `tr!("area.message", name = name)` for a
+template with a named variable. Keep the key stable when editing the text.
+Templates use Rust format syntax, including precision such as `{value:.2}`.
+For a quantity, put both complete messages under `one` and `other` and pass
+`count = quantity` before the other arguments. English uses `one` for exactly
+1 and `other` for zero and all other quantities.
+
+Rust embeds English at build time and the browser startup screen reads the
+same catalog. Keep storage keys, shortcuts, file-format tokens and wire codes
+separate from display messages. Release-note content lives in its own feed.
+
 ## Compile for distribution
 
 Desktop, on the OS you want to target:

@@ -10,25 +10,25 @@ impl Model {
         parent: Option<u64>,
     ) -> Result<(), &'static str> {
         if ids.is_empty() || ids.iter().any(|id| !self.objects.contains_key(id)) {
-            return Err("Drag groups or components to move them in the Outliner");
+            return Err(tr!("core.reparent.drag_groups_or_components_to_move_them_in"));
         }
         if self.selection_protected(ids) {
-            return Err("Unlock the objects and their contents before moving them");
+            return Err(tr!("core.reparent.unlock_the_objects_and_their_contents_before_moving"));
         }
         if let Some(parent) = parent {
             if !self.objects.get(&parent).is_some_and(|object| {
                 object.kind == ObjectKind::Group
                     || ids.iter().all(|id| self.parent(*id) == Some(parent))
             }) {
-                return Err("Drop inside a group or between sibling objects");
+                return Err(tr!("core.reparent.drop_inside_a_group_or_between_sibling_objects"));
             }
             if self.is_locked(parent) || self.is_hidden(parent) {
-                return Err("Show and unlock the destination group before moving objects into it");
+                return Err(tr!("core.reparent.show_and_unlock_the_destination_group_before_moving"));
             }
             let mut current = Some(parent);
             while let Some(id) = current {
                 if ids.contains(&id) {
-                    return Err("An object cannot be moved into itself or its descendants");
+                    return Err(tr!("core.reparent.an_object_cannot_be_moved_into_itself_or"));
                 }
                 current = self.parent(id);
             }
@@ -38,7 +38,7 @@ impl Model {
             .filter_map(|id| self.parent(*id))
             .any(|parent| self.is_hidden(parent))
         {
-            return Err("Show the parent object before moving its contents");
+            return Err(tr!("core.reparent.show_the_parent_object_before_moving_its_contents"));
         }
         Ok(())
     }
@@ -119,7 +119,7 @@ impl Model {
                 || self.parent(before) != parent
                 || ids.contains(&before)
             {
-                return Err("Choose an insertion point outside the dragged objects");
+                return Err(tr!("core.reparent.choose_an_insertion_point_outside_the_dragged_objects"));
             }
         }
         Ok(())

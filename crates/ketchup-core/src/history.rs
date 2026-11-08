@@ -445,7 +445,7 @@ impl History {
         for entry_id in ids {
             self.actions.push(HistoryAction {
                 id: uuid::Uuid::new_v4(),
-                action: if position < current { "Undo" } else { "Redo" }.into(),
+                action: if position < current { tr!("common.undo") } else { tr!("common.redo") }.into(),
                 entry_id,
                 author: author.clone(),
                 timestamp,

@@ -12,7 +12,9 @@ where
     impl<'de, T: serde::Deserialize<'de>> serde::de::Visitor<'de> for List<T> {
         type Value = Vec<T>;
         fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            f.write_str("a list or legacy tuple of sanding settings")
+            f.write_str(tr!(
+                "core.surface_treatment.a_list_or_legacy_tuple_of_sanding_settings"
+            ))
         }
         fn visit_seq<A: serde::de::SeqAccess<'de>>(
             self,
@@ -147,6 +149,61 @@ impl Default for Settings {
     }
 }
 
+/// An estimate step identified independently of its translated label.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Task {
+    Sanding(u32),
+    PreStain(u32),
+    Stain(u32),
+    Varnish {
+        coat: u32,
+        sanding_grit: Option<u32>,
+    },
+}
+
+impl Task {
+    pub fn label(self) -> String {
+        match self {
+            Self::Sanding(grit) => tr!("core.surface_treatment.sanding_grit", grit = grit),
+            Self::PreStain(coat) => tr!("core.surface_treatment.pre_stain_coat", coat = coat),
+            Self::Stain(coat) => tr!("core.surface_treatment.stain_coat", coat = coat),
+            Self::Varnish {
+                coat,
+                sanding_grit: None,
+            } => {
+                tr!("core.surface_treatment.varnish_coat", coat = coat)
+            }
+            Self::Varnish {
+                coat,
+                sanding_grit: Some(grit),
+            } => {
+                tr!(
+                    "core.surface_treatment.sanding_grit_after_coat",
+                    grit = grit,
+                    coat = coat
+                )
+            }
+        }
+    }
+
+    pub fn short_label(self) -> String {
+        match self {
+            Self::Sanding(grit) => tr!("core.surface_treatment.grit", grit = grit),
+            Self::Varnish {
+                coat,
+                sanding_grit: Some(grit),
+            } => {
+                tr!(
+                    "core.surface_treatment.grit_after_coat",
+                    grit = grit,
+                    coat = coat
+                )
+            }
+            _ => self.label(),
+        }
+    }
+}
+
 impl Settings {
     pub fn sanitize(&mut self) {
         let defaults = Self::default();
@@ -166,10 +223,15 @@ impl Settings {
     }
 
     pub fn any_enabled(&self) -> bool {
-        self.task_estimates(0.).next().is_some()
+        self.tasks(0.).next().is_some()
     }
 
     pub fn task_estimates(&self, area: f64) -> impl Iterator<Item = (String, Duration)> {
+        self.tasks(area)
+            .map(|(task, duration)| (task.label(), duration))
+    }
+
+    pub fn tasks(&self, area: f64) -> impl Iterator<Item = (Task, Duration)> {
         let mut tasks = Vec::new();
         for ((step, grit), between_coats) in self
             .sanding
@@ -178,23 +240,24 @@ impl Settings {
             .zip(&self.sanding_after_varnish)
         {
             if step.enabled && !*between_coats {
-                tasks.push((format!("Sanding · {grit} grit"), step.estimate(area)));
+                tasks.push((Task::Sanding(*grit), step.estimate(area)));
             }
         }
-        for (title, step, varnish) in [
-            ("Pre-stain", &self.pre_stain, false),
-            ("Stain", &self.stain, false),
-            ("Varnish", &self.varnish, true),
+        for (step, task) in [
+            (&self.pre_stain, Task::PreStain as fn(u32) -> Task),
+            (&self.stain, Task::Stain),
+            (&self.varnish, |coat| Task::Varnish {
+                coat,
+                sanding_grit: None,
+            }),
         ] {
             if !step.enabled {
                 continue;
             }
             for coat in 1..=step.coats {
-                tasks.push((
-                    format!("{title} · coat {coat}"),
-                    step.coat_estimate(area, coat),
-                ));
-                if varnish && coat < step.coats {
+                let task = task(coat);
+                tasks.push((task, step.coat_estimate(area, coat)));
+                if matches!(task, Task::Varnish { .. }) && coat < step.coats {
                     for ((sanding, grit), between_coats) in self
                         .sanding
                         .iter()
@@ -203,7 +266,10 @@ impl Settings {
                     {
                         if sanding.enabled && *between_coats {
                             tasks.push((
-                                format!("Sanding · {grit} grit (after coat {coat})"),
+                                Task::Varnish {
+                                    coat,
+                                    sanding_grit: Some(*grit),
+                                },
                                 sanding.estimate(area),
                             ));
                         }
@@ -215,7 +281,7 @@ impl Settings {
     }
 
     pub fn estimate(&self, area: f64) -> Duration {
-        self.task_estimates(area)
+        self.tasks(area)
             .fold(Duration::default(), |total, (_, step)| Duration {
                 work: total.work + step.work,
                 wait: total.wait + step.wait,

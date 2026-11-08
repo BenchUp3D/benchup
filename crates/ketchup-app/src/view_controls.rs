@@ -1,16 +1,17 @@
+use ketchup_core::tr;
 use super::*;
 use ketchup_core::StandardView;
 
 impl KetchupApp {
     pub(super) fn view_contents(&mut self, ui: &mut egui::Ui) {
         let before = self.doc.camera.clone();
-        inspector_section(ui, "Camera", "view_camera", false, |ui| {
-            ui.text_label("Projection");
+        inspector_section(ui, tr!("view_controls.camera"), "view_camera", false, |ui| {
+            ui.text_label(tr!("view_controls.projection"));
             let button_width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.;
             ui.horizontal(|ui| {
                 for (projection, label) in [
-                    (Projection::Perspective, "Perspective"),
-                    (Projection::Parallel, "Parallel"),
+                    (Projection::Perspective, tr!("view_controls.perspective")),
+                    (Projection::Parallel, tr!("view_controls.parallel")),
                 ] {
                     let response = ui.add_sized(
                         [button_width, ui.spacing().interact_size.y],
@@ -21,17 +22,17 @@ impl KetchupApp {
                     }
                     if projection == Projection::Parallel {
                         response
-                            .on_hover_text("Orthographic projection: parallel lines stay parallel");
+                            .on_hover_text(tr!("view_controls.orthographic_projection_parallel_lines_stay_parallel"));
                     }
                 }
             });
             ui.add_enabled_ui(
                 self.doc.camera.projection == Projection::Perspective,
                 |ui| {
-                    ui.text_label("Field of view");
+                    ui.text_label(tr!("view_controls.field_of_view"));
                     let mut degrees = self.doc.camera.fov.to_degrees();
                     if ui
-                        .add(egui::Slider::new(&mut degrees, 15. ..=100.).suffix("°"))
+                        .add(egui::Slider::new(&mut degrees, 15. ..=100.).suffix(tr!("view_controls.degree_symbol")))
                         .changed()
                     {
                         self.doc.camera.fov = degrees.to_radians();
@@ -43,7 +44,7 @@ impl KetchupApp {
                 if ui
                     .add_sized(
                         [button_width, ui.spacing().interact_size.y],
-                        egui::Button::new("Fit model"),
+                        egui::Button::new(tr!("view_controls.fit_model")),
                     )
                     .clicked()
                 {
@@ -56,7 +57,7 @@ impl KetchupApp {
                     if ui
                         .add_sized(
                             [button_width, ui.spacing().interact_size.y],
-                            egui::Button::new("Fit selection"),
+                            egui::Button::new(tr!("view_controls.fit_selection")),
                         )
                         .clicked()
                     {
@@ -68,7 +69,7 @@ impl KetchupApp {
                 if ui
                     .add_sized(
                         [button_width, ui.spacing().interact_size.y],
-                        egui::Button::new("Reset camera"),
+                        egui::Button::new(tr!("view_controls.reset_camera")),
                     )
                     .clicked()
                 {
@@ -80,7 +81,7 @@ impl KetchupApp {
                 }
             });
         });
-        inspector_section(ui, "Standard views", "view_standard_views", false, |ui| {
+        inspector_section(ui, tr!("view_controls.standard_views"), "view_standard_views", false, |ui| {
             standard_view_picker(ui, &mut self.doc.camera);
         });
         if before != self.doc.camera {
@@ -110,7 +111,7 @@ fn standard_view_picker(ui: &mut egui::Ui, camera: &mut Camera) {
                             egui::vec2(width, 100.),
                             egui::Button::new("").selected(selected).corner_radius(5),
                         )
-                        .on_hover_text(format!("{} view", view.label()));
+                        .on_hover_text(tr!("view_controls.view", view.label()));
                     if response.clicked() && !selected {
                         camera.set_standard_view(view);
                         response.mark_changed();
@@ -266,8 +267,8 @@ impl KetchupApp {
                 .min_size(egui::vec2(0., 32.))
                 .selected(self.tool == Tool::Paint),
             )
-            .on_hover_text("Choose how to paint and a paint color");
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Color"));
+            .on_hover_text(tr!("view_controls.choose_how_to_paint_and_a_paint_color"));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr!("view_controls.color")));
         egui::Popup::menu(&response)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
@@ -277,12 +278,12 @@ impl KetchupApp {
                 egui::Frame::new()
                     .inner_margin(egui::Margin::symmetric(padding, 6))
                     .show(ui, |ui| {
-                        ui.text_label("Paint by");
+                        ui.text_label(tr!("view_controls.paint_by"));
                         let button_width =
                             (ui.available_width() - ui.spacing().item_spacing.x) / 2.;
                         ui.horizontal(|ui| {
                             for (target, label) in
-                                [(PaintTarget::Face, "Face"), (PaintTarget::Group, "Group")]
+                                [(PaintTarget::Face, tr!("view_controls.face")), (PaintTarget::Group, tr!("view_controls.group"))]
                             {
                                 if ui
                                     .add_sized(
@@ -306,7 +307,7 @@ impl KetchupApp {
     }
 
     pub(in crate::app) fn paint_color_controls(&mut self, ui: &mut egui::Ui, activate_paint: bool) {
-        crate::inspector_table::inspector_field(ui, "paint_color", "Choose color", |ui| {
+        crate::inspector_table::inspector_field(ui, "paint_color", tr!("view_controls.choose_color"), |ui| {
             ui.spacing_mut().interact_size.x = ui.available_width();
             let response = ui.color_edit_button_srgb(&mut self.paint_color);
             if response.changed() && activate_paint {
@@ -316,7 +317,7 @@ impl KetchupApp {
         });
         ui.add_space(6.);
         ui.text_label(
-            RichText::new("Preset colors")
+            RichText::new(tr!("view_controls.preset_colors"))
                 .small()
                 .color(Palette::for_ui(ui).muted),
         );
@@ -378,7 +379,7 @@ impl KetchupApp {
 
     pub(in crate::app) fn sections_menu(&mut self, ui: &mut egui::Ui) {
         let before = self.doc.display.clone();
-        let button = egui::Button::new((Self::menu_item_icon(ui, Some("sections")), "Sections"))
+        let button = egui::Button::new((Self::menu_item_icon(ui, Some("sections")), tr!("view_controls.sections")))
             .gap(ui.spacing().icon_spacing)
             .right_text(egui::menu::SubMenuButton::arrow_atom(None));
         egui::menu::SubMenuButton::from_button(button)
@@ -390,8 +391,8 @@ impl KetchupApp {
                 Self::menu_style(ui.style_mut());
                 ui.set_width(208.);
                 let d = &mut self.doc.display;
-                Self::menu_checkbox(ui, &mut d.section_cuts, "Section cuts");
-                Self::menu_checkbox(ui, &mut d.section_fill, "Section fill");
+                Self::menu_checkbox(ui, &mut d.section_cuts, tr!("view_controls.section_cuts"));
+                Self::menu_checkbox(ui, &mut d.section_fill, tr!("view_controls.section_fill"));
                 ui.separator();
                 let padding = ui.spacing().button_padding.x as i8;
                 egui::Frame::new()
@@ -402,7 +403,7 @@ impl KetchupApp {
                             ui.available_width(),
                             [Column::fixed(112.), Column::flex(1.)],
                         );
-                        for (axis, label) in ["X · vertical", "Y · vertical", "Z · horizontal"]
+                        for (axis, label) in [tr!("view_controls.x_vertical"), tr!("view_controls.y_vertical"), tr!("view_controls.z_horizontal")]
                             .into_iter()
                             .enumerate()
                         {
@@ -411,7 +412,7 @@ impl KetchupApp {
                                     if cell
                                         .checkbox(&mut d.section_axes[axis], label)
                                         .on_hover_text(
-                                            "Keeps geometry on the negative side of this axis.",
+                                            tr!("view_controls.keeps_geometry_on_the_negative_side_of_this"),
                                         )
                                         .changed()
                                     {
@@ -436,7 +437,7 @@ impl KetchupApp {
                     });
             })
             .0
-            .on_hover_text("Configure section planes, cuts, fill, and axis positions");
+            .on_hover_text(tr!("view_controls.configure_section_planes_cuts_fill_and_axis_positions"));
         if self.doc.display != before {
             self.changed(ui.ctx());
         }

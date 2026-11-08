@@ -1,16 +1,17 @@
 //! Typed dimensions are converted to meters before reaching geometry operations.
+use ketchup_core::tr;
 use super::*;
 use ketchup_core::LengthUnit;
 
 pub(super) const MAX_INPUT_LEN: usize = 512;
-const FORMULA_EXAMPLE: &str = "Enter a formula such as 60cm - 89mm or (1m + 20cm) / 2";
+const FORMULA_EXAMPLE: &str = tr!("precision.enter_a_formula_such_as_60cm_89mm_or");
 
 pub(super) fn length(input: &str, unit: LengthUnit) -> Result<f64, &'static str> {
     let mut value = Formula::parse(input, true, unit.factor())?;
     match value.dimension {
         0 => value.number *= unit.factor(),
         1 => {}
-        _ => return Err("The formula must produce a length, not an area or volume"),
+        _ => return Err(tr!("precision.the_formula_must_produce_a_length_not_an")),
     }
     value.finite().map(|value| value.number)
 }
@@ -24,7 +25,7 @@ fn unit_factor(unit: &str) -> Result<f64, &'static str> {
         "in" | "inch" | "inches" | "\"" => 0.0254,
         "ft" | "foot" | "feet" | "'" => 0.3048,
         "yd" | "yard" | "yards" => 0.9144,
-        _ => return Err("Use length units mm, cm, m, km, in, ft, or yd"),
+        _ => return Err(tr!("precision.use_length_units_mm_cm_m_km_in")),
     })
 }
 
@@ -40,7 +41,7 @@ impl Quantity {
         if self.number.is_finite() {
             Ok(self)
         } else {
-            Err("The formula must produce a finite value")
+            Err(tr!("precision.the_formula_must_produce_a_finite_value"))
         }
     }
 }
@@ -60,7 +61,7 @@ impl<'a> Formula<'a> {
         default_length_factor: f64,
     ) -> Result<Quantity, &'static str> {
         if input.len() > MAX_INPUT_LEN {
-            return Err("The formula is too long");
+            return Err(tr!("precision.the_formula_is_too_long"));
         }
         let mut parser = Self {
             input,
@@ -103,7 +104,7 @@ impl<'a> Formula<'a> {
                     value.dimension = 1;
                     rhs.dimension = 1;
                 } else {
-                    return Err("Add or subtract quantities with matching units");
+                    return Err(tr!("precision.add_or_subtract_quantities_with_matching_units"));
                 }
             }
             value.number = if operator == b'+' {
@@ -126,7 +127,7 @@ impl<'a> Formula<'a> {
                 value.dimension += rhs.dimension;
             } else {
                 if rhs.number == 0. {
-                    return Err("Cannot divide by zero");
+                    return Err(tr!("precision.cannot_divide_by_zero"));
                 }
                 value.number /= rhs.number;
                 value.dimension -= rhs.dimension;
@@ -152,13 +153,13 @@ impl<'a> Formula<'a> {
     fn primary(&mut self) -> Result<Quantity, &'static str> {
         let mut value = if self.peek() == Some(b'(') {
             if self.depth >= 32 {
-                return Err("Use fewer nested parentheses");
+                return Err(tr!("precision.use_fewer_nested_parentheses"));
             }
             self.depth += 1;
             self.cursor += 1;
             let value = self.sum()?;
             if self.peek() != Some(b')') {
-                return Err("Close each opening parenthesis");
+                return Err(tr!("precision.close_each_opening_parenthesis"));
             }
             self.cursor += 1;
             self.depth -= 1;
@@ -208,7 +209,7 @@ impl<'a> Formula<'a> {
         }
         if self.cursor > start {
             if !self.allow_units {
-                return Err("Scale factors must use numbers without units");
+                return Err(tr!("precision.scale_factors_must_use_numbers_without_units"));
             }
             value.number *= unit_factor(&self.input[start..self.cursor])?;
             value.dimension += 1;
@@ -222,7 +223,7 @@ pub(super) fn positive_length(input: &str, unit: LengthUnit) -> Result<f64, &'st
     if value > 1e-7 && value <= 1e7 {
         Ok(value)
     } else {
-        Err("Enter a positive length between 0.0000001 m and 10000000 m")
+        Err(tr!("precision.enter_a_positive_length_between_0_0000001_m"))
     }
 }
 
@@ -240,7 +241,7 @@ pub(super) fn angle(input: &str, unit: ketchup_core::AngleUnit) -> Result<f64, &
         lower.ends_with(suffix).then(|| (&input[..input.len() - suffix.len()], factor))
     }).unwrap_or((input, unit.factor()));
     Formula::parse(formula, false, 1.).map(|value| value.number * factor)
-        .and_then(|degrees| if degrees.is_finite() { Ok(degrees) } else { Err("Enter a finite angle") })
+        .and_then(|degrees| if degrees.is_finite() { Ok(degrees) } else { Err(tr!("precision.enter_a_finite_angle")) })
 }
 
 pub(super) fn modeling_value_with_units(
@@ -318,7 +319,7 @@ impl KetchupApp {
                 let (width, height) = self
                     .length_input
                     .split_once(',')
-                    .ok_or("Enter width,height, such as 5m,50mm")?;
+                    .ok_or(tr!("precision.enter_width_height_such_as_5m_50mm"))?;
                 let width = positive_length(width, self.doc.display.units.length)?;
                 let height = positive_length(height, self.doc.display.units.length)?;
                 let direction = |value: f64| if value < 0. { -1. } else { 1. };
@@ -346,7 +347,7 @@ impl KetchupApp {
                 let target = positive_length(&self.length_input, self.doc.display.units.length)?;
                 let current: f64 = points.windows(2).map(|p| p[0].distance(p[1])).sum();
                 if current <= 1e-7 {
-                    return Err("Draw a stroke before setting its total length");
+                    return Err(tr!("precision.draw_a_stroke_before_setting_its_total_length"));
                 }
                 Ok(points
                     .into_iter()

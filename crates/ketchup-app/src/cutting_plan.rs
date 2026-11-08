@@ -1,5 +1,6 @@
 //! Woodworking cut lists. Geometry is already in world metres, including instances.
 //! Dimensions describe finished blanks, not stock-board nesting or grain direction.
+use ketchup_core::tr;
 use crate::cutting_layout::{self, Settings as LayoutSettings};
 use ketchup_core::{DVec3, Model};
 use std::collections::{BTreeMap, BTreeSet};
@@ -219,7 +220,7 @@ impl CuttingPlan {
                 .push(path.clone());
         }
         if groups.is_empty() {
-            return Err("No visible three-dimensional parts with assigned stock materials found. Assign a material from the stock pricing table in Entity Info. Model each board as a separate group/component or disconnected solid. Select a board or assembly, or use the whole project.".into());
+            return Err(tr!("cutting_plan.no_visible_three_dimensional_parts_with_assigned_stock").into());
         }
         Ok(Self {
             groups: groups
@@ -284,20 +285,21 @@ impl CuttingPlan {
         settings: LayoutSettings,
     ) -> Vec<u8> {
         let count: usize = self.groups.iter().map(|g| g.parts.len()).sum();
-        let mut pdf = Pdf::new(name, "Cutting Plan", selection);
-        pdf.heading("CUT LIST", 18.);
+        let mut pdf = Pdf::new(name, tr!("cutting_plan.cutting_plan"), selection);
+        pdf.heading(tr!("cutting_plan.cut_list"), 18.);
         pdf.paragraph(
-            &format!(
-                "{count} pieces  |  {} sizes  |  Dimensions in mm or cm",
-                self.groups.len()
+            &tr!(
+                "cutting_plan.cut_list_summary",
+                pieces = tr!("common.pieces", count = count),
+                sizes = tr!("cutting_plan.sizes", count = self.groups.len()),
             ),
             10.,
         );
         if self.skipped > 0 {
             pdf.paragraph(
-                &format!(
-                    "Omitted: {} items without assigned stock material or usable thickness.",
-                    self.skipped
+                &tr!(
+                    "cutting_plan.omitted_items",
+                    count = self.skipped
                 ),
                 9.,
             );
@@ -314,8 +316,8 @@ impl CuttingPlan {
             }
             for ((_, stock), groups) in stock_groups {
                 pdf.ensure(170.);
-                let title = format!(
-                    "Material: {} ({} x {} x {})",
+                let title = tr!(
+                    "cutting_plan.material_x_x",
                     stock.name,
                     metric_length(stock.dimensions[0]),
                     metric_length(stock.dimensions[1]),
@@ -329,7 +331,7 @@ impl CuttingPlan {
                 };
                 pdf.heading(&title, 11.);
                 let quantity: usize = groups.iter().map(|(_, g)| g.parts.len()).sum();
-                let pieces = format!("{quantity} piece{}", if quantity == 1 { "" } else { "s" });
+                let pieces = tr!("common.pieces", count = quantity);
                 let packed = stock_layout(&stock, &groups, settings);
                 let layout = Some(packed);
                 let sheet_stock = true;
@@ -340,32 +342,26 @@ impl CuttingPlan {
                             / 100_000_000.
                     })
                     .sum();
-                let summary = format!("{pieces} | Net cut area: {area:.2} m2");
+                let summary = tr!("cutting_plan.net_cut_area_m2", pieces = pieces, area = area);
                 pdf.paragraph(&summary, 9.);
                 if let Some(layout) = &layout {
-                    pdf.paragraph(
-                        &format!(
-                            "Stock required: {} {} | Saw kerf: {}",
-                            layout.stock.len(),
-                            match (sheet_stock, layout.stock.len()) {
-                                (true, 1) => "stock piece",
-                                (true, _) => "stock pieces",
-                                (false, 1) => "board",
-                                (false, _) => "boards",
-                            },
-                            metric_length(cutting_layout::tenths(settings.kerf_mm))
-                        ),
-                        9.,
-                    );
+                    let count = layout.stock.len();
+                    let kerf = metric_length(cutting_layout::tenths(settings.kerf_mm));
+                    let summary = if sheet_stock {
+                        tr!("cutting_plan.stock_required", count = count, kerf = kerf)
+                    } else {
+                        tr!("cutting_plan.boards_required", count = count, kerf = kerf)
+                    };
+                    pdf.paragraph(&summary, 9.);
                 }
                 if layout.as_ref().is_some_and(|l| !l.oversized.is_empty()) {
-                    pdf.paragraph("Stock count covers fitting cuts only; oversized cuts are listed separately.", 9.);
+                    pdf.paragraph(tr!("cutting_plan.stock_count_covers_fitting_cuts_only_oversized_cuts"), 9.);
                 }
                 pdf.table_header();
                 for &(index, group) in &groups {
                     if pdf.y < 115. {
                         pdf.new_page();
-                        pdf.heading(&format!("{title} (continued)"), 10.);
+                        pdf.heading(&tr!("cutting_plan.continued", title = title), 10.);
                         pdf.table_header();
                     }
                     cut_row(&mut pdf, index, group, true);
@@ -394,11 +390,11 @@ impl CuttingPlan {
         const ROW_GAP: f64 = 10.;
         const COLUMN_GAP: f64 = 16.;
 
-        let mut pdf = Pdf::new(name, "Workshop Labels", selection);
+        let mut pdf = Pdf::new(name, tr!("cutting_plan.workshop_labels"), selection);
         let first_row = pdf.y - 6.;
         let rows = ((first_row - 48. + ROW_GAP) / (HEIGHT + ROW_GAP)).floor() as usize;
         if rows == 0 {
-            return Err("The project name is too long to fit above the workshop labels.".into());
+            return Err(tr!("cutting_plan.the_project_name_is_too_long_to_fit").into());
         }
 
         let mut slot = 0;
@@ -418,7 +414,7 @@ impl CuttingPlan {
 
                 // Courier at 10 pt uses 6 pt per character. Keep two lines
                 // for the name and reserve the bottom line for dimensions.
-                let part = if part.is_empty() { "Unnamed part" } else { part };
+                let part = if part.is_empty() { tr!("cutting_plan.unnamed_part") } else { part };
                 let mut chars = part.chars();
                 let first: String = chars.by_ref().take(37).collect();
                 let mut second: String = chars.by_ref().take(37).collect();
@@ -502,7 +498,7 @@ fn cut_row(pdf: &mut Pdf, index: usize, group: &CutGroup, colored: bool) {
             );
             pdf.cell(474., 79., &metric_length(l));
         } else {
-            pdf.text(100., pdf.y, 8., "(continued)");
+            pdf.text(100., pdf.y, 8., tr!("cutting_plan.continued_2"));
             pdf.y -= 12.;
         }
         let available = ((pdf.y - 100.) / 12.).floor().max(1.) as usize;
@@ -513,11 +509,11 @@ fn cut_row(pdf: &mut Pdf, index: usize, group: &CutGroup, colored: bool) {
         pdf.y -= (count as f64 * 12.).max(14.);
         if !continued {
             if let Some(stock) = nominal_stock(t, w) {
-                pdf.text(330., pdf.y, 8., &format!("Approx. {stock} nominal"));
+                pdf.text(330., pdf.y, 8., &tr!("cutting_plan.approx_nominal", stock = stock));
                 pdf.y -= 12.;
             }
             if !group.rectangular {
-                pdf.text(100., pdf.y, 8., "CHECK SHAPE - bounding blank only");
+                pdf.text(100., pdf.y, 8., tr!("cutting_plan.check_shape_bounding_blank_only"));
                 pdf.y -= 12.;
             }
         }
@@ -554,17 +550,16 @@ fn draw_layout(
 ) {
     if !layout.oversized.is_empty() {
         pdf.ensure(70.);
-        pdf.heading("DOES NOT FIT SELECTED STOCK", 10.);
+        pdf.heading(tr!("cutting_plan.does_not_fit_selected_stock"), 10.);
         for (mark, quantity) in layout.oversized_marks() {
             let group = groups.iter().find(|(index, _)| *index == mark).unwrap().1;
             pdf.paragraph(
-                &format!(
-                    "{}: {} piece{}, {} x {} - choose larger stock",
-                    piece_mark(mark),
-                    quantity,
-                    if quantity == 1 { "" } else { "s" },
-                    metric_length(group.dimensions[1]),
-                    metric_length(group.dimensions[2])
+                &tr!(
+                    "cutting_plan.oversized_cut",
+                    count = quantity,
+                    mark = piece_mark(mark),
+                    width = metric_length(group.dimensions[1]),
+                    length = metric_length(group.dimensions[2]),
                 ),
                 9.,
             );
@@ -584,9 +579,9 @@ fn draw_layout(
         };
         pdf.ensure(height + 115.);
         pdf.heading(
-            &format!(
-                "{} {} of {}",
-                if sheet { "STOCK" } else { "BOARD" },
+            &tr!(
+                "cutting_plan.stock_page_heading",
+                if sheet { tr!("cutting_plan.stock") } else { tr!("cutting_plan.board") },
                 number + 1,
                 layout.stock.len()
             ),
@@ -594,8 +589,8 @@ fn draw_layout(
         );
         pdf.paragraph(title, 9.);
         pdf.paragraph(
-            &format!(
-                "Stock: {} x {} | Kerf: {} | Gray: offcut / kerf",
+            &tr!(
+                "cutting_plan.stock_x_kerf_gray_offcut_kerf",
                 metric_length(stock.length),
                 metric_length(stock.width),
                 metric_length(cutting_layout::tenths(settings.kerf_mm))
@@ -658,7 +653,7 @@ fn draw_layout(
                     quantity,
                     metric_length(group.dimensions[1]),
                     metric_length(group.dimensions[2]),
-                    if rotated { " (rotation used)" } else { "" }
+                    if rotated { tr!("cutting_plan.rotation_used") } else { "" }
                 ),
             );
             pdf.y -= 17.;
@@ -813,12 +808,12 @@ fn is_box(
 fn metric_length(tenths: u64) -> String {
     if tenths > 1000 {
         let value = format!("{}.{:02}", tenths / 100, tenths % 100);
-        return format!("{} cm", value.trim_end_matches('0').trim_end_matches('.'));
+        return tr!("cutting_plan.cm", value.trim_end_matches('0').trim_end_matches('.'));
     }
     if tenths.is_multiple_of(10) {
-        format!("{} mm", tenths / 10)
+        tr!("cutting_plan.mm", tenths / 10)
     } else {
-        format!("{}.{:01} mm", tenths / 10, tenths % 10)
+        tr!("cutting_plan.mm_2", tenths / 10, tenths % 10)
     }
 }
 
@@ -871,7 +866,7 @@ impl Pdf {
             name: name.into(),
             title,
             selection,
-            date: crate::estimate_pdf::generation_date().unwrap_or_else(|_| "Date unavailable".into()),
+            date: crate::estimate_pdf::generation_date().unwrap_or_else(|_| tr!("cutting_plan.date_unavailable").into()),
         };
         pdf.new_page();
         pdf
@@ -894,7 +889,7 @@ impl Pdf {
         }
         self.y=header.body_top;
         if self.selection {
-            self.text(42., self.y, 9., "Selected parts (visible only)");
+            self.text(42., self.y, 9., tr!("cutting_plan.selected_parts_visible_only"));
             self.y -= 22.;
         }
     }
@@ -979,11 +974,11 @@ impl Pdf {
         self.ensure(130.);
         self.gap(20.);
         for (x, title) in [
-            (42., "MARK"),
-            (100., "GROUP"),
-            (286., "QTY"),
-            (330., "SECTION (T x W)"),
-            (474., "CUT LENGTH"),
+            (42., tr!("cutting_plan.mark")),
+            (100., tr!("cutting_plan.group")),
+            (286., tr!("cutting_plan.qty")),
+            (330., tr!("cutting_plan.section_t_x_w")),
+            (474., tr!("cutting_plan.cut_length")),
         ] {
             self.text(x, self.y, 9., title);
         }
@@ -1009,10 +1004,11 @@ impl Pdf {
         let header_font_id=logo_id+1;
         for (i, page) in self.pages.iter_mut().enumerate() {
             use std::fmt::Write;
+            let note = pdf_string(tr!("cutting_plan.footer_note"));
+            let number = pdf_string(&tr!("cutting_plan.page_number", page = i + 1, count = count));
             let _ = writeln!(
                 page,
-                "0.4 g BT /F1 8 Tf 42 28 Td (Finished sizes - verify before cutting) Tj ET BT /F1 8 Tf 463 28 Td (Page {} / {count}) Tj ET",
-                i + 1
+                "0.4 g BT /F1 8 Tf 42 28 Td ({note}) Tj ET BT /F1 8 Tf 463 28 Td ({number}) Tj ET",
             );
             objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 {header_font_id} 0 R >> /XObject << /Logo {logo_id} 0 R >> >> /Contents {} 0 R >>", 5 + i * 2));
             objects.push(format!(

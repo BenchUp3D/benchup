@@ -4,9 +4,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const save = new Function('window', 'name', 'contents', fs.readFileSync(
+const launchSave = new Function('window', 'name', 'contents', 'description', fs.readFileSync(
     path.join(__dirname, '../crates/ketchup-app/src/project_save.js'), 'utf8',
 ));
+const catalog = require('../assets/i18n/en.json');
+const save = (window, name, contents) =>
+    launchSave(window, name, contents, catalog['project_files.ketchup3d_project']);
 
 test('save prompts immediately and reports the chosen name only after committing the file', async () => {
     const events = [];
@@ -17,6 +20,7 @@ test('save prompts immediately and reports the chosen name only after committing
             events.push('picker');
             assert.equal(options.suggestedName, 'House.k3d');
             assert.equal(options.id, 'ketchup-project-save');
+            assert.equal(options.types[0].description, 'KetchUp3D project');
             assert.deepEqual(options.types[0].accept, {'application/json': ['.k3d', '.ketchup']});
             return Promise.resolve({
                 name: 'New house.k3d',

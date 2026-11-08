@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 use ketchup_core::Document;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -8,7 +9,7 @@ pub(crate) fn data_dir() -> Result<std::path::PathBuf, String> {
     }
     directories::ProjectDirs::from("", "Ketchup", "Ketchup")
         .map(|d| d.data_local_dir().to_path_buf())
-        .ok_or_else(|| "Cannot locate the application data directory".into())
+        .ok_or_else(|| tr!("storage.cannot_locate_the_application_data_directory").into())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -28,7 +29,7 @@ pub fn load() -> Result<Option<Document>, String> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save(doc: &Document) -> Result<(), String> {
     let file = path()?;
-    std::fs::create_dir_all(file.parent().ok_or("Invalid storage path")?)
+    std::fs::create_dir_all(file.parent().ok_or(tr!("storage.invalid_storage_path"))?)
         .map_err(|e| e.to_string())?;
     let temporary = file.with_extension("json.tmp");
     let json = serde_json::to_vec(doc).map_err(|e| e.to_string())?;
@@ -45,16 +46,16 @@ pub fn save(doc: &Document) -> Result<(), String> {
 #[cfg(target_arch = "wasm32")]
 fn browser_storage() -> Result<web_sys::Storage, String> {
     web_sys::window()
-        .ok_or("No browser window")?
+        .ok_or(tr!("storage.no_browser_window"))?
         .local_storage()
-        .map_err(|_| "Local storage is blocked".to_string())?
-        .ok_or_else(|| "Local storage is unavailable".into())
+        .map_err(|_| tr!("storage.local_storage_is_blocked").to_string())?
+        .ok_or_else(|| tr!("storage.local_storage_is_unavailable").into())
 }
 #[cfg(target_arch = "wasm32")]
 pub fn load() -> Result<Option<Document>, String> {
     browser_storage()?
         .get_item("ketchup.document.v1")
-        .map_err(|_| "Cannot read local storage".to_string())?
+        .map_err(|_| tr!("storage.cannot_read_local_storage").to_string())?
         .map(|s| Document::from_json(&s))
         .transpose()
 }
@@ -63,7 +64,7 @@ pub fn save(doc: &Document) -> Result<(), String> {
     let json = serde_json::to_string(doc).map_err(|e| e.to_string())?;
     browser_storage()?
         .set_item("ketchup.document.v1", &json)
-        .map_err(|_| "Local storage is blocked or full".to_string())
+        .map_err(|_| tr!("storage.local_storage_is_blocked_or_full").to_string())
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

@@ -1,18 +1,38 @@
 //! Deployment configuration, deliberately separate from saved user preferences.
 #[cfg(not(target_arch = "wasm32"))]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const KEY: &str = "KETCHUP_SERVER_URL";
 
+#[derive(Debug)]
+pub enum ConfigError {
+    InvalidValue,
+    Unconfigured,
+    #[cfg(any(not(target_arch = "wasm32"), test))]
+    MissingEquals(usize),
+    #[cfg(any(not(target_arch = "wasm32"), test))]
+    UnclosedQuote(usize),
+    #[cfg(any(not(target_arch = "wasm32"), test))]
+    TrailingText(usize),
+    #[cfg(not(target_arch = "wasm32"))]
+    MissingArgument,
+    #[cfg(not(target_arch = "wasm32"))]
+    InvalidUnicode,
+    #[cfg(not(target_arch = "wasm32"))]
+    InFile(PathBuf, Box<ConfigError>),
+    #[cfg(not(target_arch = "wasm32"))]
+    ReadFile(PathBuf, std::io::Error),
+}
+
 #[cfg(any(not(target_arch = "wasm32"), test))]
-pub fn dotenv(contents: &str) -> Result<Option<String>, String> {
+pub fn dotenv(contents: &str) -> Result<Option<String>, ConfigError> {
     let mut result = None;
     for (index, line) in contents.lines().enumerate() {
         let line = line.trim().trim_start_matches('\u{feff}');
         let line = line.strip_prefix("export ").unwrap_or(line).trim();
         let Some((key, raw)) = line.split_once('=') else {
             if line == KEY {
-                return Err(format!("Missing '=' for {KEY} on line {}", index + 1));
+                return Err(ConfigError::MissingEquals(index + 1));
             }
             continue;
         };
@@ -25,10 +45,10 @@ pub fn dotenv(contents: &str) -> Result<Option<String>, String> {
             let end = raw[1..]
                 .find(quote)
                 .map(|i| i + 1)
-                .ok_or_else(|| format!("Unclosed quote for {KEY} on line {}", index + 1))?;
+                .ok_or(ConfigError::UnclosedQuote(index + 1))?;
             let trailing = raw[end + 1..].trim();
             if !trailing.is_empty() && !trailing.starts_with('#') {
-                return Err(format!("Unexpected text after {KEY} on line {}", index + 1));
+                return Err(ConfigError::TrailingText(index + 1));
             }
             &raw[1..end]
         } else {
@@ -39,23 +59,25 @@ pub fn dotenv(contents: &str) -> Result<Option<String>, String> {
     Ok(result)
 }
 #[cfg(not(target_arch = "wasm32"))]
-pub fn read_dotenv(path: &Path) -> Result<Option<String>, String> {
+pub fn read_dotenv(path: &Path) -> Result<Option<String>, ConfigError> {
     match std::fs::read_to_string(path) {
-        Ok(contents) => dotenv(&contents).map_err(|error| format!("{}: {error}", path.display())),
+        Ok(contents) => {
+            dotenv(&contents).map_err(|error| ConfigError::InFile(path.to_owned(), Box::new(error)))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("Cannot read {}: {error}", path.display())),
+        Err(error) => Err(ConfigError::ReadFile(path.to_owned(), error)),
     }
 }
-pub fn nonempty(value: &str) -> Result<String, String> {
+pub fn nonempty(value: &str) -> Result<String, ConfigError> {
     let value = value.trim().trim_end_matches('/');
     if value.is_empty() || value.contains(['\n', '\r']) {
-        return Err(format!("{KEY} must contain a server URL"));
+        return Err(ConfigError::InvalidValue);
     }
     Ok(value.into())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn command_line(args: impl IntoIterator<Item = String>) -> Result<Option<String>, String> {
+pub fn command_line(args: impl IntoIterator<Item = String>) -> Result<Option<String>, ConfigError> {
     let mut args = args.into_iter();
     let mut value = None;
     while let Some(arg) = args.next() {
@@ -64,7 +86,7 @@ pub fn command_line(args: impl IntoIterator<Item = String>) -> Result<Option<Str
                 &args
                     .next()
                     .filter(|arg| !arg.starts_with("--"))
-                    .ok_or("--server-url requires a URL")?,
+                    .ok_or(ConfigError::MissingArgument)?,
             )?);
         } else if let Some(url) = arg.strip_prefix("--server-url=") {
             value = Some(nonempty(url)?);
@@ -73,7 +95,7 @@ pub fn command_line(args: impl IntoIterator<Item = String>) -> Result<Option<Str
     Ok(value)
 }
 
-pub fn configured_server() -> Result<String, String> {
+pub fn configured_server() -> Result<String, ConfigError> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         if let Some(value) = command_line(std::env::args().skip(1))? {
@@ -83,15 +105,14 @@ pub fn configured_server() -> Result<String, String> {
             return nonempty(
                 &value
                     .into_string()
-                    .map_err(|_| format!("{KEY} must be UTF-8"))?,
+                    .map_err(|_| ConfigError::InvalidUnicode)?,
             );
         }
         if let Some(value) = read_dotenv(Path::new(".env"))? {
             return Ok(value);
         }
     }
-    option_env!("KETCHUP_SERVER_URL").map(nonempty).unwrap_or_else(||
-        Err("No account server configured. Set KETCHUP_SERVER_URL in .env or at build time, or launch with --server-url URL.".into()))
+    nonempty(option_env!("KETCHUP_SERVER_URL").ok_or(ConfigError::Unconfigured)?)
 }
 
 #[cfg(test)]

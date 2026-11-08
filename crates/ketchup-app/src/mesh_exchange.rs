@@ -1,11 +1,12 @@
 //! Strict, bounded interchange subset. Coordinates returned in metres, Z up.
+use ketchup_core::tr;
 use ketchup_core::{DVec3, Model};
 use std::collections::{BTreeMap, BTreeSet};
 const LIMIT: usize = 200_000;
 fn number(s: &str) -> Result<f64, String> {
-    let n: f64 = s.parse().map_err(|_| format!("Invalid number: {s}"))?;
+    let n: f64 = s.parse().map_err(|_| tr!("mesh_exchange.invalid_number", s = s))?;
     if !n.is_finite() || n.abs() > 1e9 {
-        return Err("Non-finite or excessive coordinate".into());
+        return Err(tr!("mesh_exchange.non_finite_or_excessive_coordinate").into());
     }
     Ok(n)
 }
@@ -18,7 +19,7 @@ struct Mesh {
 impl Mesh {
     fn point(&mut self, p: DVec3) -> Result<usize, String> {
         if self.points.len() >= LIMIT || !p.is_finite() || p.abs().max_element() > 1e9 {
-            return Err("Import exceeds coordinate or 200,000 vertex limit".into());
+            return Err(tr!("mesh_exchange.import_exceeds_coordinate_or_200_000_vertex_limit").into());
         }
         self.points.push(p);
         Ok(self.points.len() - 1)
@@ -44,18 +45,18 @@ impl Mesh {
         for (face, rings) in [(true, self.faces), (false, self.lines)] {
             for ring in rings {
                 if next > 1_000_000 {
-                    return Err("Import exceeds one million entities".into());
+                    return Err(tr!("mesh_exchange.import_exceeds_one_million_entities").into());
                 }
                 let ring: Vec<u64> = ring.into_iter().map(|i| ids[i]).collect();
                 if ring.len() < if face { 3 } else { 2 } || ring.windows(2).any(|p| p[0] == p[1]) {
-                    return Err("Degenerate geometry".into());
+                    return Err(tr!("mesh_exchange.degenerate_geometry").into());
                 }
                 let count = if face { ring.len() } else { ring.len() - 1 };
                 for i in 0..count {
                     let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
                     let key = (a.min(b), a.max(b));
                     if a == b {
-                        return Err("Degenerate edge".into());
+                        return Err(tr!("mesh_exchange.degenerate_edge").into());
                     }
                     if pairs.insert(key) {
                         next += 1;
@@ -74,10 +75,10 @@ impl Mesh {
             }
         }
         if next >= 1_000_000 {
-            return Err("Import exceeds one million entities".into());
+            return Err(tr!("mesh_exchange.import_exceeds_one_million_entities").into());
         }
         if entities.is_empty() {
-            return Err("No supported geometry in file".into());
+            return Err(tr!("mesh_exchange.no_supported_geometry_in_file").into());
         }
         next += 1;
         let mut objects = BTreeMap::new();
@@ -92,17 +93,17 @@ impl Mesh {
 }
 pub fn import(bytes: &[u8], extension: &str, name: &str) -> Result<Model, String> {
     if bytes.len() > super::interchange::MAX_SKP_BYTES {
-        return Err("Import is limited to 64 MiB".into());
+        return Err(tr!("mesh_exchange.import_is_limited_to_64_mib").into());
     }
     match extension {
         "stl" => stl(bytes)?.finish(name),
         "obj" => {
-            obj(std::str::from_utf8(bytes).map_err(|_| "OBJ must be UTF-8 text")?)?.finish(name)
+            obj(std::str::from_utf8(bytes).map_err(|_| tr!("mesh_exchange.obj_must_be_utf_8_text"))?)?.finish(name)
         }
         "dxf" => {
-            dxf(std::str::from_utf8(bytes).map_err(|_| "Only text DXF is supported")?)?.finish(name)
+            dxf(std::str::from_utf8(bytes).map_err(|_| tr!("mesh_exchange.only_text_dxf_is_supported"))?)?.finish(name)
         }
-        _ => Err("Unsupported import format".into()),
+        _ => Err(tr!("mesh_exchange.unsupported_import_format").into()),
     }
 }
 fn stl(bytes: &[u8]) -> Result<Mesh, String> {
@@ -124,13 +125,13 @@ fn stl(bytes: &[u8]) -> Result<Mesh, String> {
             return Ok(mesh);
         }
     }
-    let text = std::str::from_utf8(bytes).map_err(|_| "Invalid binary STL length")?;
+    let text = std::str::from_utf8(bytes).map_err(|_| tr!("mesh_exchange.invalid_binary_stl_length"))?;
     let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
     if !lines
         .next()
         .is_some_and(|l| l == "solid" || l.starts_with("solid "))
     {
-        return Err("Expected ASCII STL solid".into());
+        return Err(tr!("mesh_exchange.expected_ascii_stl_solid").into());
     }
     let mut ended = false;
     while let Some(line) = lines.next() {
@@ -140,33 +141,33 @@ fn stl(bytes: &[u8]) -> Result<Mesh, String> {
         }
         let normal: Vec<_> = line.split_whitespace().collect();
         if normal.len() != 5 || normal[..2] != ["facet", "normal"] {
-            return Err("Expected STL facet normal".into());
+            return Err(tr!("mesh_exchange.expected_stl_facet_normal").into());
         }
         for n in &normal[2..] {
             number(n)?;
         }
         if lines.next() != Some("outer loop") {
-            return Err("Expected STL outer loop".into());
+            return Err(tr!("mesh_exchange.expected_stl_outer_loop").into());
         }
         let mut face = Vec::new();
         for _ in 0..3 {
             let v: Vec<_> = lines
                 .next()
-                .ok_or("Truncated STL")?
+                .ok_or(tr!("mesh_exchange.truncated_stl"))?
                 .split_whitespace()
                 .collect();
             if v.len() != 4 || v[0] != "vertex" {
-                return Err("Expected STL vertex".into());
+                return Err(tr!("mesh_exchange.expected_stl_vertex").into());
             }
             face.push(mesh.point(DVec3::new(number(v[1])?, number(v[2])?, number(v[3])?) * 0.001)?);
         }
         if lines.next() != Some("endloop") || lines.next() != Some("endfacet") {
-            return Err("Invalid STL facet ending".into());
+            return Err(tr!("mesh_exchange.invalid_stl_facet_ending").into());
         }
         mesh.faces.push(face);
     }
     if !ended || lines.next().is_some() {
-        return Err("Invalid STL ending".into());
+        return Err(tr!("mesh_exchange.invalid_stl_ending").into());
     }
     Ok(mesh)
 }
@@ -185,7 +186,7 @@ fn obj(text: &str) -> Result<Mesh, String> {
         match words[0] {
             "v" => {
                 if words.len() != 4 {
-                    return Err("OBJ vertices must have exactly XYZ coordinates".into());
+                    return Err(tr!("mesh_exchange.obj_vertices_must_have_exactly_xyz_coordinates").into());
                 }
                 mesh.point(DVec3::new(
                     number(words[1])?,
@@ -195,12 +196,12 @@ fn obj(text: &str) -> Result<Mesh, String> {
             }
             "f" | "l" => {
                 if words.len() > 4097 {
-                    return Err("OBJ polygon exceeds 4096 vertices".into());
+                    return Err(tr!("mesh_exchange.obj_polygon_exceeds_4096_vertices").into());
                 }
                 let mut ring = Vec::new();
                 for w in &words[1..] {
                     let raw = w.split('/').next().unwrap_or("");
-                    let n: i64 = raw.parse().map_err(|_| "Invalid OBJ vertex index")?;
+                    let n: i64 = raw.parse().map_err(|_| tr!("mesh_exchange.invalid_obj_vertex_index"))?;
                     let i = if n < 0 {
                         mesh.points.len() as i64 + n
                     } else {
@@ -208,13 +209,13 @@ fn obj(text: &str) -> Result<Mesh, String> {
                     };
                     if n == 0 || i < 0 || i >= mesh.points.len() as i64 {
                         return Err(
-                            "OBJ vertex index out of range (forward references unsupported)".into(),
+                            tr!("mesh_exchange.obj_vertex_index_out_of_range_forward_references").into(),
                         );
                     }
                     ring.push(i as usize);
                 }
                 if mesh.faces.len() + mesh.lines.len() >= LIMIT {
-                    return Err("Too many OBJ primitives".into());
+                    return Err(tr!("mesh_exchange.too_many_obj_primitives").into());
                 }
                 if words[0] == "f" {
                     mesh.faces.push(ring);
@@ -223,7 +224,7 @@ fn obj(text: &str) -> Result<Mesh, String> {
                 }
             }
             "vt" | "vn" | "o" | "g" | "s" | "usemtl" | "mtllib" => {}
-            _ => return Err(format!("Unsupported OBJ statement: {}", words[0])),
+            _ => return Err(tr!("mesh_exchange.unsupported_obj_statement", words[0])),
         }
     }
     Ok(mesh)
@@ -231,25 +232,25 @@ fn obj(text: &str) -> Result<Mesh, String> {
 fn dxf(text: &str) -> Result<Mesh, String> {
     let lines: Vec<_> = text.lines().collect();
     if !lines.len().is_multiple_of(2) {
-        return Err("Truncated DXF code/value pair".into());
+        return Err(tr!("mesh_exchange.truncated_dxf_code_value_pair").into());
     }
     let pairs: Vec<(i32, &str)> = lines
         .chunks_exact(2)
         .map(|p| {
             Ok((
-                p[0].trim().parse().map_err(|_| "Invalid DXF group code")?,
+                p[0].trim().parse().map_err(|_| tr!("mesh_exchange.invalid_dxf_group_code"))?,
                 p[1].trim(),
             ))
         })
         .collect::<Result<_, String>>()?;
     if pairs.last() != Some(&(0, "EOF")) {
-        return Err("DXF must end with EOF".into());
+        return Err(tr!("mesh_exchange.dxf_must_end_with_eof").into());
     }
     let mut scale = 0.001;
     for i in 0..pairs.len().saturating_sub(1) {
         if pairs[i] == (9, "$INSUNITS") {
             if pairs[i + 1].0 != 70 {
-                return Err("Invalid DXF units".into());
+                return Err(tr!("mesh_exchange.invalid_dxf_units").into());
             }
             scale = match pairs[i + 1].1 {
                 "0" | "4" => 0.001,
@@ -257,7 +258,7 @@ fn dxf(text: &str) -> Result<Mesh, String> {
                 "2" => 0.3048,
                 "5" => 0.01,
                 "6" => 1.,
-                _ => return Err("DXF units unsupported (use mm, cm, m, inches or feet)".into()),
+                _ => return Err(tr!("mesh_exchange.dxf_units_unsupported_use_mm_cm_m_inches").into()),
             };
         }
     }
@@ -268,7 +269,7 @@ fn dxf(text: &str) -> Result<Mesh, String> {
     while i < pairs.len() {
         if pairs[i] == (0, "SECTION") {
             if section != "" || pairs.get(i + 1).map(|p| p.0) != Some(2) {
-                return Err("Invalid DXF section".into());
+                return Err(tr!("mesh_exchange.invalid_dxf_section").into());
             }
             section = pairs[i + 1].1;
             i += 2;
@@ -285,7 +286,7 @@ fn dxf(text: &str) -> Result<Mesh, String> {
         }
         found = true;
         if pairs[i].0 != 0 {
-            return Err("Expected DXF entity".into());
+            return Err(tr!("mesh_exchange.expected_dxf_entity").into());
         }
         let kind = pairs[i].1;
         let start = i + 1;
@@ -297,7 +298,7 @@ fn dxf(text: &str) -> Result<Mesh, String> {
         let get = |code: i32, default: Option<f64>| -> Result<f64, String> {
             match fields.iter().find(|p| p.0 == code) {
                 Some(p) => number(p.1),
-                None => default.ok_or_else(|| format!("Missing DXF field {code}")),
+                None => default.ok_or_else(|| tr!("mesh_exchange.missing_dxf_field", code = code)),
             }
         };
         if get(30, Some(0.))? != 0.
@@ -309,7 +310,7 @@ fn dxf(text: &str) -> Result<Mesh, String> {
             || get(230, Some(1.))? != 1.
         {
             return Err(
-                "Only DXF geometry in the XY plane with default extrusion is supported".into(),
+                tr!("mesh_exchange.only_dxf_geometry_in_the_xy_plane_with").into(),
             );
         }
         let mut points = Vec::new();
@@ -322,7 +323,7 @@ fn dxf(text: &str) -> Result<Mesh, String> {
                 let center = DVec3::new(get(10, None)?, get(20, None)?, 0.);
                 let r = get(40, None)?;
                 if r <= 0. {
-                    return Err("DXF radius must be positive".into());
+                    return Err(tr!("mesh_exchange.dxf_radius_must_be_positive").into());
                 }
                 let a = if kind == "ARC" {
                     get(50, None)?.to_radians()
@@ -350,27 +351,27 @@ fn dxf(text: &str) -> Result<Mesh, String> {
             "LWPOLYLINE" => {
                 let flags = get(70, Some(0.))?;
                 if flags != 0. && flags != 1. {
-                    return Err("Unsupported DXF polyline flags".into());
+                    return Err(tr!("mesh_exchange.unsupported_dxf_polyline_flags").into());
                 }
                 if fields
                     .iter()
                     .any(|p| matches!(p.0, 40..=42) && p.1.parse::<f64>().ok() != Some(0.))
                     || get(43, Some(0.))? != 0.
                 {
-                    return Err("DXF bulges and polyline widths are unsupported".into());
+                    return Err(tr!("mesh_exchange.dxf_bulges_and_polyline_widths_are_unsupported").into());
                 }
                 let mut x = None;
                 for &(code, value) in fields {
                     match code {
                         10 => {
                             if x.is_some() {
-                                return Err("Missing DXF polyline Y".into());
+                                return Err(tr!("mesh_exchange.missing_dxf_polyline_y").into());
                             }
                             x = Some(number(value)?);
                         }
                         20 => {
                             points.push(DVec3::new(
-                                x.take().ok_or("Missing DXF polyline X")?,
+                                x.take().ok_or(tr!("mesh_exchange.missing_dxf_polyline_x"))?,
                                 number(value)?,
                                 0.,
                             ));
@@ -379,15 +380,16 @@ fn dxf(text: &str) -> Result<Mesh, String> {
                     }
                 }
                 if x.is_some() || get(90, None)? != points.len() as f64 || points.len() < 2 {
-                    return Err("Invalid DXF polyline vertex count".into());
+                    return Err(tr!("mesh_exchange.invalid_dxf_polyline_vertex_count").into());
                 }
                 if flags == 1. {
                     points.push(points[0]);
                 }
             }
             _ => {
-                return Err(format!(
-                    "Unsupported DXF entity {kind}. Supported: LINE, LWPOLYLINE without bulges/widths, CIRCLE, ARC; XY plane only."
+                return Err(tr!(
+                    "mesh_exchange.unsupported_dxf_entity_supported_line_lwpolyline_without_bulges",
+                    kind = kind,
                 ));
             }
         }
@@ -398,7 +400,7 @@ fn dxf(text: &str) -> Result<Mesh, String> {
         mesh.lines.push(ring);
     }
     if section != "" || !found {
-        return Err("Missing or incomplete DXF ENTITIES section".into());
+        return Err(tr!("mesh_exchange.missing_or_incomplete_dxf_entities_section").into());
     }
     Ok(mesh)
 }
@@ -411,11 +413,11 @@ pub fn export_stl(model: &Model) -> Result<Vec<u8>, String> {
     for face in model.faces.values().filter(|f| !model.is_hidden(f.id)) {
         for triangle in model.face_triangles(face) {
             if count >= LIMIT as u32 {
-                return Err("STL export exceeds 200,000 triangles".into());
+                return Err(tr!("mesh_exchange.stl_export_exceeds_200_000_triangles").into());
             }
             let normal = (triangle[1] - triangle[0]).cross(triangle[2] - triangle[0]);
             if !normal.is_finite() || normal.length_squared() <= 1e-24 {
-                return Err("Cannot export degenerate STL triangle".into());
+                return Err(tr!("mesh_exchange.cannot_export_degenerate_stl_triangle").into());
             }
             for p in
                 std::iter::once(normal.normalize()).chain(triangle.into_iter().map(|p| p * 1000.))
@@ -423,7 +425,7 @@ pub fn export_stl(model: &Model) -> Result<Vec<u8>, String> {
                 for n in p.to_array() {
                     let value = n as f32;
                     if !value.is_finite() {
-                        return Err("STL coordinate overflow".into());
+                        return Err(tr!("mesh_exchange.stl_coordinate_overflow").into());
                     }
                     out.extend_from_slice(&value.to_le_bytes());
                 }
@@ -433,7 +435,7 @@ pub fn export_stl(model: &Model) -> Result<Vec<u8>, String> {
         }
     }
     if count == 0 {
-        return Err("There are no visible faces to export as STL".into());
+        return Err(tr!("mesh_exchange.there_are_no_visible_faces_to_export_as").into());
     }
     out[80..84].copy_from_slice(&count.to_le_bytes());
     Ok(out)

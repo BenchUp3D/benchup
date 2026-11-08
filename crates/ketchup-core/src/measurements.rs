@@ -24,15 +24,15 @@ impl DimensionAnchor {
                 !model.vertices.contains_key(id) || !w.is_finite() || *w < -EPS || *w > 1. + EPS
             })
         {
-            return Err("Invalid dimension attachment");
+            return Err(tr!("core.measurements.invalid_dimension_attachment"));
         }
         if !self.weights.is_empty()
             && (self.weights.iter().map(|(_, w)| w).sum::<f64>() - 1.).abs() > EPS
         {
-            return Err("Invalid dimension attachment weights");
+            return Err(tr!("core.measurements.invalid_dimension_attachment_weights"));
         }
         if !valid_point(self.position(model)) {
-            return Err("Invalid dimension position");
+            return Err(tr!("core.measurements.invalid_dimension_position"));
         }
         Ok(())
     }
@@ -246,10 +246,10 @@ impl Model {
             });
         }
         if !valid_point(start) || !valid_point(end) || !valid_point(offset) {
-            return Err("Dimension coordinates must be finite and within the model limits");
+            return Err(tr!("core.measurements.dimension_coordinates_must_be_finite_and_within_the"));
         }
         if start.distance(end) < EPS {
-            return Err("Choose two different dimension endpoints");
+            return Err(tr!("core.measurements.choose_two_different_dimension_endpoints"));
         }
         let (start, end) = (self.dimension_anchor(start), self.dimension_anchor(end));
         let mut dimension = Dimension {
@@ -261,7 +261,7 @@ impl Model {
             plane,
         };
         if dimension.layout(self).iter().any(|p| !valid_point(*p)) {
-            return Err("Dimension is outside the model limits");
+            return Err(tr!("core.measurements.dimension_is_outside_the_model_limits"));
         }
         let id = self.id();
         dimension.id = id;
@@ -294,13 +294,13 @@ impl Model {
     pub(crate) fn validate_dimensions(&self) -> Result<(), &'static str> {
         for (id, d) in &self.dimensions {
             if *id != d.id || !valid_point(d.offset) {
-                return Err("Invalid dimension");
+                return Err(tr!("core.measurements.invalid_dimension"));
             }
             for anchor in [&d.start, &d.end] {
                 anchor.validate(self)?;
             }
             if d.layout(self).iter().any(|p| !valid_point(*p)) {
-                return Err("Dimension is outside the model limits");
+                return Err(tr!("core.measurements.dimension_is_outside_the_model_limits"));
             }
         }
         Ok(())

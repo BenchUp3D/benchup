@@ -637,7 +637,7 @@ impl Model {
                 outliner_order: None,
                 transform: Some(crate::InstanceTransform::default()),
                 name: if name.trim().is_empty() {
-                    if component { "Component" } else { "Group" }.into()
+                    if component { tr!("core.objects.component") } else { tr!("core.objects.group") }.into()
                 } else {
                     name.trim().into()
                 },
@@ -708,7 +708,7 @@ impl Model {
             .chain(self.guides.keys())
             .any(|id| !all_ids.insert(*id))
         {
-            return Err("Duplicate entity ID");
+            return Err(tr!("core.objects.duplicate_entity_id"));
         }
         let mut parents = BTreeMap::new();
         for (id, object) in &self.objects {
@@ -716,16 +716,16 @@ impl Model {
                 || object.name.len() > 1024
                 || object.transform.is_some_and(|t| !t.valid())
             {
-                return Err("Invalid object");
+                return Err(tr!("core.objects.invalid_object"));
             }
             if let ObjectKind::Component { definition } = object.kind {
                 if definition.is_nil() {
-                    return Err("Invalid component definition");
+                    return Err(tr!("core.objects.invalid_component_definition"));
                 }
             }
             for child in &object.entities {
                 if !self.contains_entity(child) || parents.insert(*child, *id).is_some() {
-                    return Err("Invalid object membership");
+                    return Err(tr!("core.objects.invalid_object_membership"));
                 }
             }
         }
@@ -734,7 +734,7 @@ impl Model {
             let mut current = *id;
             while let Some(parent) = parents.get(&current) {
                 if !seen.insert(current) {
-                    return Err("Cyclic object membership");
+                    return Err(tr!("core.objects.cyclic_object_membership"));
                 }
                 current = *parent;
             }
@@ -743,7 +743,7 @@ impl Model {
         for object in self.objects.values() {
             if object.kind == ObjectKind::Group {
                 if !object.definition_entities.is_empty() {
-                    return Err("A group cannot have a component mapping");
+                    return Err(tr!("core.objects.a_group_cannot_have_a_component_mapping"));
                 }
                 continue;
             }
@@ -753,7 +753,7 @@ impl Model {
                 .values()
                 .any(|id| !contents.contains(id) || self.objects.contains_key(id))
             {
-                return Err("Invalid component instance mapping");
+                return Err(tr!("core.objects.invalid_component_instance_mapping"));
             }
             if let ObjectKind::Component { definition } = object.kind {
                 let mapped: BTreeSet<_> = object.definition_entities.values().copied().collect();
@@ -762,7 +762,7 @@ impl Model {
                     .filter(|id| !self.objects.contains_key(id))
                     .collect();
                 if mapped != geometry || mapped.len() != object.definition_entities.len() {
-                    return Err("Incomplete component instance mapping");
+                    return Err(tr!("core.objects.incomplete_component_instance_mapping"));
                 }
                 let types: BTreeMap<_, _> = object
                     .definition_entities
@@ -773,11 +773,11 @@ impl Model {
                     .get(&definition)
                     .is_some_and(|previous| previous != &types)
                 {
-                    return Err("Mismatched component instances");
+                    return Err(tr!("core.objects.mismatched_component_instances"));
                 }
                 definitions.insert(definition, types);
             } else if !object.definition_entities.is_empty() {
-                return Err("A group cannot have a component mapping");
+                return Err(tr!("core.objects.a_group_cannot_have_a_component_mapping"));
             }
         }
         self.validate_definition_nesting()?;
@@ -787,7 +787,7 @@ impl Model {
             .chain(self.locked.iter())
             .any(|id| !self.contains_entity(id))
         {
-            return Err("Invalid entity state");
+            return Err(tr!("core.objects.invalid_entity_state"));
         }
         Ok(())
     }

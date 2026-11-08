@@ -9,7 +9,7 @@ return (async () => {
             id: 'ketchup-project-save',
             suggestedName: name,
             types: [{
-                description: 'KetchUp3D project',
+                description,
                 accept: {'application/json': ['.k3d', '.ketchup']},
             }],
         });

@@ -19,7 +19,7 @@ use trimming::trim_excess;
 mod angle_tests;
 
 const EPS: f64 = 1e-7;
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum JointKind {
     #[default]
     MortiseTenon,
@@ -40,12 +40,12 @@ impl JointKind {
     ];
     pub fn label(self) -> &'static str {
         match self {
-            Self::MortiseTenon => "Mortise and tenon",
-            Self::HalfLap => "Half lap",
-            Self::TongueGroove => "Tongue and groove",
-            Self::Rabbet => "Rabbet",
-            Self::Dovetail => "Dovetail",
-            Self::Finger => "Finger joint",
+            Self::MortiseTenon => tr!("core.joinery.mortise_and_tenon"),
+            Self::HalfLap => tr!("core.joinery.half_lap"),
+            Self::TongueGroove => tr!("core.joinery.tongue_and_groove"),
+            Self::Rabbet => tr!("core.joinery.rabbet"),
+            Self::Dovetail => tr!("core.joinery.dovetail"),
+            Self::Finger => tr!("core.joinery.finger_joint"),
         }
     }
 }
@@ -59,7 +59,7 @@ pub enum TrimBoard {
 }
 impl TrimBoard {
     pub fn label(self) -> &'static str {
-        match self { Self::None => "None", Self::First => "First board", Self::Second => "Second board" }
+        match self { Self::None => tr!("common.none"), Self::First => tr!("core.joinery.first_board"), Self::Second => tr!("core.joinery.second_board") }
     }
     pub fn member(self) -> Option<usize> {
         match self { Self::None => None, Self::First => Some(0), Self::Second => Some(1) }
@@ -74,7 +74,7 @@ pub enum KeepEnd {
 }
 impl KeepEnd {
     pub fn label(self) -> &'static str {
-        match self { Self::Lower => "Lower end", Self::Upper => "Upper end" }
+        match self { Self::Lower => tr!("core.joinery.lower_end"), Self::Upper => tr!("core.joinery.upper_end") }
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -167,19 +167,19 @@ fn board(model: &Model, id: u64, frame: JoineryFrame) -> Result<(DVec3, DVec3), 
     let object = model
         .objects
         .get(&id)
-        .ok_or("Choose two groups or components")?;
+        .ok_or(tr!("core.joinery.choose_two_groups_or_components"))?;
     if object
         .entities
         .iter()
         .any(|id| !model.edges.contains_key(id) && !model.faces.contains_key(id))
     {
         return Err(
-            "Each part must contain only board geometry; select individual boards, not assemblies",
+            tr!("core.joinery.each_part_must_contain_only_board_geometry_select"),
         );
     }
-    let (lo, hi) = frame.bounds(model, id).ok_or("The board has no geometry")?;
+    let (lo, hi) = frame.bounds(model, id).ok_or(tr!("core.joinery.the_board_has_no_geometry"))?;
     if !lo.is_finite() || !hi.is_finite() || (hi - lo).min_element() <= EPS * 10. {
-        return Err("Boards must have finite, positive dimensions");
+        return Err(tr!("core.joinery.boards_must_have_finite_positive_dimensions"));
     }
     Ok((lo, hi))
 }
@@ -202,7 +202,7 @@ fn prism(points: [DVec3; 8], frame: Frame) -> Result<Vec<Polygon>, &'static str>
             None,
             frame.epsilon,
         )
-        .ok_or("Joint details are too small for the model precision")?;
+        .ok_or(tr!("core.joinery.joint_details_are_too_small_for_the_model"))?;
         if p.normal
             .dot(frame.local(points[ring[0]]) - frame.local(center))
             < 0.
@@ -250,22 +250,22 @@ struct JointStock {
 }
 impl JointStock {
     fn new(model: &Model, members: [u64; 2]) -> Result<Self, &'static str> {
-        if members[0] == members[1] { return Err("Choose two different boards"); }
+        if members[0] == members[1] { return Err(tr!("core.joinery.choose_two_different_boards")); }
         let axes = model.joinery_frame(members[0])?;
         let bounds = [board(model, members[0], axes)?, board(model, members[1], axes)?];
         let copies = members.map(|id| model.copy_entities(&BTreeSet::from([id])));
         let frame = Frame::new(&[&copies[0], &copies[1]])?;
         let solids = [solids::import(&copies[0], frame)?, solids::import(&copies[1], frame)?];
         if solids.iter().any(|solid| !csg::volume(solid).is_finite() || csg::volume(solid).abs() <= frame.epsilon.powi(3)) {
-            return Err("Choose boards with positive solid volume");
+            return Err(tr!("core.joinery.choose_boards_with_positive_solid_volume"));
         }
         let overlap = csg::apply(solids[0].clone(), solids[1].clone(), Boolean::Intersect, frame.epsilon)?;
         let mut points = overlap.iter().flat_map(|polygon| &polygon.vertices)
             .map(|p| axes.local(frame.world(*p)));
-        let first = points.next().ok_or("Position the boards with a shared volume: their overlap defines the joint depth")?;
+        let first = points.next().ok_or(tr!("core.joinery.position_the_boards_with_a_shared_volume_their"))?;
         let (lo, hi) = points.fold((first, first), |(lo, hi), p| (lo.min(p), hi.max(p)));
         if (hi - lo).min_element() <= EPS * 10. || csg::volume(&overlap).abs() <= frame.epsilon.powi(3) * 8. {
-            return Err("Position the boards with a shared volume: their overlap defines the joint depth");
+            return Err(tr!("core.joinery.position_the_boards_with_a_shared_volume_their"));
         }
         Ok(Self { geometry: JoineryOverlap { frame: axes, bounds: (lo, hi) }, frame, bounds, solids, overlap })
     }
@@ -294,7 +294,7 @@ impl Model {
             return Ok(Vec::new());
         }
         let mut cut = Model::default();
-        solids::output(&mut cut, removed, frame, "Joint cut", false, true)?;
+        solids::output(&mut cut, removed, frame, tr!("core.joinery.joint_cut"), false, true)?;
         Ok(cut
             .edges
             .values()
@@ -344,7 +344,7 @@ impl Model {
         stock: &Model,
     ) -> Result<(), &'static str> {
         if !settings.valid() || members[0] == members[1] {
-            return Err("Invalid wood joint settings or pair of boards");
+            return Err(tr!("core.joinery.invalid_wood_joint_settings_or_pair_of_boards"));
         }
         let source = stock;
         let stock = JointStock::new(source, members)?;
@@ -357,7 +357,7 @@ impl Model {
         let forward = joint_direction(a, b, lo, hi, d)
             .unwrap_or(a.0[d] + a.1[d] <= b.0[d] + b.1[d]);
         if settings.clearance * 2. >= size[u].min(size[v]) * 0.1 {
-            return Err("Clearance is too large for this joint");
+            return Err(tr!("core.joinery.clearance_is_too_large_for_this_joint"));
         }
         let copies = members.map(|id| self.copy_entities(&BTreeSet::from([id])));
         let frame = stock.frame;
@@ -369,7 +369,7 @@ impl Model {
         let mut profiles = Vec::new();
         let mut pockets = Vec::new();
         let dovetail = if settings.kind == JointKind::Dovetail {
-            Some(settings.dovetail_layout(size[u]).ok_or("Choose a tail width that fits the overlap and produces at most 64 tails")?)
+            Some(settings.dovetail_layout(size[u]).ok_or(tr!("core.joinery.choose_a_tail_width_that_fits_the_overlap"))?)
         } else { None };
         let count = if settings.kind == JointKind::Finger {
             settings.fingers * 2
@@ -411,7 +411,7 @@ impl Model {
             if settings.kind == JointKind::Dovetail {
                 let taper = size[d] * settings.taper_degrees.to_radians().tan();
                 if taper * 2. >= h[u] - l[u] - EPS {
-                    return Err("Dovetail angle or depth leaves no material at the neck");
+                    return Err(tr!("core.joinery.dovetail_angle_or_depth_leaves_no_material_at"));
                 }
                 // A narrow neck at the first board's shoulder, widening into B.
                 for p in &mut points {
@@ -451,7 +451,7 @@ impl Model {
         let waste_volume = csg::volume(&waste).abs();
         let minimum = (overlap_volume * 1e-9).max(frame.epsilon.powi(3) * 8.);
         if waste_volume <= minimum || overlap_volume - waste_volume <= minimum {
-            return Err("The profile does not divide the shared material; choose another orientation or profile size");
+            return Err(tr!("core.joinery.the_profile_does_not_divide_the_shared_material"));
         }
         solids[0] = csg::apply(solids[0].clone(), waste, Boolean::Difference, frame.epsilon)?;
         // Clip receiving pockets to the first board's stock, including a small
@@ -463,7 +463,7 @@ impl Model {
             Polygon::new(polygon.vertices.iter().map(|p| {
                 let local = stock_frame.local(frame.world(*p));
                 frame.local(stock_frame.world(center + (local - center) * scale))
-            }).collect(), polygon.color, frame.epsilon).ok_or("The clearance is too small for the model precision")
+            }).collect(), polygon.color, frame.epsilon).ok_or(tr!("core.joinery.the_clearance_is_too_small_for_the_model"))
         }).collect::<Result<Vec<_>, _>>()?;
         let envelope = if settings.clearance > 0. {
             csg::apply(envelope, stock.solids[0].clone(), Boolean::Union, frame.epsilon)?
@@ -484,12 +484,12 @@ impl Model {
         // Output and validate both members before replacing any live document data.
         let mut next = self.clone();
         for (id, polygons) in members.into_iter().zip(solids) {
-            let temp = solids::output(&mut next, polygons, frame, "Joint result", false, true)?
-                .ok_or("The joint would remove an entire board")?;
+            let temp = solids::output(&mut next, polygons, frame, tr!("core.joinery.joint_result"), false, true)?
+                .ok_or(tr!("core.joinery.the_joint_would_remove_an_entire_board"))?;
             next.solid_volume(temp)?;
             let contents = next
                 .object_contents(temp)
-                .ok_or("Cannot read joint result")?;
+                .ok_or(tr!("core.joinery.cannot_read_joint_result"))?;
             next.objects.remove(&temp);
             next.replace_contents(id, &contents)?;
             let object = next.objects.get_mut(&id).unwrap();
@@ -534,7 +534,7 @@ impl Model {
         }
 
         next.validate()
-            .map_err(|_| "The joint cannot be represented as valid solid geometry")?;
+            .map_err(|_| tr!("core.joinery.the_joint_cannot_be_represented_as_valid_solid"))?;
         for id in members {
             next.copy_entities(&BTreeSet::from([id])).solid_volume(id)?;
         }

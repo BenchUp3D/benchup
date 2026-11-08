@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 use super::*;
 use ketchup_core::SolidOperation;
 
@@ -123,7 +124,7 @@ impl KetchupApp {
                     self.selected = operands.remove(0).1;
                 }
                 Err(message) => self.say(ctx, message),
-                _ => self.say(ctx, "Unlock the body before editing it"),
+                _ => self.say(ctx, tr!("solid_tools.unlock_the_body_before_editing_it")),
             }
         }
     }
@@ -138,7 +139,7 @@ impl KetchupApp {
                 self.selected = result;
                 self.finish_edit(operation.label(), before, ctx);
                 if self.selected.is_empty() {
-                    self.say(ctx, "The target was entirely removed by the cutter");
+                    self.say(ctx, tr!("solid_tools.the_target_was_entirely_removed_by_the_cutter"));
                 }
             }
             Err(message) => self.say(ctx, message),
@@ -149,9 +150,9 @@ impl KetchupApp {
         match self.doc.model.flip_selection(&self.selected, axis) {
             Ok(()) => self.finish_edit(
                 match axis {
-                    Axis::X => "Flip X",
-                    Axis::Y => "Flip Y",
-                    Axis::Z => "Flip Z",
+                    Axis::X => tr!("solid_tools.flip_x"),
+                    Axis::Y => tr!("solid_tools.flip_y"),
+                    Axis::Z => tr!("solid_tools.flip_z"),
                 },
                 before,
                 ctx,
@@ -173,7 +174,7 @@ impl KetchupApp {
             dv(pos - self.viewport.min),
             8.,
         ) else {
-            self.say(ctx, "Click a group, component, or connected body");
+            self.say(ctx, tr!("solid_tools.click_a_group_component_or_connected_body"));
             return;
         };
         let ids = match self.doc.model.solid_entities(hit) {
@@ -184,7 +185,7 @@ impl KetchupApp {
             }
         };
         if self.doc.model.selection_locked(&ids) {
-            self.say(ctx, "Unlock the body before editing it");
+            self.say(ctx, tr!("solid_tools.unlock_the_body_before_editing_it"));
             return;
         }
         if self.tool == Tool::Flip {
@@ -210,11 +211,11 @@ impl KetchupApp {
     pub(super) fn solid_status(&self) -> &'static str {
         if self.solid_first.is_some() {
             if self.tool == Tool::Trim {
-                "Cutter selected · Click the target solid to trim · Esc to cancel"
+                tr!("solid_tools.cutter_selected_click_the_target_solid_to_trim")
             } else if self.tool == Tool::Intersect {
-                "First body selected · Click the second body or face · Esc to cancel"
+                tr!("solid_tools.first_body_selected_click_the_second_body_or")
             } else {
-                "First body selected · Click the second body · Esc to cancel"
+                tr!("solid_tools.first_body_selected_click_the_second_body_esc")
             }
         } else {
             self.tool.instructions()
@@ -232,13 +233,13 @@ impl KetchupApp {
         );
         if self.tool == Tool::Flip {
             ui.add_space(8.);
-            ui.text_label("Mirror around the selection center:");
+            ui.text_label(tr!("solid_tools.mirror_around_the_selection_center"));
             let button_width = (ui.available_width() - ui.spacing().item_spacing.x * 2.) / 3.;
             ui.horizontal(|ui| {
                 for (axis, label) in [
-                    (Axis::X, "X / red"),
-                    (Axis::Y, "Y / green"),
-                    (Axis::Z, "Z / blue"),
+                    (Axis::X, tr!("solid_tools.x_red")),
+                    (Axis::Y, tr!("solid_tools.y_green")),
+                    (Axis::Z, tr!("solid_tools.z_blue")),
                 ] {
                     if ui
                         .add_enabled(
@@ -260,15 +261,15 @@ impl KetchupApp {
                 .objects
                 .get(&first)
                 .map(|o| o.name.as_str())
-                .unwrap_or("Connected body");
+                .unwrap_or(tr!("solid_tools.connected_body"));
             ui.text_label(RichText::new(name).strong());
             if let Ok(volume) = self.solid_volume_cache.volume(&self.doc.model, first) {
-                Self::property(ui, "Volume", &self.doc.display.units.format_volume(volume));
+                Self::property(ui, tr!("solid_tools.volume"), &self.doc.display.units.format_volume(volume));
             }
             if ui
                 .add_sized(
                     egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
-                    egui::Button::new("Choose first body again"),
+                    egui::Button::new(tr!("solid_tools.choose_first_body_again")),
                 )
                 .clicked()
             {
@@ -278,15 +279,15 @@ impl KetchupApp {
         } else {
             ui.add_space(8.);
             ui.text_label(
-                "Choose groups, components, or connected bodies. Results are editable groups.",
+                tr!("solid_tools.choose_groups_components_or_connected_bodies_results_are"),
             );
             if self.tool == Tool::Intersect {
-                ui.text_label("Intersect also keeps the portion of a face inside a closed body.");
+                ui.text_label(tr!("solid_tools.intersect_also_keeps_the_portion_of_a_face"));
             } else {
-                ui.text_label("Use closed bodies with no stray edges or missing faces.");
+                ui.text_label(tr!("solid_tools.use_closed_bodies_with_no_stray_edges_or"));
             }
             if self.tool == Tool::Trim {
-                ui.text_label("The first click chooses the cutter. It stays in the model.");
+                ui.text_label(tr!("solid_tools.the_first_click_chooses_the_cutter_it_stays"));
             }
         }
         ui.add_space(14.);
@@ -387,9 +388,9 @@ impl KetchupApp {
                     ),
                 ));
                 let label = match axis {
-                    Axis::X => "Flip X",
-                    Axis::Y => "Flip Y",
-                    Axis::Z => "Flip Z",
+                    Axis::X => tr!("solid_tools.flip_x"),
+                    Axis::Y => tr!("solid_tools.flip_y"),
+                    Axis::Z => tr!("solid_tools.flip_z"),
                 };
                 p.text(
                     points[2],

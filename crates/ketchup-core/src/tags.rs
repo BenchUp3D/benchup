@@ -13,7 +13,7 @@ impl Model {
     pub fn add_tag(&mut self, name: &str) -> Result<u64, &'static str> {
         let name = name.trim();
         if name.is_empty() || name.len() > 128 || name.eq_ignore_ascii_case("Untagged") {
-            return Err("Choose a tag name of 1–128 characters other than Untagged");
+            return Err(tr!("core.tags.choose_a_tag_name_of_1128_characters_other"));
         }
         let folded = name.to_lowercase();
         if self
@@ -21,7 +21,7 @@ impl Model {
             .values()
             .any(|tag| tag.name.to_lowercase() == folded)
         {
-            return Err("A tag with that name already exists");
+            return Err(tr!("core.tags.a_tag_with_that_name_already_exists"));
         }
         let id = self.id();
         let colors = [
@@ -46,7 +46,7 @@ impl Model {
     pub fn rename_tag(&mut self, id: u64, name: &str) -> Result<(), &'static str> {
         let name = name.trim();
         if name.is_empty() || name.len() > 128 || name.eq_ignore_ascii_case("Untagged") {
-            return Err("Choose a tag name of 1–128 characters other than Untagged");
+            return Err(tr!("core.tags.choose_a_tag_name_of_1128_characters_other"));
         }
         let folded = name.to_lowercase();
         if self
@@ -54,9 +54,9 @@ impl Model {
             .values()
             .any(|tag| tag.id != id && tag.name.to_lowercase() == folded)
         {
-            return Err("A tag with that name already exists");
+            return Err(tr!("core.tags.a_tag_with_that_name_already_exists"));
         }
-        self.tags.get_mut(&id).ok_or("Missing tag")?.name = name.into();
+        self.tags.get_mut(&id).ok_or(tr!("core.tags.missing_tag"))?.name = name.into();
         Ok(())
     }
     pub fn remove_tag(&mut self, id: u64) {
@@ -69,10 +69,10 @@ impl Model {
         tag: Option<u64>,
     ) -> Result<(), &'static str> {
         if tag.is_some_and(|id| !self.tags.contains_key(&id)) {
-            return Err("Missing tag");
+            return Err(tr!("core.tags.missing_tag"));
         }
         if self.selection_protected(entities) {
-            return Err("Unlock the selection before assigning a tag");
+            return Err(tr!("core.tags.unlock_the_selection_before_assigning_a_tag"));
         }
         for id in entities
             .iter()
@@ -134,7 +134,7 @@ impl Model {
                 .iter()
                 .any(|(id, tag)| !self.contains_entity(id) || !self.tags.contains_key(tag))
         {
-            return Err("Invalid tags");
+            return Err(tr!("core.tags.invalid_tags"));
         }
         Ok(())
     }

@@ -1,3 +1,6 @@
+#[macro_use]
+mod i18n;
+
 pub mod connections;
 pub mod joinery;
 mod cleanup;
@@ -165,30 +168,30 @@ impl Tool {
     ];
     pub fn label(self) -> &'static str {
         match self {
-            Self::Select => "Select",
-            Self::Line => "Line",
-            Self::Rectangle => "Rectangle",
-            Self::Circle => "Circle",
-            Self::Polygon => "Polygon",
-            Self::Freehand => "Freehand",
-            Self::PushPull => "Push/Pull",
-            Self::Flip => "Flip",
-            Self::OuterShell => "Combine",
-            Self::Union => "Union",
-            Self::Intersect => "Intersect",
-            Self::Trim => "Trim",
-            Self::Split => "Split",
-            Self::Scale => "Scale",
-            Self::Offset => "Offset",
-            Self::Move => "Move",
-            Self::Rotate => "Rotate",
-            Self::Paint => "Paint",
-            Self::TapeMeasure => "Tape Measure",
-            Self::Protractor => "Protractor",
-            Self::Dimensions => "Dimensions",
-            Self::Text => "Text",
-            Self::Erase => "Erase",
-            Self::Orbit => "Orbit",
+            Self::Select => tr!("tools.select"),
+            Self::Line => tr!("tools.line"),
+            Self::Rectangle => tr!("tools.rectangle"),
+            Self::Circle => tr!("tools.circle"),
+            Self::Polygon => tr!("tools.polygon"),
+            Self::Freehand => tr!("tools.freehand"),
+            Self::PushPull => tr!("tools.push_pull"),
+            Self::Flip => tr!("tools.flip"),
+            Self::OuterShell => tr!("tools.combine"),
+            Self::Union => tr!("tools.union"),
+            Self::Intersect => tr!("tools.intersect"),
+            Self::Trim => tr!("tools.trim"),
+            Self::Split => tr!("tools.split"),
+            Self::Scale => tr!("tools.scale"),
+            Self::Offset => tr!("tools.offset"),
+            Self::Move => tr!("tools.move"),
+            Self::Rotate => tr!("tools.rotate"),
+            Self::Paint => tr!("tools.paint"),
+            Self::TapeMeasure => tr!("tools.tape_measure"),
+            Self::Protractor => tr!("tools.protractor"),
+            Self::Dimensions => tr!("tools.dimensions"),
+            Self::Text => tr!("tools.text"),
+            Self::Erase => tr!("tools.erase"),
+            Self::Orbit => tr!("tools.orbit"),
         }
     }
     pub fn shortcut(self) -> &'static str {
@@ -221,56 +224,56 @@ impl Tool {
     }
     pub fn instructions(self) -> &'static str {
         match self {
-            Self::Select => "Click an edge or face · Drag to box select · Shift to toggle",
+            Self::Select => tr!("tools.click_an_edge_or_face_drag_to_box"),
             Self::Line => {
-                "Click to start a line · Arrow keys lock axes · Type a length for precision"
+                tr!("tools.click_to_start_a_line_arrow_keys_lock")
             }
-            Self::Rectangle => "Click two opposite corners · Arrow keys lock the drawing plane",
+            Self::Rectangle => tr!("tools.click_two_opposite_corners_arrow_keys_lock_the"),
             Self::Circle => {
-                "Click the center, then a point on the circle · Arrow keys lock the drawing plane"
+                tr!("tools.click_the_center_then_a_point_on_the")
             }
-            Self::Polygon => "Click the center, then a vertex · Arrow keys lock the drawing plane",
+            Self::Polygon => tr!("tools.click_the_center_then_a_vertex_arrow_keys"),
             Self::Freehand => {
-                "Drag to draw · Release to finish · Arrow keys lock the drawing plane"
+                tr!("tools.drag_to_draw_release_to_finish_arrow_keys")
             }
-            Self::Erase => "Click or drag across edges or faces to erase · Ctrl / ⌘ Z to undo",
+            Self::Erase => tr!("tools.click_or_drag_across_edges_or_faces_to"),
             Self::Flip => {
-                "Select geometry · Choose a red, green, or blue flip plane · Arrow keys choose X / Y / Z"
+                tr!("tools.select_geometry_choose_a_red_green_or_blue")
             }
-            Self::OuterShell => "Click two closed solids to combine their outer surfaces",
-            Self::Union => "Click two closed solids to combine their volumes",
-            Self::Intersect => "Click groups, components, or faces to keep their overlap",
-            Self::Trim => "Click the cutter first, then the solid to trim · The cutter stays",
+            Self::OuterShell => tr!("tools.click_two_closed_solids_to_combine_their_outer"),
+            Self::Union => tr!("tools.click_two_closed_solids_to_combine_their_volumes"),
+            Self::Intersect => tr!("tools.click_groups_components_or_faces_to_keep_their"),
+            Self::Trim => tr!("tools.click_the_cutter_first_then_the_solid_to"),
             Self::Split => {
-                "Click two closed solids to keep the overlap and remaining pieces separately"
+                tr!("tools.click_two_closed_solids_to_keep_the_overlap")
             }
             Self::PushPull => {
-                "Click a face · Move along its normal · Arrow keys lock axes · Click or type distance + Enter"
+                tr!("tools.click_a_face_move_along_its_normal_arrow")
             }
             Self::Scale => {
-                "Select geometry · Click a reference point · Move or type a scale factor + Enter"
+                tr!("tools.select_geometry_click_a_reference_point_move_or")
             }
             Self::Offset => {
-                "Click a face near its boundary · Move inward or outward · Type distance + Enter"
+                tr!("tools.click_a_face_near_its_boundary_move_inward")
             }
             Self::Move => {
-                "Select geometry · Click a base point and destination · Arrow keys lock axes"
+                tr!("tools.select_geometry_click_a_base_point_and_destination")
             }
             Self::Rotate => {
-                "Select geometry · Click a pivot, reference point, then angle · Arrow keys lock the rotation plane"
+                tr!("tools.select_geometry_click_a_pivot_reference_point_then")
             }
             Self::Paint => {
-                "Choose a color and Face or Group in the inspector · Click a face to paint"
+                tr!("tools.choose_a_color_and_face_or_group_in")
             }
-            Self::TapeMeasure => "Click a reference edge or point · Ctrl/Command toggles Create Guides / Measure · Esc to clear",
+            Self::TapeMeasure => tr!("tools.click_a_reference_edge_or_point_ctrl_command"),
             Self::Protractor => {
-                "Click a center, a baseline, then an angle · Ctrl/Command toggles Create Guides / Measure"
+                tr!("tools.click_a_center_a_baseline_then_an_angle")
             }
             Self::Dimensions => {
-                "Click two endpoints, then click to place the dimension · Esc to cancel"
+                tr!("tools.click_two_endpoints_then_click_to_place_the")
             }
-            Self::Text => "Click an object, then click to place its text label · Esc to cancel",
-            Self::Orbit => "Drag to orbit · Hold Shift to pan · Scroll to zoom",
+            Self::Text => tr!("tools.click_an_object_then_click_to_place_its"),
+            Self::Orbit => tr!("tools.drag_to_orbit_hold_shift_to_pan_scroll"),
         }
     }
 }

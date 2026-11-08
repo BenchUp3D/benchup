@@ -124,13 +124,13 @@ impl Model {
         &mut self,
         operation: impl FnOnce(&mut Self) -> Result<T, &'static str>,
     ) -> Result<T, &'static str> {
-        let context = self.edit_context.ok_or("No object is open for editing")?;
+        let context = self.edit_context.ok_or(tr!("core.edit_context.no_object_is_open_for_editing"))?;
         if self.is_locked(context) {
-            return Err("Unlock the object before editing it");
+            return Err(tr!("core.edit_context.unlock_the_object_before_editing_it"));
         }
         let mut contents = self
             .object_contents(context)
-            .ok_or("The editing context no longer exists")?;
+            .ok_or(tr!("core.edit_context.the_editing_context_no_longer_exists"))?;
         let before = contents.clone();
         let result = operation(&mut contents)?;
         if contents != before {
@@ -142,7 +142,7 @@ impl Model {
         Ok(result)
     }
     fn remove_contents(&mut self, id: u64) -> Result<(), &'static str> {
-        let object = self.objects.get(&id).ok_or("Missing object")?;
+        let object = self.objects.get(&id).ok_or(tr!("core.edit_context.missing_object"))?;
         let ids = self.expand_entities(&object.entities);
         self.sync_dimensions();
         self.dimensions.retain(|id, _| !ids.contains(id));
@@ -250,7 +250,7 @@ impl Model {
                 } = self.objects[&id].kind
                 {
                     if container == definition {
-                        return Err("A component cannot contain its own definition");
+                        return Err(tr!("core.edit_context.a_component_cannot_contain_its_own_definition"));
                     }
                     graph.entry(definition).or_default().insert(container, id);
                 }
@@ -268,7 +268,7 @@ impl Model {
                 .filter(|key| !graph.values().any(|parents| parents.contains_key(key)))
                 .collect();
             if leaves.is_empty() {
-                return Err("Cyclic component definitions");
+                return Err(tr!("core.edit_context.cyclic_component_definitions"));
             }
             graph.retain(|id, _| !leaves.contains(id));
         }
@@ -288,13 +288,13 @@ impl Model {
         for context in contexts {
             let mut current = Some(context);
             while let Some(id) = current {
-                let object = self.objects.get(&id).ok_or("Missing editing context")?;
+                let object = self.objects.get(&id).ok_or(tr!("core.edit_context.missing_editing_context"))?;
                 if let ObjectKind::Component { definition } = object.kind {
                     if sources
                         .insert(definition, id)
                         .is_some_and(|source| source != id)
                     {
-                        return Err("Cannot move objects between instances of the same component");
+                        return Err(tr!("core.edit_context.cannot_move_objects_between_instances_of_the_same"));
                     }
                 }
                 current = self.parent(id);
@@ -330,12 +330,12 @@ impl Model {
                             .is_some_and(|parents| parents.contains_key(definition))
                     })
                 })
-                .ok_or("Cyclic component definitions")?;
+                .ok_or(tr!("core.edit_context.cyclic_component_definitions"))?;
             let source = sources.remove(&ready).unwrap();
             self.refresh_definition_mapping(source);
             let instance = self.objects[&source].clone();
             let transform = instance.transform.unwrap_or_default();
-            let mut canonical = self.object_contents(source).ok_or("Missing component")?;
+            let mut canonical = self.object_contents(source).ok_or(tr!("core.edit_context.missing_component"))?;
             canonical.transform_contents(
                 transform.linear().inverse(),
                 -(transform.linear().inverse() * transform.translation),
@@ -451,7 +451,7 @@ impl Model {
             let to = instance.transform.unwrap_or_default();
             let mut contents = self
                 .object_contents(reference.id)
-                .ok_or("Missing component definition")?;
+                .ok_or(tr!("core.edit_context.missing_component_definition"))?;
             let linear = to.linear() * from.linear().inverse();
             contents.transform_contents(linear, to.translation - linear * from.translation);
             copy.remove_contents(id)?;

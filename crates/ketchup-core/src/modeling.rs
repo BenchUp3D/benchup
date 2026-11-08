@@ -53,7 +53,7 @@ impl Model {
         f: impl Fn(DVec3) -> DVec3,
     ) -> Result<(), &'static str> {
         if self.selection_locked(selected) {
-            return Err("Unlock the selection before editing it");
+            return Err(tr!("core.modeling.unlock_the_selection_before_editing_it"));
         }
         let vertices = self.selection_vertices(selected);
         let dimensions: Vec<_> = self
@@ -72,7 +72,7 @@ impl Model {
             .filter(|id| self.guides.contains_key(id))
             .collect();
         if vertices.is_empty() && dimensions.is_empty() && texts.is_empty() && guides.is_empty() {
-            return Err("Select geometry, a dimension, text, or a guide first");
+            return Err(tr!("core.modeling.select_geometry_a_dimension_text_or_a_guide"));
         }
         let protected: BTreeSet<_> = self
             .edges
@@ -82,7 +82,7 @@ impl Model {
             .filter(|id| self.is_locked(*id))
             .collect();
         if !vertices.is_disjoint(&self.selection_vertices(&protected)) {
-            return Err("Unlock the connected geometry before editing it");
+            return Err(tr!("core.modeling.unlock_the_connected_geometry_before_editing_it"));
         }
         let mut next = self.clone();
         for id in guides {
@@ -93,7 +93,7 @@ impl Model {
                 .map(|d| {
                     (f(source.origin + d) - origin)
                         .try_normalize()
-                        .ok_or("This change would collapse a guide")
+                        .ok_or(tr!("core.modeling.this_change_would_collapse_a_guide"))
                 })
                 .transpose()?;
             next.guides
@@ -136,7 +136,7 @@ impl Model {
         }
         next.sync_dimensions();
         next.validate().map_err(
-            |_| "This change would collapse an edge or bend a face; select its connected geometry",
+            |_| tr!("core.modeling.this_change_would_collapse_an_edge_or_bend"),
         )?;
         *self = next;
         Ok(())
@@ -148,7 +148,7 @@ impl Model {
         delta: DVec3,
     ) -> Result<(), &'static str> {
         if !delta.is_finite() {
-            return Err("Enter a finite displacement");
+            return Err(tr!("core.modeling.enter_a_finite_displacement"));
         }
         if self.edit_context.is_some() {
             return self.edit_in_context(|model| model.move_selection(selected, delta));
@@ -171,9 +171,9 @@ impl Model {
         degrees: f64,
     ) -> Result<(), &'static str> {
         if !pivot.is_finite() || !axis.is_finite() || !degrees.is_finite() {
-            return Err("Enter a finite rotation and pivot");
+            return Err(tr!("core.modeling.enter_a_finite_rotation_and_pivot"));
         }
-        let axis = axis.try_normalize().ok_or("Choose a rotation axis first")?;
+        let axis = axis.try_normalize().ok_or(tr!("core.modeling.choose_a_rotation_axis_first"))?;
         if self.edit_context.is_some() {
             return self
                 .edit_in_context(|model| model.rotate_selection(selected, pivot, axis, degrees));
@@ -203,7 +203,7 @@ impl Model {
         }
         let center = self
             .selection_center(selected)
-            .ok_or("Select geometry to flip first")?;
+            .ok_or(tr!("core.modeling.select_geometry_to_flip_first"))?;
         let normal = axis.vector();
         let mirror = |p: DVec3| p - normal * 2. * (p - center).dot(normal);
         self.transform_selection(selected, mirror)?;
@@ -229,7 +229,7 @@ impl Model {
         factor: f64,
     ) -> Result<(), &'static str> {
         if !factor.is_finite() || factor <= EPS || factor > 1e7 {
-            return Err("Enter a positive scale factor, such as 2 or 0.5");
+            return Err(tr!("core.modeling.enter_a_positive_scale_factor_such_as_2"));
         }
         if self.edit_context.is_some() {
             return self.edit_in_context(|model| model.scale_selection(selected, center, factor));
@@ -256,7 +256,7 @@ impl Model {
             return self.scale_selection(selected, center, factor);
         };
         if !factor.is_finite() || factor <= EPS || factor > 1e7 {
-            return Err("Enter a positive scale factor, such as 2 or 0.5");
+            return Err(tr!("core.modeling.enter_a_positive_scale_factor_such_as_2"));
         }
         if self.edit_context.is_some() {
             return self.edit_in_context(|model| {
@@ -284,10 +284,10 @@ impl Model {
             return self.edit_in_context(|model| model.paint_face(face, color));
         }
         if self.is_locked(face) {
-            return Err("Unlock the face before painting it");
+            return Err(tr!("core.modeling.unlock_the_face_before_painting_it"));
         }
         if !self.faces.contains_key(&face) {
-            return Err("Click a filled face to paint it");
+            return Err(tr!("core.modeling.click_a_filled_face_to_paint_it"));
         }
         self.set_face_color(face, Some(color));
         Ok(())
@@ -300,7 +300,7 @@ impl Model {
         }
         let entities = self.expand_entities(selected);
         if entities.iter().any(|id| self.is_locked(*id)) {
-            return Err("Unlock the selected items and their children before clearing color");
+            return Err(tr!("core.modeling.unlock_the_selected_items_and_their_children_before"));
         }
         for face in entities
             .into_iter()
@@ -354,9 +354,9 @@ impl Model {
         let object = self
             .objects
             .get(&object)
-            .ok_or("Click a face in a group or component to paint it")?;
+            .ok_or(tr!("core.modeling.click_a_face_in_a_group_or_component"))?;
         if self.is_locked(object.id) {
-            return Err("Unlock the group or component before painting it");
+            return Err(tr!("core.modeling.unlock_the_group_or_component_before_painting_it"));
         }
         let faces: Vec<_> = self
             .expand_entities(&object.entities)
@@ -364,10 +364,10 @@ impl Model {
             .filter(|id| self.faces.contains_key(id))
             .collect();
         if faces.is_empty() {
-            return Err("The group or component has no faces to paint");
+            return Err(tr!("core.modeling.the_group_or_component_has_no_faces_to"));
         }
         if faces.iter().any(|id| self.is_locked(*id)) {
-            return Err("Unlock all faces in the group or component before painting it");
+            return Err(tr!("core.modeling.unlock_all_faces_in_the_group_or_component"));
         }
         let mut next = self.clone();
         for face in faces {
@@ -379,10 +379,10 @@ impl Model {
 
     fn editable_surface(&self, face: u64) -> Result<(), &'static str> {
         if self.is_locked(face) {
-            return Err("Unlock the object before editing it");
+            return Err(tr!("core.modeling.unlock_the_object_before_editing_it"));
         }
         if self.parent(face).is_some() {
-            return Err("Double-click the object to edit its faces");
+            return Err(tr!("core.modeling.double_click_the_object_to_edit_its_faces"));
         }
         Ok(())
     }
@@ -426,15 +426,15 @@ impl Model {
         }
         self.editable_surface(face_id)?;
         if !distance.is_finite() || distance.abs() < EPS || distance.abs() > 1e7 {
-            return Err("Enter a nonzero distance in meters");
+            return Err(tr!("core.modeling.enter_a_nonzero_distance_in_meters"));
         }
         let face = self
             .faces
             .get(&face_id)
-            .ok_or("Click a filled face first")?
+            .ok_or(tr!("core.modeling.click_a_filled_face_first"))?
             .clone();
         let normal = faces::plane(self, &face.vertices)
-            .ok_or("The face must be planar")?
+            .ok_or(tr!("core.modeling.the_face_must_be_planar"))?
             .normal;
         self.push_pull_along(face_id, normal * distance)
     }
@@ -448,18 +448,18 @@ impl Model {
         self.editable_surface(face_id)?;
         let distance = delta.length();
         if !delta.is_finite() || distance < EPS || distance > 1e7 {
-            return Err("Enter a nonzero distance in meters");
+            return Err(tr!("core.modeling.enter_a_nonzero_distance_in_meters"));
         }
         let face = self
             .faces
             .get(&face_id)
-            .ok_or("Click a filled face first")?
+            .ok_or(tr!("core.modeling.click_a_filled_face_first"))?
             .clone();
         let normal = faces::plane(self, &face.vertices)
-            .ok_or("The face must be planar")?
+            .ok_or(tr!("core.modeling.the_face_must_be_planar"))?
             .normal;
         if delta.dot(normal).abs() < EPS {
-            return Err("Choose an axis that is not parallel to the face, or clear the axis lock");
+            return Err(tr!("core.modeling.choose_an_axis_that_is_not_parallel_to"));
         }
         let color = self.face_colors.get(&face_id).copied();
         // On an existing solid, moving the cap stretches the adjoining walls.
@@ -537,13 +537,13 @@ impl Model {
         }
         self.editable_surface(face_id)?;
         if !distance.is_finite() || distance.abs() < EPS || distance.abs() > 1e7 {
-            return Err("Enter a nonzero offset in meters");
+            return Err(tr!("core.modeling.enter_a_nonzero_offset_in_meters"));
         }
         let face = self
             .faces
             .get(&face_id)
-            .ok_or("Click a filled face first")?;
-        let plane = faces::plane(self, &face.vertices).ok_or("The face must be planar")?;
+            .ok_or(tr!("core.modeling.click_a_filled_face_first"))?;
+        let plane = faces::plane(self, &face.vertices).ok_or(tr!("core.modeling.the_face_must_be_planar"))?;
         let rings: Vec<_> = std::iter::once(&face.vertices)
             .chain(face.holes.iter())
             .enumerate()
@@ -561,7 +561,7 @@ impl Model {
                 .iter()
                 .all(|p| faces::in_polygon(*p, &rings[0], false))
             {
-                return Err("Offset is too large for this face");
+                return Err(tr!("core.modeling.offset_is_too_large_for_this_face"));
             }
             for j in 0..i {
                 if rings_intersect(&rings[i], &rings[j])
@@ -569,7 +569,7 @@ impl Model {
                         && (faces::in_polygon(rings[i][0], &rings[j], true)
                             || faces::in_polygon(rings[j][0], &rings[i], true)))
                 {
-                    return Err("Offset boundaries would overlap");
+                    return Err(tr!("core.modeling.offset_boundaries_would_overlap"));
                 }
             }
         }
@@ -626,18 +626,18 @@ fn offset_ring(points: &[DVec2], distance: f64) -> Result<Vec<DVec2>, &'static s
         let cross = u.perp_dot(v);
         let point = if cross.abs() < 1e-9 {
             if u.dot(v) < 0. {
-                return Err("Cannot offset a folded boundary");
+                return Err(tr!("core.modeling.cannot_offset_a_folded_boundary"));
             }
             p
         } else {
             p + u * (q - p).perp_dot(v) / cross
         };
         if !point.is_finite() {
-            return Err("Cannot offset this corner");
+            return Err(tr!("core.modeling.cannot_offset_this_corner"));
         }
         result.push(point);
     }
-    let invalid = "Offset is too large or crosses itself";
+    let invalid = tr!("core.modeling.offset_is_too_large_or_crosses_itself");
     if area(&result) * area(points) <= EPS {
         return Err(invalid);
     }
@@ -695,10 +695,10 @@ pub struct MovePreview {
 impl MovePreview {
     pub fn new(model: &Model, selected: &BTreeSet<u64>) -> Result<Self, &'static str> {
         if model.edit_context.is_some() {
-            return Err("Scoped moves require component synchronization");
+            return Err(tr!("core.modeling.scoped_moves_require_component_synchronization"));
         }
         if model.selection_locked(selected) {
-            return Err("Unlock the selection before editing it");
+            return Err(tr!("core.modeling.unlock_the_selection_before_editing_it"));
         }
         let vertices = model.selection_vertices(selected);
         let entities = model.expand_entities(selected);
@@ -728,7 +728,7 @@ impl MovePreview {
             .filter_map(|id| model.guides.get(id).map(|g| (*id, g.clone())))
             .collect();
         if vertices.is_empty() && dimensions.is_empty() && texts.is_empty() && guides.is_empty() {
-            return Err("Select geometry, a dimension, text, or a guide first");
+            return Err(tr!("core.modeling.select_geometry_a_dimension_text_or_a_guide"));
         }
         let protected = model
             .edges
@@ -738,7 +738,7 @@ impl MovePreview {
             .filter(|id| model.is_locked(*id))
             .collect();
         if !vertices.is_disjoint(&model.selection_vertices(&protected)) {
-            return Err("Unlock the connected geometry before editing it");
+            return Err(tr!("core.modeling.unlock_the_connected_geometry_before_editing_it"));
         }
         let edges = model
             .edges
@@ -776,9 +776,9 @@ impl MovePreview {
     /// `preview` is a clone of the source passed to `new`, reused between frames.
     pub fn update(&self, preview: &mut Model, delta: DVec3) -> Result<(), &'static str> {
         const INVALID: &str =
-            "This change would collapse an edge or bend a face; select its connected geometry";
+            tr!("core.modeling.this_change_would_collapse_an_edge_or_bend");
         if !delta.is_finite() {
-            return Err("Enter a finite displacement");
+            return Err(tr!("core.modeling.enter_a_finite_displacement"));
         }
         for &(id, point) in &self.vertices {
             let point = point + delta;

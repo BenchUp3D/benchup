@@ -19,7 +19,7 @@ pub(super) fn trim_excess(
     let axes = source.joinery_frame(members[index])?;
     let (lo, hi) = axes
         .bounds(source, members[index])
-        .ok_or("Missing board geometry")?;
+        .ok_or(tr!("core.joinery_trim.missing_board_geometry"))?;
     let size = hi - lo;
     let length = settings
         .trim_axis
@@ -83,7 +83,7 @@ pub(super) fn trim_excess(
     });
     let first = projected
         .next()
-        .ok_or("The joint would remove an entire board")?;
+        .ok_or(tr!("core.joinery_trim.the_joint_would_remove_an_entire_board"))?;
     let (lo, hi) = projected.fold((first, first), |(lo, hi), p| (lo.min(p), hi.max(p)));
     let padding = (hi - lo).max_element().max(EPS) * 0.1;
     let (lo, hi) = (
@@ -91,7 +91,7 @@ pub(super) fn trim_excess(
         DVec3::new(hi.x + padding, hi.y + padding, 0.),
     );
     if lo.z >= -frame.epsilon {
-        return Err("Trimming would remove an entire board; keep the other end");
+        return Err(tr!("core.joinery_trim.trimming_would_remove_an_entire_board_keep_the"));
     }
     let cutter = prism(
         box_points(lo, hi)

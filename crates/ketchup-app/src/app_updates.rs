@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 use super::*;
 
 impl KetchupApp {
@@ -8,8 +9,8 @@ impl KetchupApp {
         let mut restart = false;
         let response = Modal::new("software_updates", 480.).show(ctx, |modal| {
             modal.header(|ui| {
-                ui.text_heading("Software updates");
-                ui.text_weak(format!("KetchUp3D {}", env!("CARGO_PKG_VERSION")));
+                ui.text_heading(tr!("app_updates.software_updates"));
+                ui.text_weak(tr!("app_updates.ketchup3d", env!("CARGO_PKG_VERSION")));
             });
             modal.body(|ui| {
                 ui.text_label(self.updates.status());
@@ -19,28 +20,28 @@ impl KetchupApp {
                 ui.add_space(12.);
                 ui.add_enabled_ui(self.updates.available(), |ui| {
                     let mut enabled = self.updates.automatic_updates();
-                    if ui.checkbox(&mut enabled, "Automatically check and download updates").changed() {
+                    if ui.checkbox(&mut enabled, tr!("app_updates.automatically_check_and_download_updates")).changed() {
                         self.updates.set_automatic_updates(enabled, ctx);
                     }
                 });
-                ui.text_label(RichText::new("Automatic checks run at most once a day. Downloaded updates install on the next launch. Turning this off stops future automatic checks and downloads.").small());
+                ui.text_label(RichText::new(tr!("app_updates.automatic_checks_run_at_most_once_a_day")).small());
                 if let Some(error) = &self.updates.error {
                     ui.add_space(8.);
                     ui.text_colored_label(ACCENT, error);
                 }
                 if self.updates.ready() {
                     ui.add_space(8.);
-                    ui.text_label("Restarting saves your model locally and restores it after updating. Finish any drawing or modeling preview first.");
+                    ui.text_label(tr!("app_updates.restarting_saves_your_model_locally_and_restores_it"));
                 }
             });
             modal.footer(|ui| {
-                if ui.button("Close").clicked() { ui.close(); }
+                if ui.button(tr!("common.close")).clicked() { ui.close(); }
                 if self.updates.ready() {
-                    restart = primary_button(ui, "Restart now", self.can_restart_for_update()).clicked();
-                } else if primary_button(ui, "Check now", self.updates.available() && !self.updates.busy()).clicked() {
+                    restart = primary_button(ui, tr!("app_updates.restart_now"), self.can_restart_for_update()).clicked();
+                } else if primary_button(ui, tr!("app_updates.check_now"), self.updates.available() && !self.updates.busy()).clicked() {
                     self.updates.check(ctx, false);
                 }
-                ui.hyperlink_to("Release notes", "https://github.com/Ketchup3D/app/releases");
+                ui.hyperlink_to(tr!("app_updates.release_notes"), "https://github.com/Ketchup3D/app/releases");
             });
         });
         if response.should_close() {
@@ -63,20 +64,21 @@ impl KetchupApp {
     fn prepare_update_restart(&mut self) -> Result<(), String> {
         if !self.can_restart_for_update() {
             return Err(
-                "Finish the current file operation or modeling preview before restarting.".into(),
+                tr!("app_updates.finish_the_current_file_operation_or_modeling_preview").into(),
             );
         }
         if self.storage_recovery {
-            return Err("Your previous workspace could not be restored. Make an edit and wait for local autosave to keep this workspace before restarting.".into());
+            return Err(tr!("app_updates.your_previous_workspace_could_not_be_restored_make").into());
         }
         self.persist();
         if let Some(error) = &self.save_error {
-            return Err(format!(
-                "Your model could not be saved. KetchUp3D will stay open: {error}"
+            return Err(tr!(
+                "app_updates.your_model_could_not_be_saved_ketchup3d_will",
+                error = error,
             ));
         }
         crate::updates::Resume::save(&self.doc, self.project.path.clone(), self.project.modified)
-            .map_err(|e| format!("Could not save your workspace for restart: {e}"))
+            .map_err(|e| tr!("app_updates.could_not_save_your_workspace_for_restart", e = e))
     }
 
     pub(super) fn restart_for_update(&mut self, ctx: &egui::Context) {

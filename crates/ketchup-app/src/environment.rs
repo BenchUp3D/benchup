@@ -1,3 +1,4 @@
+use ketchup_core::tr;
 use crate::natural_text::TextUi as _;
 use crate::inspector_table::{Column, InspectorTable};
 use eframe::egui::{self, Color32, Rect};
@@ -173,11 +174,11 @@ fn backdrop(rect: Rect, camera: &Camera, display: &DisplaySettings, dark: bool) 
 pub fn controls(ui: &mut egui::Ui, display: &mut DisplaySettings) -> bool {
     let before = display.clone();
     let mut themed = for_theme(display, ui.visuals().dark_mode);
-    ui.text_label("Environment");
+    ui.text_label(tr!("environment.environment"));
     ui.separator();
     let mut table =
         InspectorTable::new(ui.available_width(), [Column::flex(1.), Column::flex(1.)]).centered();
-    for (row, label) in ["Sky", "Ground", "Horizon", "Background"]
+    for (row, label) in [tr!("environment.sky"), tr!("environment.ground"), tr!("environment.horizon"), tr!("environment.background")]
         .into_iter()
         .enumerate()
     {
@@ -235,7 +236,7 @@ pub fn controls(ui: &mut egui::Ui, display: &mut DisplaySettings) -> bool {
     if ui
         .add_sized(
             egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
-            egui::Button::new("Reset environment colors"),
+            egui::Button::new(tr!("environment.reset_environment_colors")),
         )
         .clicked()
     {
