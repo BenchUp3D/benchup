@@ -278,7 +278,6 @@ impl KetchupApp {
         model: &Model,
     ) -> Vec<egui::Shape> {
         let colors = Palette::for_painter(p);
-        let selected = model.expand_entities(&self.selected);
         let mut shapes = vec![];
         for text in model
             .texts
@@ -294,7 +293,7 @@ impl KetchupApp {
             }
             let hovered = self.outliner_hover.contains(&text.id)
                 || self.hover.is_some() && self.hover == model.entity_in_context(text.id);
-            let color = if selected.contains(&text.id) {
+            let color = if self.entity_cache.selected(model, text.id, &self.selected) {
                 colors.accent
             } else if hovered {
                 colors.green

@@ -1648,7 +1648,13 @@ impl KetchupApp {
             );
         }
         if face.is_none() {
-            excluded.extend(model.expand_entities(&self.selected).into_iter().filter(|id| model.guides.contains_key(id)));
+            excluded.extend(
+                model
+                    .guides
+                    .keys()
+                    .copied()
+                    .filter(|id| self.entity_cache.selected(model, *id, &self.selected)),
+            );
         }
         excluded
     }
@@ -3453,6 +3459,7 @@ impl KetchupApp {
     }
 
     fn entity_info_contents(&mut self, ui: &mut egui::Ui) {
+        let revision = self.document_revision(ui.ctx());
         let background = if !self.selected.is_empty()
             && self.doc.model.faces.len() >= 1024
             && (self.selected.len() > 256
@@ -3478,8 +3485,11 @@ impl KetchupApp {
                 .and_then(|result| result.as_ref().ok())
                 .and_then(|summary| summary.size)
         } else if !self.selected.is_empty() {
-            self.solid_volume_cache
-                .solid_selection_size(&self.doc.model, &self.selected)
+            self.solid_volume_cache.solid_selection_size_for_revision(
+                &self.doc.model,
+                revision,
+                &self.selected,
+            )
         } else {
             None
         };
@@ -3508,7 +3518,8 @@ impl KetchupApp {
                 }
             }
         } else {
-            self.face_cache.update(&self.doc.model);
+            self.face_cache
+                .update_for_revision(&self.doc.model, revision);
             let entities = self.doc.model.expand_entities(&self.selected);
             let edges = entities
                 .iter()
@@ -3889,32 +3900,20 @@ impl KetchupApp {
         (!self.doc.model.is_locked(id)).then_some(id)
     }
     fn sweep_erase(&mut self, from: Pos2, to: Pos2) -> BTreeSet<u64> {
+        self.prepare_picking();
         let a = dv(from - self.viewport.min);
         let b = dv(to - self.viewport.min);
         let size = dv(self.viewport.size());
-        let mut ids: BTreeSet<_> = self
-            .doc
-            .model
-            .edges
-            .values()
-            .filter(|edge| {
-                !self.doc.model.is_hidden(edge.id)
-                    && !self.doc.model.is_locked(edge.id)
-                    && self.doc.model.entity_in_context(edge.id).is_some()
-            })
-            .filter_map(|edge| {
-                let (start, end) = self.doc.model.points(edge);
-                let (c, d) = self.doc.camera.segment(start, end, size)?;
-                if selection::segment_distance(a, b, c, d) >= 9. {
-                    return None;
-                }
-                let pixel = selection::closest_on_second_segment(a, b, c, d);
-                let point = self.doc.camera.ray(pixel, size).segment_point(start, end);
-                selection::visible(&self.doc.model, &self.doc.camera, size, point)
-                    .then(|| self.doc.model.entity_in_context(edge.id))
-                    .flatten()
-            })
-            .collect();
+        let mut ids = self.picking_cache.sweep_edges(
+            &self.doc.model,
+            &self.face_cache,
+            &self.entity_cache,
+            &self.doc.camera,
+            size,
+            a,
+            b,
+            9.,
+        );
         if self.doc.display.guides {
             ids.extend(self.doc.model.guides.iter().filter_map(|(id, guide)| {
                 if self.doc.model.is_hidden(*id) || self.doc.model.is_locked(*id) { return None; }
@@ -4620,13 +4619,19 @@ impl KetchupApp {
                             GestureKind::Select { additive } => {
                                 let dragged = gesture.start.distance(pos) > 4.;
                                 let mut hits = if dragged {
-                                    selection::box_select_with_guides(
+                                    let revision = self.document_revision(ctx);
+                                    self.entity_cache.update_for_revision(&self.doc.model, revision);
+                                    selection::box_select_with_state(
                                         &self.doc.model,
                                         &self.doc.camera,
                                         dv(self.viewport.size()),
                                         dv(gesture.start - self.viewport.min),
                                         dv(pos - self.viewport.min),
                                         self.doc.display.guides,
+                                        |id| {
+                                            let state = self.entity_cache.get(id);
+                                            (state.hidden, state.context)
+                                        },
                                     )
                                 } else {
                                     self.pick_at(
@@ -4889,6 +4894,13 @@ impl KetchupApp {
     }
 
     fn paint_scene_with_background(&mut self, ui: &egui::Ui, rect: Rect, background: bool) {
+        let evaluated = self.history_preview.is_some()
+            || self
+                .modeling
+                .as_ref()
+                .is_some_and(|edit| edit.preview.is_some())
+            || !self.doc.model.connections.is_empty()
+            || self.joint_highlight_preview_key().is_some();
         // Prepare picking while the scene is being prepared, not on its first
         // click. Plain source and render geometry can start from the same data.
         if self.doc.model.faces.len() >= 1024
@@ -4902,8 +4914,14 @@ impl KetchupApp {
                 &self.doc.camera,
                 dv(rect.size()),
             );
-            self.render_face_cache = self.face_cache.clone();
-            self.render_entity_cache = self.entity_cache.clone();
+            if evaluated {
+                self.render_face_cache = self.face_cache.clone();
+                self.render_entity_cache = self.entity_cache.clone();
+            }
+        }
+        if !evaluated {
+            self.paint_evaluated_scene(ui, rect, background);
+            return;
         }
         // All scene helpers see the same evaluated geometry while painting.
         // Restore source caches before handling input/inspector queries again.
@@ -4968,12 +4986,23 @@ impl KetchupApp {
         let joint_preview = self.joint_highlight_preview_key();
         let prepared_shadows = self.joinery_geometry.prepared_shadows.take()
             .filter(|_| joint_preview.is_none() && !model.connections.is_empty());
-        let model = joint_preview.as_ref().and_then(|_| self.joinery_dialog.preview_model())
-            .unwrap_or_else(|| if model.connections.is_empty() { model }
-                else { &self.joinery_geometry.result.as_ref().unwrap().model });
-        let model_revision = if let Some(revision) = source_revision.filter(|_| joint_preview.is_none()) {
-            self.render_model.update_from_source(model, revision)
-        } else { self.render_model.update(model) };
+        let model = joint_preview
+            .as_ref()
+            .and_then(|_| self.joinery_dialog.preview_model())
+            .unwrap_or_else(|| {
+                if model.connections.is_empty() {
+                    model
+                } else {
+                    &self.joinery_geometry.result.as_ref().unwrap().model
+                }
+            });
+        let model_revision =
+            if let Some(revision) = source_revision.filter(|_| joint_preview.is_none()) {
+                self.render_model
+                    .update_from_source(self.document_model.shared(), revision)
+            } else {
+                self.render_model.update(model)
+            };
         let empty_selection = BTreeSet::new();
         let selected = if self.history_preview.is_some() {
             &empty_selection
@@ -4985,7 +5014,10 @@ impl KetchupApp {
         } else {
             self.hover
         };
-        self.entity_cache.update_for_revision(model, model_revision);
+        let cache_revision = source_revision
+            .filter(|_| joint_preview.is_none())
+            .unwrap_or(model_revision);
+        self.entity_cache.update_for_revision(model, cache_revision);
         let entities = &self.entity_cache;
         let joinery_parts = self.joinery_edit_members().map(|members| members.map(|id|
             model.expand_entities(&BTreeSet::from([id]))));
@@ -5024,14 +5056,7 @@ impl KetchupApp {
             && self.paste_preview.is_none()
             && (self.measurement.is_none()
                 || matches!(self.tool, Tool::TapeMeasure | Tool::Protractor))
-            && self.text_editor.is_none()
-            && !matches!(
-                &self.gesture,
-                Some(Gesture {
-                    kind: GestureKind::Erase { .. },
-                    ..
-                })
-            ))
+            && self.text_editor.is_none())
         .then(|| renderer::SceneKey {
             joinery_members: self.joinery_edit_members(),
             joint_preview,
@@ -5046,12 +5071,25 @@ impl KetchupApp {
             selected: selected.clone(),
             hover,
             outliner_hover: self.outliner_hover.clone(),
+            erasing: match &self.gesture {
+                Some(Gesture {
+                    kind: GestureKind::Erase { ids },
+                    ..
+                }) => ids.clone(),
+                _ => BTreeSet::new(),
+            },
         });
-        if model.faces.len() >= 1024 { self.face_cache.update_for_revision(model, model_revision); }
-        let resident = key.as_ref().filter(|key| renderer::resident_supported(key, model, &self.face_cache));
+        if model.faces.len() >= 1024 {
+            self.face_cache.update_for_revision(model, cache_revision);
+        }
+        let resident = key
+            .as_ref()
+            .filter(|key| renderer::resident_supported(key, model, &self.face_cache));
         let resident_active = resident.is_some();
         if let Some(key) = resident {
-            self.face_cache.update_for_revision(model, model_revision);
+            self.face_cache.update_for_revision(model, cache_revision);
+            self.scene_cache
+                .prepare_resident(key, model, &self.face_cache, entities, ui);
             let mut references = self.scene_cache.resident_reference_mesh(key, model);
             if display.grid {
                 let colors = GridPalette::for_ui(ui);
@@ -5156,7 +5194,7 @@ impl KetchupApp {
             {
                 #[cfg(not(target_arch = "wasm32"))]
                 let _profile = viewport_benchmark::scope("face_cache");
-                self.face_cache.update(model);
+                self.face_cache.update_for_revision(model, cache_revision);
             }
             if let Some((prepared_display, mut shadows)) = prepared_shadows {
                 // Adopt only the partitions computed with the current shadow
@@ -5491,7 +5529,14 @@ impl KetchupApp {
             }
         }
 
-        if let Some((lo, hi)) = if resident_active { model.edit_context.and_then(|id|self.scene_cache.resident_context_bounds(id)) } else { self.face_cache.context_bounds(model, entities) } {
+        if let Some((lo, hi)) = if resident_active {
+            model.edit_context.and_then(|id| {
+                self.scene_cache
+                    .resident_context_bounds(id, model, entities)
+            })
+        } else {
+            self.face_cache.context_bounds(model, entities)
+        } {
             let padding = ((hi - lo).max_element() * 0.04).max(0.05);
             let lo = lo - DVec3::splat(padding);
             let hi = hi + DVec3::splat(padding);
@@ -5531,7 +5576,9 @@ impl KetchupApp {
                 }
             }
         }
-        for id in selected {
+        // Retained scenes draw endpoint handles directly from the GPU edge
+        // buffer. Dense selections must not generate millions of egui vertices.
+        for id in selected.iter().filter(|_| !resident_active) {
             if let Some(e) = model.edges.get(id) {
                 let (a, b) = model.points(e);
                 for pt in [a, b] {

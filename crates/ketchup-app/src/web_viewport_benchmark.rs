@@ -71,10 +71,15 @@ pub(super) fn tick(app: &mut KetchupApp, ctx: &egui::Context) {
         bench.last = now;
         app.release_notes.open = false;
         app.doc.camera = bench.camera.clone();
-        if bench.mode == "orbit" {
+        if bench.mode == "orbit" || bench.mode == "sun" {
             app.set_tool(Tool::Orbit);
-            app.doc.camera.yaw += 0.35 * (elapsed * 0.8).sin();
-            app.doc.camera.pitch += 0.1 * (elapsed * 0.65).sin();
+            if bench.mode == "sun" {
+                app.doc.display.shadows = true;
+                app.doc.display.sun_angle = 80. + 15. * (elapsed * 0.6).sin();
+            } else {
+                app.doc.camera.yaw += 0.35 * (elapsed * 0.8).sin();
+                app.doc.camera.pitch += 0.1 * (elapsed * 0.65).sin();
+            }
         } else {
             if app.tool != Tool::Select { app.set_tool(Tool::Select); }
             // The same pick query used by viewport clicks, moving over the scene.
@@ -119,7 +124,7 @@ pub(super) fn tick(app: &mut KetchupApp, ctx: &egui::Context) {
                 "faces": app.doc.model.faces.len(), "edges": app.doc.model.edges.len(),
                 "camera": bench.camera, "draws": bench.draws, "resident_frames": bench.resident_frames,"selected_frames":bench.selected_frames,"group_frames":bench.group_frames,"scopes":bench.scopes,"measurements_ready":app.selection_measurements.ready_count(),"measurement_errors":app.selection_measurements.error_count(),"measurement_error":app.selection_measurements.first_error(),
                 "yaw_range": bench.yaw_range, "pitch_range": bench.pitch_range,
-                "edges_visible": app.doc.display.edges, "resident_builds": app.viewports.resident_builds(), "size": [ctx.viewport_rect().width(), ctx.viewport_rect().height()] });
+                "edges_visible": app.doc.display.edges, "shadows":app.doc.display.shadows,"shadow_builds":app.viewports.resident_shadow_builds(),"resident_builds": app.viewports.resident_builds(), "size": [ctx.viewport_rect().width(), ctx.viewport_rect().height()] });
             let _ = js_sys::Reflect::set(&web_sys::window().unwrap(),
                 &JsValue::from_str("ketchupViewportBenchmarkResult"),
                 &js_sys::JSON::parse(&result.to_string()).unwrap());
@@ -159,11 +164,15 @@ pub(super) fn record_view(
 }
 
 fn publish_state(app: &KetchupApp) {
-    let value = serde_json::json!({"selected": app.selected, "context": app.doc.model.edit_context,
+    let value = serde_json::json!({"selected": app.selected.iter().take(512).copied().collect::<Vec<_>>(),
+            "selected_count":app.selected.len(), "selection_truncated":app.selected.len()>512,
+            "context": app.doc.model.edit_context,
             "tool": format!("{:?}", app.tool), "measurement_value": app.measurement_value(),
+            "faces": app.doc.model.faces.len(), "edges": app.doc.model.edges.len(),
+            "history_position": app.doc.history.position(),
             "measurement_points": app.measurement_points(), "guides": app.doc.model.guides.len(),
             "camera": app.doc.camera, "walk_feet": app.walk.person.as_ref().map(|p|p.feet),
-            "resident_builds": app.viewports.resident_builds()});
+            "shadows":app.doc.display.shadows,"shadow_builds":app.viewports.resident_shadow_builds(),"resident_builds": app.viewports.resident_builds()});
     let _ = js_sys::Reflect::set(
         &web_sys::window().unwrap(),
         &JsValue::from_str("ketchupViewportBenchmarkState"),
@@ -288,4 +297,139 @@ pub fn ketchup_validate_snapping(source: &str) -> Result<String, JsValue> {
         return Err(error(format!("Snap position error: {max_error}")));
     }
     Ok(serde_json::json!({"passed":true,"comparisons":comparisons,"max_position_error_m":max_error}).to_string())
+}
+
+/// Validate retained indices through actual Rooftop edits in an isolated worker.
+#[eframe::wasm_bindgen::prelude::wasm_bindgen]
+pub fn ketchup_validate_erase_caches(
+    source: &str,
+    context: u64,
+    edge: u64,
+) -> Result<String, JsValue> {
+    let error = |message: String| JsValue::from_str(&message);
+    let doc = Document::from_json(source).map_err(error)?;
+    let mut model = doc.model;
+    model.edit_context = Some(context);
+    if model.entity_in_context(edge) != Some(edge) || !model.edges.contains_key(&edge) {
+        return Err(error(
+            "The edge must belong directly to the editing context.".into(),
+        ));
+    }
+    let original = model.clone();
+    let size = DVec2::new(1064., 748.);
+    let (a, b) = model.points(&model.edges[&edge]);
+    let pixel = doc
+        .camera
+        .project((a + b) * 0.5, size)
+        .ok_or_else(|| error("The edge must be in view.".into()))?;
+    let mut faces = renderer::FaceCache::default();
+    let mut entities = renderer::EntityCache::default();
+    let mut picking = crate::picking::PickingCache::default();
+    faces.update_for_revision(&model, 1);
+    entities.update_for_revision(&model, 1);
+    picking.prepare_view(&model, &faces, &doc.camera, size);
+    let initial = picking.benchmark_builds();
+    let mut checks = 0;
+    for step in 0..4 {
+        if step % 2 == 0 {
+            model.erase(&BTreeSet::from([edge]));
+        } else {
+            model = original.clone();
+        }
+        model.validate().map_err(|message| error(message.into()))?;
+        faces.update_for_revision(&model, step + 2);
+        entities.update_for_revision(&model, step + 2);
+        picking.prepare_view(&model, &faces, &doc.camera, size);
+        let local = model
+            .object_contents(context)
+            .ok_or_else(|| error("The editing context disappeared.".into()))?;
+        for offset in [
+            DVec2::ZERO,
+            DVec2::new(4., 3.),
+            DVec2::new(-8., 5.),
+            DVec2::new(16., -12.),
+        ] {
+            let cursor = pixel + offset;
+            let actual = picking.pick(
+                &model,
+                &faces,
+                &entities,
+                &doc.camera,
+                size,
+                cursor,
+                9.,
+                false,
+            );
+            let expected = selection::pick(&local, &doc.camera, size, cursor, 9.);
+            if actual != expected {
+                return Err(error(format!(
+                    "Eraser query differs after edit {step}: {actual:?} != {expected:?}"
+                )));
+            }
+            checks += 1;
+        }
+        if picking.benchmark_builds() != initial {
+            return Err(error(format!(
+                "A local erase rebuilt the picking indices: {:?} -> {:?}",
+                initial,
+                picking.benchmark_builds()
+            )));
+        }
+    }
+    Ok(serde_json::json!({"passed":true,"queries":checks,"initial_builds":initial,"final_builds":picking.benchmark_builds()}).to_string())
+}
+
+#[eframe::wasm_bindgen::prelude::wasm_bindgen]
+pub fn ketchup_validate_edit_pipeline(
+    source: &str,
+    context: u64,
+    edge: u64,
+) -> Result<String, JsValue> {
+    let doc = Document::from_json(source).map_err(|e| JsValue::from_str(&e))?;
+    let shadow_checks = renderer::SceneCache::validate_shadow_cache(&doc)
+        .map_err(|e| JsValue::from_str(&e))?;
+    let checks = renderer::SceneCache::validate_edits(doc.clone(), context, edge)
+        .map_err(|e| JsValue::from_str(&e))?;
+    let snapping_checks = crate::picking::PickingCache::validate_snap_edits(doc.model, &doc.camera)
+        .map_err(|e| JsValue::from_str(&e))?;
+    Ok(
+        serde_json::json!({"passed":true,"checks":checks,"snapping_checks":snapping_checks,"shadow_checks":shadow_checks})
+            .to_string(),
+    )
+}
+
+#[eframe::wasm_bindgen::prelude::wasm_bindgen]
+pub fn ketchup_validate_box_selection() -> Result<String, JsValue> {
+    let checks = crate::picking::PickingCache::validate_box_selection()
+        .map_err(|e| JsValue::from_str(&e))?;
+    let measurement_cache_checks = selection_measurements::validate_request_cache()
+        .map_err(|e| JsValue::from_str(&e))?;
+    Ok(serde_json::json!({"passed":true,"comparisons":checks,"measurement_cache_checks":measurement_cache_checks}).to_string())
+}
+
+/// Independent ownership-index comparison for a complete marquee fixture.
+#[eframe::wasm_bindgen::prelude::wasm_bindgen]
+pub fn ketchup_box_selection(source: &str, query: &str) -> Result<String, JsValue> {
+    #[derive(serde::Deserialize)]
+    struct Scene {
+        model: Model,
+        selection_context: Option<u64>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Query {
+        camera: Camera,
+        size: DVec2,
+        start: DVec2,
+        end: DVec2,
+        guides: bool,
+    }
+    let error = |e: String| JsValue::from_str(&e);
+    let mut scene: Scene = serde_json::from_str(source).map_err(|e| error(e.to_string()))?;
+    let query: Query = serde_json::from_str(query).map_err(|e| error(e.to_string()))?;
+    scene.model.edit_context = scene.selection_context;
+    scene.model.validate().map_err(|e| error(e.into()))?;
+    let selected = selection::box_select_with_guides(
+        &scene.model, &query.camera, query.size, query.start, query.end, query.guides,
+    );
+    serde_json::to_string(&selected).map_err(|e| error(e.to_string()))
 }

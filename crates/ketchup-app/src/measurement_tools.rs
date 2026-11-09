@@ -52,7 +52,7 @@ impl KetchupApp {
             Ok(id) => {
                 let adjusting = m.guide_id.is_some();
                 if let Some(previous) = m.guide_id {
-                    self.doc.model.guides.remove(&previous);
+                    self.doc.model.erase(&BTreeSet::from([previous]));
                 }
                 m.guide_id = Some(id);
                 self.finish_edit(
@@ -510,7 +510,6 @@ impl KetchupApp {
         let colors = Palette::for_painter(p);
         let camera = &self.doc.camera;
         let mut shapes = vec![];
-        let selected = model.expand_entities(&self.selected);
         for dimension in model
             .dimensions
             .values()
@@ -519,7 +518,10 @@ impl KetchupApp {
             let outliner_hover = self.outliner_hover.contains(&dimension.id);
             let color = if model.entity_in_context(dimension.id).is_none() && !outliner_hover {
                 colors.muted
-            } else if selected.contains(&dimension.id) {
+            } else if self
+                .entity_cache
+                .selected(model, dimension.id, &self.selected)
+            {
                 colors.accent
             } else if outliner_hover
                 || self.hover.is_some() && self.hover == model.entity_in_context(dimension.id)

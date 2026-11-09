@@ -583,3 +583,89 @@ fn indexed_drawing_inference_matches_full_queries() {
         .unwrap();
     assert!(geometry.points.is_empty() && geometry.edges.is_empty() && geometry.faces.is_empty());
 }
+
+#[test]
+fn indexed_eraser_sweeps_match_visible_unlocked_geometry_in_nested_scopes() {
+    let mut model = triangle_grid(128);
+    let inner = model
+        .make_object(
+            &std::collections::BTreeSet::from([7, 14, 21]),
+            false,
+            "Inner",
+        )
+        .unwrap();
+    let outer = model
+        .make_object(&std::collections::BTreeSet::from([inner]), false, "Outer")
+        .unwrap();
+    model.hidden.insert(35);
+    model.locked.insert(46);
+    let size = DVec2::new(1200., 800.);
+    let mut camera = Camera::default();
+    camera.fit(model.bounds(), size);
+    let mut faces = FaceCache::default();
+    let mut entities = EntityCache::default();
+    let mut picking = PickingCache::default();
+    faces.update(&model);
+    for context in [None, Some(outer), Some(inner)] {
+        model.edit_context = context;
+        entities.update(&model);
+        for i in [0, 1, 5, 11, 50] {
+            let pixel = camera
+                .project(DVec3::new(i as f64 * 3. + 0.5, 0., 0.), size)
+                .unwrap();
+            let from = pixel - DVec2::new(0., 10.);
+            let to = pixel + DVec2::new(0., 10.);
+            let expected = model
+                .edges
+                .values()
+                .filter_map(|edge| {
+                    if model.is_hidden(edge.id) || model.is_locked(edge.id) {
+                        return None;
+                    }
+                    let context = model.entity_in_context(edge.id)?;
+                    let (a, b) = model.points(edge);
+                    let (c, d) = camera.segment(a, b, size)?;
+                    if selection::segment_distance(from, to, c, d) >= 9. {
+                        return None;
+                    }
+                    let pixel = selection::closest_on_second_segment(from, to, c, d);
+                    let point = camera.ray(pixel, size).segment_point(a, b);
+                    selection::visible(&model, &camera, size, point).then_some(context)
+                })
+                .collect();
+            assert_eq!(
+                picking.sweep_edges(&model, &faces, &entities, &camera, size, from, to, 9.),
+                expected
+            );
+        }
+    }
+}
+
+#[test]
+fn short_eraser_strokes_reuse_projection_and_prune_distant_edges() {
+    let model = triangle_grid(4096);
+    let size = DVec2::new(1200., 800.);
+    let mut camera = Camera::default();
+    camera.fit(model.bounds(), size);
+    let mut faces = FaceCache::default();
+    let mut entities = EntityCache::default();
+    let mut picking = PickingCache::default();
+    faces.update(&model);
+    entities.update(&model);
+    for i in [130, 521, 1300, 2048] {
+        let point = DVec3::new((i % 64) as f64 * 3. + 0.5, (i / 64) as f64 * 3., 0.);
+        let pixel = camera.project(point, size).unwrap();
+        assert!(
+            !picking
+                .sweep_edges(&model, &faces, &entities, &camera, size, pixel, pixel, 2.)
+                .is_empty()
+        );
+        assert!(picking.edges.tested_edges < 256);
+        assert_eq!(picking.edges.projection_builds, 1);
+    }
+}
+
+#[test]
+fn cached_box_selection_matches_complete_enclosure_in_all_drag_directions() {
+    assert_eq!(PickingCache::validate_box_selection().unwrap(), 2880);
+}

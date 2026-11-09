@@ -4,11 +4,37 @@ use crate::renderer::{EntityCache, FaceCache};
 use ketchup_core::{Camera, DVec2, DVec3, Model, Ray, selection};
 #[path = "snapping_index.rs"]
 mod snapping_index;
+#[cfg(any(test, target_arch = "wasm32"))]
+#[path = "box_selection_regression.rs"]
+mod box_selection_regression;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct Bounds {
     lo: DVec3,
     hi: DVec3,
+}
+
+fn deleted_keys<'a, T: PartialEq + 'a>(
+    before: impl IntoIterator<Item = (u64, &'a T)>,
+    after: impl IntoIterator<Item = (u64, &'a T)>,
+) -> Option<std::collections::HashSet<u64>> {
+    let mut next = after.into_iter().peekable();
+    let mut removed = std::collections::HashSet::new();
+    for (id, value) in before {
+        match next.peek() {
+            Some((key, other)) if *key == id => {
+                if value != *other {
+                    return None;
+                }
+                next.next();
+            }
+            Some((key, _)) if *key < id => return None,
+            _ => {
+                removed.insert(id);
+            }
+        }
+    }
+    next.next().is_none().then_some(removed)
 }
 impl Bounds {
     fn entry(self, ray: Ray, limit: f64) -> Option<f64> {
@@ -50,6 +76,11 @@ pub struct PickingCache {
     display: ketchup_core::DisplaySettings,
     items: Vec<Item>,
     nodes: Vec<Node>,
+    source_bounds: Vec<(u64, Bounds)>,
+    extra: Vec<Item>,
+    removed: std::collections::HashSet<u64>,
+    #[cfg(any(test, target_arch = "wasm32"))]
+    hierarchy_builds: usize,
     edges: EdgePickingCache,
     snapping: snapping_index::Index,
 }
@@ -163,6 +194,18 @@ impl ketchup_core::inference::FaceQuery for SnapQuery<'_> {
     }
 }
 impl PickingCache {
+    #[cfg(any(test, target_arch = "wasm32"))]
+    pub(crate) fn validate_box_selection() -> Result<usize, String> {
+        box_selection_regression::validate()
+    }
+    #[cfg(any(test, target_arch = "wasm32"))]
+    pub(crate) fn benchmark_builds(&self) -> [usize; 3] {
+        [
+            self.hierarchy_builds,
+            self.edges.geometry_builds,
+            self.edges.projection_builds,
+        ]
+    }
     pub(crate) fn reference_edges(
         &self,
         faces: &FaceCache,
@@ -241,11 +284,24 @@ impl PickingCache {
                 pending[len..len + 2].copy_from_slice(&[a, b]); len += 2;
             } else {
                 for item in &self.items[node.start..node.end] {
+                    if self.removed.contains(&item.id) {
+                        continue;
+                    }
                     let state = entities.get(item.id);
                     if !state.hidden && (model.edit_context.is_none() || state.context.is_some())
                         && contains(item.bounds) && faces.get(item.id).contains_point(point)
                     { return true; }
                 }
+            }
+        }
+        for item in &self.extra {
+            let state = entities.get(item.id);
+            if !state.hidden
+                && (model.edit_context.is_none() || state.context.is_some())
+                && contains(item.bounds)
+                && faces.get(item.id).contains_point(point)
+            {
+                return true;
             }
         }
         false
@@ -271,20 +327,47 @@ impl PickingCache {
             return;
         }
         self.revision = Some(faces.revision());
-        self.items = faces
+        let bounds: Vec<_> = faces
             .iter()
             .filter(|(_, face)| !face.triangles.is_empty())
-            .map(|(id, face)| Item {
-                id,
-                bounds: Bounds {
-                    lo: face.bounds.0,
-                    hi: face.bounds.1,
-                },
+            .map(|(id, face)| {
+                (
+                    id,
+                    Bounds {
+                        lo: face.bounds.0,
+                        hi: face.bounds.1,
+                    },
+                )
             })
+            .collect();
+        let dirty = crate::renderer::changed_ids(
+            self.source_bounds.iter().map(|(id, bounds)| (*id, bounds)),
+            bounds.iter().map(|(id, bounds)| (*id, bounds)),
+        );
+        if !bounds.is_empty() && !self.source_bounds.is_empty() && dirty.len() <= 512 {
+            self.extra = bounds
+                .iter()
+                .filter(|(id, _)| dirty.contains(id))
+                .map(|&(id, bounds)| Item { id, bounds })
+                .collect();
+            self.removed = dirty.into_iter().collect();
+            return;
+        }
+        self.extra.clear();
+        self.source_bounds = bounds;
+        self.removed.clear();
+        self.items = self
+            .source_bounds
+            .iter()
+            .map(|&(id, bounds)| Item { id, bounds })
             .collect();
         self.nodes.clear();
         if !self.items.is_empty() {
             self.build(0, self.items.len());
+        }
+        #[cfg(any(test, target_arch = "wasm32"))]
+        {
+            self.hierarchy_builds += 1;
         }
     }
     fn build(&mut self, start: usize, end: usize) -> usize {
@@ -450,6 +533,9 @@ impl PickingCache {
                 continue;
             }
             for item in &self.items[node.start..node.end] {
+                if self.removed.contains(&item.id) {
+                    continue;
+                }
                 let state = entities.get(item.id);
                 if !include(item.id)
                     || state.hidden
@@ -468,6 +554,31 @@ impl PickingCache {
                     if best.is_none_or(|(id, best, _)| t < best || t == best && item.id > id) {
                         best = Some((item.id, t, p));
                     }
+                }
+            }
+        }
+        for item in &self.extra {
+            let state = entities.get(item.id);
+            if !include(item.id)
+                || state.hidden
+                || scoped && state.context.is_none()
+                || editable && state.context != Some(item.id)
+            {
+                continue;
+            }
+            if item
+                .bounds
+                .entry(ray, best.map_or(f64::INFINITY, |(_, t, _)| t))
+                .is_none()
+            {
+                continue;
+            }
+            *visited += 1;
+            if let Some((t, p)) = faces.get(item.id).hit(ray)
+                && self.display.section_contains(p)
+            {
+                if best.is_none_or(|(id, old, _)| t < old || t == old && item.id > id) {
+                    best = Some((item.id, t, p));
                 }
             }
         }
@@ -538,6 +649,44 @@ impl PickingCache {
         }
         None
     }
+
+    /// Reuse the projected-edge hierarchy for the whole eraser stroke, then
+    /// test only nearby edges against the cached surfaces in the editing scope.
+    pub(crate) fn sweep_edges(
+        &mut self,
+        model: &Model,
+        faces: &FaceCache,
+        entities: &EntityCache,
+        camera: &Camera,
+        size: DVec2,
+        from: DVec2,
+        to: DVec2,
+        radius: f64,
+    ) -> std::collections::BTreeSet<u64> {
+        self.prepare_view(model, faces, camera, size);
+        let view = camera.view(size);
+        self.edges
+            .sweep_candidates(from, to, radius, entities)
+            .into_iter()
+            .filter_map(|(id, _)| {
+                let state = entities.get(id);
+                if state.locked {
+                    return None;
+                }
+                let (a, b) = model.points(&model.edges[&id]);
+                let (a, b) = self.display.section_segment(a, b)?;
+                let (c, d) = view.segment(a, b)?;
+                if selection::segment_distance(from, to, c, d) >= radius {
+                    return None;
+                }
+                let pixel = selection::closest_on_second_segment(from, to, c, d);
+                let point = view.ray(pixel).segment_point(a, b);
+                self.visible(faces, entities, camera, size, point)
+                    .then_some(state.context)
+                    .flatten()
+            })
+            .collect()
+    }
 }
 
 #[derive(Default)]
@@ -546,13 +695,15 @@ struct EdgePickingCache {
     known_revision:Option<u64>,
     source_edges: Vec<ketchup_core::Edge>,
     source_vertices: Vec<(u64, DVec3)>,
+    extra: Vec<ScreenEdge>,
+    removed: std::collections::HashSet<u64>,
     world_edges: Vec<(u64, DVec3, DVec3)>,
     items: Vec<ScreenEdge>,
     nodes: Vec<ScreenEdgeNode>,
     pending: Vec<usize>,
-    #[cfg(test)]
+    #[cfg(any(test, target_arch = "wasm32"))]
     projection_builds: usize,
-    #[cfg(test)]
+    #[cfg(any(test, target_arch = "wasm32"))]
     geometry_builds: usize,
     #[cfg(test)]
     tested_edges: usize,
@@ -597,14 +748,47 @@ impl EdgePickingCache {
         // Public model collections permit direct edits, so validate the source
         // with linear iterators. An unchanged hover does no edge projection,
         // map lookup per endpoint, or spatial-index construction.
-        let same_geometry = self.source_edges.len() == model.edges.len()
-            && self.source_vertices.len() == model.vertices.len()
-            && self.source_edges.iter().eq(model.edges.values())
+        let moved = crate::renderer::changed_ids(
+            self.source_vertices.iter().map(|(id, p)| (*id, p)),
+            model.vertices.iter().map(|(&id, v)| (id, &v.position)),
+        );
+        let mut dirty = crate::renderer::changed_ids(
+            self.source_edges.iter().map(|edge| (edge.id, edge)),
+            model.edges.iter().map(|(&id, edge)| (id, edge)),
+        );
+        if !moved.is_empty() {
+            dirty.extend(
+                model
+                    .edges
+                    .values()
+                    .filter(|edge| moved.contains(&edge.a) || moved.contains(&edge.b))
+                    .map(|edge| edge.id),
+            );
+        }
+        let same_geometry = dirty.is_empty() && moved.is_empty();
+        if !self.source_edges.is_empty()
+            && model.edges.len() >= 1024
+            && dirty.len() <= 512
             && self
-                .source_vertices
+                .view
+                .as_ref()
+                .is_some_and(|(saved, dimensions)| saved == camera && *dimensions == size)
+        {
+            self.removed = dirty.into_iter().collect();
+            let view = camera.view(size);
+            self.extra = self
+                .removed
                 .iter()
-                .copied()
-                .eq(model.vertices.iter().map(|(&id, v)| (id, v.position)));
+                .filter_map(|id| {
+                    let edge = model.edges.get(id)?;
+                    let (a, b) = model.points(edge);
+                    let (a, b) = view.segment(a, b)?;
+                    Some(ScreenEdge { id: *id, a, b })
+                })
+                .collect();
+            return;
+        }
+        self.extra.clear();
         if same_geometry
             && self
                 .view
@@ -614,6 +798,7 @@ impl EdgePickingCache {
             return;
         }
         if !same_geometry {
+            self.removed.clear();
             // Camera changes only reproject these endpoints; resolve the model's
             // vertex maps once per geometry change, including direct public edits.
             self.world_edges.clear();
@@ -621,7 +806,7 @@ impl EdgePickingCache {
                 let (a, b) = model.points(edge);
                 (edge.id, a, b)
             }));
-            #[cfg(test)]
+            #[cfg(any(test, target_arch = "wasm32"))]
             {
                 self.geometry_builds += 1;
             }
@@ -631,6 +816,7 @@ impl EdgePickingCache {
             self.source_vertices
                 .extend(model.vertices.iter().map(|(&id, v)| (id, v.position)));
         }
+        self.removed.clear();
         self.view = Some((camera.clone(), size));
         self.items.clear();
         let view = camera.view(size);
@@ -643,7 +829,7 @@ impl EdgePickingCache {
         if !self.items.is_empty() {
             self.build(0, self.items.len());
         }
-        #[cfg(test)]
+        #[cfg(any(test, target_arch = "wasm32"))]
         {
             self.projection_builds += 1;
         }
@@ -677,18 +863,51 @@ impl EdgePickingCache {
     }
 
     fn candidates(&mut self, pixel: DVec2, radius: f64, entities: &EntityCache) -> Vec<(u64, f64)> {
+        self.candidates_in_bounds(
+            pixel - DVec2::splat(radius),
+            pixel + DVec2::splat(radius),
+            entities,
+            |edge| {
+                let distance = selection::distance_to_segment(pixel, edge.a, edge.b);
+                (distance <= radius).then_some(distance)
+            },
+        )
+    }
+
+    fn sweep_candidates(
+        &mut self,
+        from: DVec2,
+        to: DVec2,
+        radius: f64,
+        entities: &EntityCache,
+    ) -> Vec<(u64, f64)> {
+        self.candidates_in_bounds(
+            from.min(to) - DVec2::splat(radius),
+            from.max(to) + DVec2::splat(radius),
+            entities,
+            |edge| {
+                let distance = selection::segment_distance(from, to, edge.a, edge.b);
+                (distance < radius).then_some(distance)
+            },
+        )
+    }
+
+    fn candidates_in_bounds(
+        &mut self,
+        lo: DVec2,
+        hi: DVec2,
+        entities: &EntityCache,
+        distance: impl Fn(&ScreenEdge) -> Option<f64>,
+    ) -> Vec<(u64, f64)> {
         #[cfg(test)]
         {
             self.tested_edges = 0;
         }
         let mut candidates = Vec::new();
-        if self.nodes.is_empty() {
-            return candidates;
-        }
-        let lo = pixel - DVec2::splat(radius);
-        let hi = pixel + DVec2::splat(radius);
         self.pending.clear();
-        self.pending.push(0);
+        if !self.nodes.is_empty() {
+            self.pending.push(0);
+        }
         while let Some(index) = self.pending.pop() {
             let node = &self.nodes[index];
             if node.hi.x < lo.x || node.lo.x > hi.x || node.hi.y < lo.y || node.lo.y > hi.y {
@@ -699,6 +918,9 @@ impl EdgePickingCache {
                 continue;
             }
             for edge in &self.items[node.start..node.end] {
+                if self.removed.contains(&edge.id) {
+                    continue;
+                }
                 let state = entities.get(edge.id);
                 if state.hidden || state.context.is_none() {
                     continue;
@@ -707,8 +929,15 @@ impl EdgePickingCache {
                 {
                     self.tested_edges += 1;
                 }
-                let distance = selection::distance_to_segment(pixel, edge.a, edge.b);
-                if distance <= radius {
+                if let Some(distance) = distance(edge) {
+                    candidates.push((edge.id, distance));
+                }
+            }
+        }
+        for edge in &self.extra {
+            let state = entities.get(edge.id);
+            if !state.hidden && state.context.is_some() {
+                if let Some(distance) = distance(edge) {
                     candidates.push((edge.id, distance));
                 }
             }

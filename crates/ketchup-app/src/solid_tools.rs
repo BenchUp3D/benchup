@@ -9,6 +9,7 @@ use ketchup_core::SolidOperation;
 #[derive(Default)]
 pub(super) struct VolumeCache {
     source: Option<Model>,
+    source_revision: Option<(u64, Option<u64>)>,
     volumes: std::collections::BTreeMap<u64, Result<f64, &'static str>>,
     selection_size: Option<(BTreeSet<u64>, Option<DVec3>)>,
     #[cfg(test)]
@@ -17,11 +18,32 @@ pub(super) struct VolumeCache {
 
 impl VolumeCache {
     fn update(&mut self, model: &Model) {
+        self.source_revision = None;
         if self.source.as_ref() != Some(model) {
             self.source = Some(model.clone());
             self.volumes.clear();
             self.selection_size = None;
         }
+    }
+    pub(super) fn solid_selection_size_for_revision(
+        &mut self,
+        model: &Model,
+        revision: u64,
+        selected: &BTreeSet<u64>,
+    ) -> Option<DVec3> {
+        // Edges and annotations alone cannot contain a selected solid.
+        if selected
+            .iter()
+            .all(|id| !model.faces.contains_key(id) && !model.objects.contains_key(id))
+        {
+            return None;
+        }
+        let key = (revision, model.edit_context);
+        if self.source_revision != Some(key) {
+            self.update(model);
+            self.source_revision = Some(key);
+        }
+        self.cached_selection_size(model, selected)
     }
 
     pub(super) fn volume(&mut self, model: &Model, id: u64) -> Result<f64, &'static str> {
@@ -41,6 +63,9 @@ impl VolumeCache {
         selected: &BTreeSet<u64>,
     ) -> Option<DVec3> {
         self.update(model);
+        self.cached_selection_size(model, selected)
+    }
+    fn cached_selection_size(&mut self, model: &Model, selected: &BTreeSet<u64>) -> Option<DVec3> {
         if let Some((previous, size)) = &self.selection_size
             && previous == selected
         {

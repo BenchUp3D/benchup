@@ -9,6 +9,8 @@ pub(super) const HOVERED: u32 = 2;
 pub(super) const ACTIVE: u32 = 4;
 pub(super) const OUTLINER: u32 = 8;
 pub(super) const LOCKED: u32 = 16;
+pub(super) const ERASING: u32 = 32;
+pub(super) const REMOVED: u32 = 64;
 #[derive(Default)]
 pub(super) struct Cache {
     key: Option<Key>,
@@ -20,16 +22,17 @@ struct Key {
     hover: Option<u64>,
     outliner: BTreeSet<u64>,
     context: Option<u64>,
+    erasing: BTreeSet<u64>,
+    removed: BTreeSet<u64>,
 }
 pub(super) struct Hierarchy {
     slots: BTreeMap<u64, u32>,
     parents: BTreeMap<u64, u64>,
     objects: Vec<(u64, Vec<u64>)>,
     base: Vec<u32>,
-    pub bounds: BTreeMap<u64, (DVec3, DVec3)>,
 }
 impl Hierarchy {
-    pub fn new(model: &Model, entities: &EntityCache, faces: &FaceCache) -> Self {
+    pub fn new(model: &Model, entities: &EntityCache, _faces: &FaceCache) -> Self {
         let parents: BTreeMap<_, _> = model
             .objects
             .values()
@@ -61,41 +64,76 @@ impl Hierarchy {
                 base[slot as usize] |= LOCKED;
             }
         }
-        let mut bounds = BTreeMap::new();
-        for (&id, &slot) in &slots {
-            let _ = slot;
-            let state = entities.get(id);
-            if state.hidden {
-                continue;
-            }
-            let points = if let Some(edge) = model.edges.get(&id) {
-                let (a, b) = model.points(edge);
-                Some((a.min(b), a.max(b)))
-            } else if model.faces.contains_key(&id) {
-                Some(faces.get(id).bounds)
-            } else {
-                None
-            };
-            if let Some((lo, hi)) = points {
-                let mut current = id;
-                while let Some(&parent) = parents.get(&current) {
-                    bounds
-                        .entry(parent)
-                        .and_modify(|(a, b): &mut (DVec3, DVec3)| {
-                            *a = a.min(lo);
-                            *b = b.max(hi);
-                        })
-                        .or_insert((lo, hi));
-                    current = parent;
-                }
-            }
-        }
         Self {
             slots,
             parents,
             objects,
             base,
-            bounds,
+        }
+    }
+    pub fn synchronize(
+        &mut self,
+        source: &Model,
+        model: &Model,
+        entities: &EntityCache,
+        dirty: &BTreeSet<u64>,
+    ) {
+        for id in model
+            .objects
+            .keys()
+            .chain(dirty.iter())
+            .filter(|id| model.contains_entity(id))
+        {
+            if !self.slots.contains_key(id) {
+                let slot = self.slots.len() as u32 + 1;
+                self.slots.insert(*id, slot);
+            }
+        }
+        self.base
+            .resize((self.slots.len() + 1).div_ceil(WIDTH) * WIDTH, 0);
+        // Include the preceding edit when undo restores the original geometry.
+        // Its ownership then matches the base, but differs from the last frame.
+        let mut ownership = dirty.clone();
+        ownership.extend(model.objects.keys());
+        for (&id, before) in &source.objects {
+            if let Some(after) = model.objects.get(&id) {
+                ownership.extend(before.entities.symmetric_difference(&after.entities));
+            } else {
+                ownership.extend(&before.entities);
+            }
+        }
+        for object in model
+            .objects
+            .values()
+            .filter(|object| !source.objects.contains_key(&object.id))
+        {
+            ownership.extend(&object.entities);
+            ownership.insert(object.id);
+        }
+        for id in ownership {
+            if let Some(parent) = entities.parent(id) {
+                self.parents.insert(id, parent);
+            } else {
+                self.parents.remove(&id);
+            }
+        }
+        self.objects = model
+            .objects
+            .keys()
+            .map(|&id| {
+                let mut path = vec![id];
+                while let Some(&parent) = self.parents.get(path.last().unwrap()) {
+                    path.push(parent);
+                }
+                path.reverse();
+                (id, path)
+            })
+            .collect();
+        for id in model.objects.keys().chain(dirty.iter()) {
+            let slot = self.slot(*id) as usize;
+            if slot != 0 {
+                self.base[slot] = if entities.get(*id).locked { LOCKED } else { 0 };
+            }
         }
     }
     pub fn slot(&self, id: u64) -> u32 {
@@ -107,22 +145,39 @@ impl Hierarchy {
             self.slot(id),
         ]
     }
-    pub fn update(&self, cache: &mut Cache, key: &SceneKey) -> Arc<Vec<u32>> {
-        let next = Key {
-            selected: key.selected.clone(),
-            hover: key.hover,
-            outliner: key.outliner_hover.clone(),
-            context: key.edit_context,
-        };
-        if cache.key.as_ref() == Some(&next) {
+    pub fn update(
+        &self,
+        cache: &mut Cache,
+        key: &SceneKey,
+        removed: &BTreeSet<u64>,
+    ) -> Arc<Vec<u32>> {
+        // Primitive hover is already a uniform lookup in the vertex shader.
+        // Only assembly hover needs inherited state in the interaction texture.
+        let hover = key.hover.filter(|id| self.objects.iter().any(|(object, _)| object == id));
+        if cache.key.as_ref().is_some_and(|previous|
+            previous.hover == hover && previous.context == key.edit_context
+                && previous.selected == key.selected && previous.outliner == key.outliner_hover
+                && previous.erasing == key.erasing && previous.removed == *removed)
+        {
             return Arc::clone(&cache.values);
         }
+        let next = Key {
+            selected: key.selected.clone(), hover,
+            outliner: key.outliner_hover.clone(), context: key.edit_context,
+            erasing: key.erasing.clone(), removed: removed.clone(),
+        };
         if cache.values.len() != self.base.len() {
             cache.values = Arc::new(self.base.clone());
         }
         let flags = Arc::make_mut(&mut cache.values);
         if let Some(previous) = &cache.key {
-            for id in previous.selected.iter().chain(&previous.outliner) {
+            for id in previous
+                .selected
+                .iter()
+                .chain(&previous.outliner)
+                .chain(&previous.erasing)
+                .chain(&previous.removed)
+            {
                 let slot = self.slot(*id) as usize;
                 if slot != 0 {
                     flags[slot] = self.base[slot];
@@ -153,12 +208,17 @@ impl Hierarchy {
             if path.iter().any(|id| next.outliner.contains(id)) {
                 state |= OUTLINER;
             }
+            if path.iter().any(|id| next.erasing.contains(id)) {
+                state |= ERASING;
+            }
             flags[self.slot(*id) as usize] = state;
         }
-        for (&bit, ids) in [&SELECTED, &OUTLINER]
-            .into_iter()
-            .zip([&next.selected, &next.outliner])
-        {
+        for (&bit, ids) in [&SELECTED, &OUTLINER, &ERASING, &REMOVED].into_iter().zip([
+            &next.selected,
+            &next.outliner,
+            &next.erasing,
+            &next.removed,
+        ]) {
             for id in ids {
                 let slot = self.slot(*id) as usize;
                 if slot != 0 {

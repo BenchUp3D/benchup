@@ -17,6 +17,7 @@ struct Key {
     size: DVec2,
 }
 struct Point {
+    id: u64,
     world: DVec3,
     pixel: DVec2,
     kind: Inference,
@@ -111,6 +112,9 @@ pub(super) struct Index {
     lines: Option<[Lines; 3]>,
     faces: Vec<ScreenEdge>,
     face_nodes: Vec<ScreenEdgeNode>,
+    source: Option<Box<Model>>,
+    dirty: BTreeSet<u64>,
+    extra: Option<Box<Index>>,
 }
 impl Index {
     fn key(faces: &FaceCache, entities: &EntityCache, camera: &Camera, size: DVec2) -> Key {
@@ -143,6 +147,65 @@ impl Index {
         if key.source.is_some() && self.key.as_ref() == Some(&key) {
             return;
         }
+        if self.key.as_ref().is_some_and(|old| {
+            old.source == key.source
+                && old.faces == key.faces
+                && old.camera == key.camera
+                && old.size == key.size
+        }) {
+            for point in &mut self.points {
+                point.visible.take();
+            }
+            if let Some(extra) = &mut self.extra {
+                for point in &mut extra.points {
+                    point.visible.take();
+                }
+            }
+            self.key = Some(key);
+            return;
+        }
+        if self
+            .key
+            .as_ref()
+            .is_some_and(|old| old.camera == key.camera && old.size == key.size)
+        {
+            if let Some(source) = self.source.as_ref() {
+                if let Some(mut dirty) = crate::renderer::geometry_changes(source, model)
+                    .filter(|dirty| dirty.len() <= 512)
+                {
+                    let vertices: std::collections::HashSet<_> = dirty
+                        .iter()
+                        .flat_map(|id| [source.edges.get(id), model.edges.get(id)])
+                        .flatten()
+                        .flat_map(|edge| [edge.a, edge.b])
+                        .collect();
+                    dirty.extend(
+                        model
+                            .edges
+                            .values()
+                            .filter(|edge| vertices.contains(&edge.a) || vertices.contains(&edge.b))
+                            .map(|edge| edge.id),
+                    );
+                    let subset = model.copy_entities(&dirty);
+                    dirty.extend(&vertices);
+                    dirty.extend(subset.vertices.keys());
+                    dirty.extend(subset.edges.keys());
+                    dirty.extend(subset.faces.keys());
+                    let mut extra = Box::new(Index::default());
+                    extra.prepare(&subset, faces, entities, camera, size);
+                    self.extra = Some(extra);
+                    self.dirty = dirty;
+                    for point in &mut self.points {
+                        point.visible.take();
+                    }
+                    self.key = Some(key);
+                    return;
+                }
+            }
+        }
+        self.source = Some(Box::new(model.clone()));
+        self.dirty.clear();
+        self.extra = None;
         self.key = Some(key);
         self.points.clear();
         self.tiles.clear();
@@ -159,17 +222,19 @@ impl Index {
             .values()
             .filter(|edge| !entities.get(edge.id).hidden)
             .collect();
-        let vertices: BTreeSet<_> = visible_edges
+        let vertices: std::collections::HashSet<_> = visible_edges
             .iter()
             .flat_map(|edge| [edge.a, edge.b])
             .collect();
+        let mut vertices: Vec<_> = vertices.into_iter().collect();
+        vertices.sort_unstable();
         let mut positions: Vec<_> = vertices
             .into_iter()
-            .map(|id| (model.vertices[&id].position, Inference::Endpoint))
+            .map(|id| (id, model.vertices[&id].position, Inference::Endpoint))
             .collect();
         positions.extend(visible_edges.into_iter().map(|edge| {
             let (a, b) = model.points(edge);
-            ((a + b) * 0.5, Inference::Midpoint)
+            (edge.id, (a + b) * 0.5, Inference::Midpoint)
         }));
         positions.extend(
             model
@@ -177,12 +242,12 @@ impl Index {
                 .values()
                 .filter(|face| !entities.get(face.id).hidden)
                 .filter_map(|face| {
-                    model
-                        .face_center(face)
-                        .map(|center| (center, Inference::FaceCenter))
+                    faces
+                        .snap_center(model, face.id)
+                        .map(|center| (face.id, center, Inference::FaceCenter))
                 }),
         );
-        for (world, kind) in positions {
+        for (id, world, kind) in positions {
             let Some(pixel) = view.project(world) else {
                 continue;
             };
@@ -209,6 +274,7 @@ impl Index {
                 }
             }
             self.points.push(Point {
+                id,
                 world,
                 pixel,
                 kind,
@@ -217,8 +283,13 @@ impl Index {
             });
         }
         self.lines = Some(lines);
-        for (id, face) in faces.iter().filter(|(id, _)| !entities.get(*id).hidden) {
-            let (lo, hi) = face.bounds;
+        for id in model
+            .faces
+            .keys()
+            .copied()
+            .filter(|id| !entities.get(*id).hidden)
+        {
+            let (lo, hi) = faces.get(id).bounds;
             let corners = [
                 DVec3::new(lo.x, lo.y, lo.z),
                 DVec3::new(hi.x, lo.y, lo.z),
@@ -291,19 +362,35 @@ impl Index {
             }
         }
         indices.sort_unstable();
-        let points = indices
+        let mut points: Vec<_> = indices
             .into_iter()
             .map(|index| &self.points[index])
-            .filter(|p: &&Point| {
-                p.pixel.distance(cursor) < 11.
-                    && if p.kind == Inference::FaceCenter {
-                        targets.face_centers
-                    } else {
-                        targets.edges
-                    }
-            })
-            .map(|p| (p.world, p.kind))
+            .filter(|point| !self.dirty.contains(&point.id))
             .collect();
+        if let Some(extra) = &self.extra {
+            points.extend(&extra.points);
+        }
+        points.retain(|p| {
+            p.pixel.distance(cursor) < 11.
+                && if p.kind == Inference::FaceCenter {
+                    targets.face_centers
+                } else {
+                    targets.edges
+                }
+        });
+        points.sort_by_key(|p| {
+            (
+                if p.kind == Inference::Endpoint {
+                    0
+                } else if p.kind == Inference::Midpoint {
+                    1
+                } else {
+                    2
+                },
+                p.id,
+            )
+        });
+        let points = points.into_iter().map(|p| (p.world, p.kind)).collect();
         let mut result = SnapGeometry {
             points,
             edges: Vec::new(),
@@ -312,6 +399,9 @@ impl Index {
         if targets.edges {
             for_rect(&edges.nodes, cursor, 11., |node| {
                 for edge in &edges.items[node.start..node.end] {
+                    if edges.removed.contains(&edge.id) {
+                        continue;
+                    }
                     if !entities.get(edge.id).hidden
                         && selection::distance_to_segment(cursor, edge.a, edge.b) <= 11.
                     {
@@ -319,12 +409,20 @@ impl Index {
                     }
                 }
             });
+            for edge in &edges.extra {
+                if !entities.get(edge.id).hidden
+                    && selection::distance_to_segment(cursor, edge.a, edge.b) <= 11.
+                {
+                    result.edges.push(edge.id);
+                }
+            }
             result.edges.sort_unstable();
         }
         if targets.faces {
             for_rect(&self.face_nodes, cursor, 11., |node| {
                 for face in &self.faces[node.start..node.end] {
-                    if face.a.x <= cursor.x + 11.
+                    if !self.dirty.contains(&face.id)
+                        && face.a.x <= cursor.x + 11.
                         && face.b.x >= cursor.x - 11.
                         && face.a.y <= cursor.y + 11.
                         && face.b.y >= cursor.y - 11.
@@ -333,6 +431,17 @@ impl Index {
                     }
                 }
             });
+            if let Some(extra) = &self.extra {
+                for face in &extra.faces {
+                    if face.a.x <= cursor.x + 11.
+                        && face.b.x >= cursor.x - 11.
+                        && face.a.y <= cursor.y + 11.
+                        && face.b.y >= cursor.y - 11.
+                    {
+                        result.faces.push(face.id);
+                    }
+                }
+            }
             result.faces.sort_unstable();
         }
         result
@@ -344,11 +453,22 @@ impl Index {
     ) -> Option<[Vec<DVec3>; 3]> {
         let lines = self.lines.as_ref()?;
         Some(std::array::from_fn(|axis| {
-            lines[axis]
+            let mut points: Vec<_> = lines[axis]
                 .nearby(cursor)
                 .into_iter()
-                .filter_map(|index| {
-                    let point = &self.points[index];
+                .map(|index| &self.points[index])
+                .filter(|point| !self.dirty.contains(&point.id))
+                .collect();
+            if let Some(extra) = &self.extra {
+                points.extend(&extra.points);
+            }
+            points.sort_by_key(|p| (if p.kind == Inference::Endpoint { 0 } else { 1 }, p.id));
+            points
+                .into_iter()
+                .filter_map(|point| {
+                    if point.kind == Inference::FaceCenter {
+                        return None;
+                    }
                     let direction = point.directions[axis]?;
                     if (cursor - point.pixel).perp_dot(direction).abs() / direction.length() > 10. {
                         return None;
@@ -386,5 +506,76 @@ fn for_rect(
         } else {
             leaf(node);
         }
+    }
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+impl super::PickingCache {
+    pub(crate) fn validate_snap_edits(mut model: Model, camera: &Camera) -> Result<usize, String> {
+        model.edit_context = None;
+        let point = camera.target + DVec3::Z * 0.123;
+        let edge = model
+            .add_edge(point, point + DVec3::X)
+            .map_err(str::to_owned)?;
+        let original = model.clone();
+        let size = DVec2::new(1064., 748.);
+        let mut retained = Self::default();
+        let mut faces = FaceCache::default();
+        let mut entities = EntityCache::default();
+        let mut checks = 0;
+        for step in 0..4 {
+            match step {
+                1 => model.erase(&BTreeSet::from([edge])),
+                2 => {
+                    model.edit_context = model
+                        .root_entities()
+                        .into_iter()
+                        .find(|id| model.objects.contains_key(id));
+                    model
+                        .draw_polyline(
+                            &[
+                                point,
+                                point + DVec3::X,
+                                point + DVec3::X + DVec3::Y,
+                                point + DVec3::Y,
+                                point,
+                            ],
+                            true,
+                        )
+                        .map_err(str::to_owned)?;
+                }
+                3 => model = original.clone(),
+                _ => {}
+            }
+            faces.update_for_revision(&model, step + 1);
+            entities.update_for_revision(&model, step + 1);
+            retained.prepare_snapping(&model, &faces, &entities, camera, size);
+            let mut fresh = Self::default();
+            fresh.prepare_snapping(&model, &faces, &entities, camera, size);
+            for world in [
+                point,
+                point + DVec3::X,
+                point + DVec3::X * 0.5,
+                point + DVec3::Y,
+            ] {
+                let Some(cursor) = camera.project(world, size) else {
+                    continue;
+                };
+                let targets = Default::default();
+                let a = retained
+                    .snapping
+                    .nearby(cursor, targets, &retained.edges, &entities);
+                let b = fresh
+                    .snapping
+                    .nearby(cursor, targets, &fresh.edges, &entities);
+                if a.points != b.points || a.edges != b.edges || a.faces != b.faces {
+                    return Err(format!(
+                        "Retained snap candidates differ after edit {step} at {world:?}"
+                    ));
+                }
+                checks += 1;
+            }
+        }
+        Ok(checks)
     }
 }

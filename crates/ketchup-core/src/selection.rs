@@ -225,83 +225,155 @@ pub fn box_select_with_guides(
     end: DVec2,
     include_guides: bool,
 ) -> BTreeSet<u64> {
+    use std::collections::HashMap;
+    // Reverse ownership once, instead of searching all assemblies for every
+    // primitive, ancestor and descendant-completeness check.
+    let parents: HashMap<_, _> = model
+        .objects
+        .values()
+        .flat_map(|object| object.entities.iter().map(|id| (*id, object.id)))
+        .collect();
+    let own_hidden = |id: u64| {
+        model.hidden.contains(&id)
+            || model
+                .entity_tags
+                .get(&id)
+                .and_then(|tag| model.tags.get(tag))
+                .is_some_and(|tag| !tag.visible)
+    };
+    let objects: HashMap<_, _> = model
+        .objects
+        .keys()
+        .map(|&id| {
+            let mut current = id;
+            let mut hidden = false;
+            let mut context = None;
+            loop {
+                hidden |= own_hidden(current);
+                let parent = parents.get(&current).copied();
+                if Some(current) != model.edit_context && parent == model.edit_context {
+                    context = Some(current);
+                }
+                let Some(parent) = parent else { break };
+                current = parent;
+            }
+            (id, (hidden, context))
+        })
+        .collect();
+    box_select_with_state(model, camera, size, start, end, include_guides, |id| {
+        let parent = parents.get(&id).copied();
+        let inherited = parent.and_then(|id| objects.get(&id)).copied();
+        let hidden = own_hidden(id) || inherited.is_some_and(|state| state.0);
+        let context = if parent == model.edit_context {
+            Some(id)
+        } else {
+            inherited.and_then(|state| state.1)
+        };
+        (hidden, context)
+    })
+}
+
+/// The application already caches inherited visibility and selectable owners.
+/// Reuse those states without rebuilding the ownership index for each drag.
+/// Each primitive contributes once to its owner's complete-enclosure test;
+/// shared vertices are projected once using one camera view.
+pub fn box_select_with_state(
+    model: &Model,
+    camera: &Camera,
+    size: DVec2,
+    start: DVec2,
+    end: DVec2,
+    include_guides: bool,
+    state: impl Fn(u64) -> (bool, Option<u64>),
+) -> BTreeSet<u64> {
+    use std::collections::HashMap;
+    fn record(
+        id: u64,
+        state: (bool, Option<u64>),
+        groups: &mut HashMap<u64, bool>,
+        selected: &mut BTreeSet<u64>,
+        hit: impl FnOnce() -> bool,
+    ) {
+        let (hidden, Some(owner)) = state else { return };
+        if hidden {
+            return;
+        }
+        if owner == id {
+            if hit() {
+                selected.insert(id);
+            }
+        } else {
+            // Once any visible descendant misses the box, that assembly cannot
+            // be enclosed. Hidden descendants do not block its selection.
+            let enclosed = groups.entry(owner).or_insert(true);
+            if *enclosed {
+                *enclosed = hit();
+            }
+        }
+    }
     let lo = start.min(end);
     let hi = start.max(end);
     let inside = |p: DVec2| p.cmpge(lo).all() && p.cmple(hi).all();
-    let mut selected: BTreeSet<_> = model
-        .edges
-        .values()
-        .filter(|e| !model.is_hidden(e.id) && model.entity_in_context(e.id).is_some())
-        .filter_map(|e| {
-            let (a, b) = model.points(e);
-            let (a, b) = (camera.project(a, size)?, camera.project(b, size)?);
-            (inside(a) && inside(b)).then_some(e.id)
-        })
-        .collect();
-    for face in model
-        .faces
-        .values()
-        .filter(|f| !model.is_hidden(f.id) && model.entity_in_context(f.id).is_some())
-    {
-        let hit = face.vertices.iter().all(|id| {
-            camera
-                .project(model.vertices[id].position, size)
+    let view = camera.view(size);
+    let mut vertices = HashMap::new();
+    let mut vertex_inside = |id: u64| {
+        *vertices.entry(id).or_insert_with(|| {
+            view.project(model.vertices[&id].position)
                 .is_some_and(inside)
+        })
+    };
+    let mut selected = BTreeSet::new();
+    let mut groups = HashMap::new();
+    for edge in model.edges.values() {
+        record(edge.id, state(edge.id), &mut groups, &mut selected, || {
+            vertex_inside(edge.a) && vertex_inside(edge.b)
         });
-        if hit {
-            selected.insert(face.id);
-        }
     }
-    for dimension in model.dimensions.values().filter(|d| !model.is_hidden(d.id)) {
-        let points = dimension.layout(model);
-        let hit = points
-            .iter()
-            .all(|p| camera.project(*p, size).is_some_and(inside));
-        if hit {
-            selected.insert(dimension.id);
-        }
+    for face in model.faces.values() {
+        record(face.id, state(face.id), &mut groups, &mut selected, || {
+            face.vertices.iter().all(|id| vertex_inside(*id))
+        });
     }
-    for text in model.texts.values().filter(|t| !model.is_hidden(t.id)) {
-        let [a, b] = text.layout(model);
-        let hit = camera.project(a, size).is_some_and(inside)
-            && camera.project(b, size).is_some_and(|center| {
-                let half = text.label_size() * 0.5;
-                inside(center - half) && inside(center + half)
-            });
-        if hit {
-            selected.insert(text.id);
-        }
+    for dimension in model.dimensions.values() {
+        record(
+            dimension.id,
+            state(dimension.id),
+            &mut groups,
+            &mut selected,
+            || {
+                dimension
+                    .layout(model)
+                    .iter()
+                    .all(|p| view.project(*p).is_some_and(inside))
+            },
+        );
     }
-    for (id, guide) in model
-        .guides
-        .iter()
-        .filter(|(id, _)| include_guides && !model.is_hidden(**id))
-    {
-        // An infinite guide cannot be enclosed by a finite marquee. Select it
-        // when the visible line crosses the box; points must be inside it.
-        let hit = if guide.direction.is_some() {
-            guide
-                .screen_segment(camera, size)
-                .is_some_and(|(a, b)| intersects_rect(a, b, lo, hi))
-        } else {
-            camera.project(guide.origin, size).is_some_and(inside)
-        };
-        if hit {
-            selected.insert(*id);
-        }
+    for text in model.texts.values() {
+        record(text.id, state(text.id), &mut groups, &mut selected, || {
+            let [a, b] = text.layout(model);
+            view.project(a).is_some_and(inside)
+                && view.project(b).is_some_and(|center| {
+                    let half = text.label_size() * 0.5;
+                    inside(center - half) && inside(center + half)
+                })
+        });
     }
-    let hits = selected.clone();
-    selected = hits
-        .iter()
-        .filter_map(|id| model.entity_in_context(*id))
-        .collect();
-    selected.retain(|id| {
-        !model.objects.contains_key(id)
-            || model
-                .expand_entities(&BTreeSet::from([*id]))
-                .iter()
-                .filter(|id| !model.objects.contains_key(id) && !model.is_hidden(**id))
-                .all(|id| hits.contains(id))
-    });
+    for (&id, guide) in &model.guides {
+        record(id, state(id), &mut groups, &mut selected, || {
+            include_guides
+                && if guide.direction.is_some() {
+                    guide
+                        .screen_segment(camera, size)
+                        .is_some_and(|(a, b)| intersects_rect(a, b, lo, hi))
+                } else {
+                    view.project(guide.origin).is_some_and(inside)
+                }
+        });
+    }
+    selected.extend(
+        groups
+            .into_iter()
+            .filter_map(|(id, enclosed)| enclosed.then_some(id)),
+    );
     selected
 }

@@ -11,6 +11,7 @@ self.onmessage=async event=>{
  try {
   const module=await initialized;
   if(message.source!==undefined)module.ketchup_measurement_load(message.source);
+  else if(message.merge!==undefined)module.ketchup_measurement_merge(message.merge);
   else self.postMessage({id:message.id,result:module.ketchup_measure_selection(message.selected,message.context)});
  }catch(error){self.postMessage({id:message.id,error:String(error)})}
 };`;
@@ -27,6 +28,7 @@ worker.onerror=event=>fail(new Error(event.message||'Measurement worker failed.'
 worker.onmessageerror=()=>fail(new Error('Invalid measurement worker response.'));
 worker.postMessage({source});
 return {
+ merge(source){worker.postMessage({merge:source})},
  request(selected,context){return new Promise((resolve,reject)=>{const id=++sequence;pending.set(id,{resolve,reject});worker.postMessage({id,selected,context})})},
  stop(){worker.terminate();fail(new Error('Measurement source replaced.'))}
 };

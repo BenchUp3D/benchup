@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 #[path = "resident_scene.rs"]
 mod resident;
-pub(crate) use resident::supported as resident_supported;
+pub(crate) use resident::{edited_geometry as geometry_changes, supported as resident_supported};
 
 /// Shared reference geometry fade, measured along the camera's forward axis.
 pub(crate) struct ReferenceFade {
@@ -53,6 +53,37 @@ struct Vertex {
     lateral: f32,
     shadow_color: [u8; 4],
     dash_phase: f32,
+}
+
+pub(crate) fn changed_ids<'a, T: PartialEq + 'a>(
+    before: impl IntoIterator<Item = (u64, &'a T)>,
+    after: impl IntoIterator<Item = (u64, &'a T)>,
+) -> std::collections::BTreeSet<u64> {
+    let mut old = before.into_iter().peekable();
+    let mut new = after.into_iter().peekable();
+    let mut ids = std::collections::BTreeSet::new();
+    loop {
+        match (old.peek(), new.peek()) {
+            (Some((a, _)), Some((b, _))) if a == b => {
+                let (id, a) = old.next().unwrap();
+                let (_, b) = new.next().unwrap();
+                if a != b {
+                    ids.insert(id);
+                }
+            }
+            (Some((a, _)), Some((b, _))) if a < b => {
+                ids.insert(old.next().unwrap().0);
+            }
+            (_, Some(_)) => {
+                ids.insert(new.next().unwrap().0);
+            }
+            (Some(_), None) => {
+                ids.insert(old.next().unwrap().0);
+            }
+            (None, None) => break,
+        }
+    }
+    ids
 }
 
 // A face slope applies only on the face side of its boundary. Extending
@@ -133,9 +164,10 @@ impl ModelSnapshot {
     }
     /// A caller that already compared the source document can share that
     /// revision with a derived snapshot, instead of scanning it again.
-    pub(crate) fn update_from_source(&mut self, model: &Model, source_revision: u64) -> u64 {
+    pub(crate) fn update_from_source(&mut self, model: Arc<Model>, source_revision: u64) -> u64 {
         if self.source_revision != Some(source_revision) {
-            self.update(model);
+            self.model = Some(model);
+            self.revision = self.revision.wrapping_add(1);
             self.source_revision = Some(source_revision);
         }
         self.revision
@@ -165,6 +197,7 @@ pub struct SceneKey {
     pub selected: std::collections::BTreeSet<u64>,
     pub hover: Option<u64>,
     pub outliner_hover: std::collections::BTreeSet<u64>,
+    pub erasing: std::collections::BTreeSet<u64>,
 }
 
 #[derive(Default)]
@@ -3533,6 +3566,7 @@ pub struct FaceCache {
     faces: BTreeMap<u64, CachedFace>,
     source_vertices: Vec<(u64, DVec3)>,
     adjacent_faces: BTreeMap<(u64, u64), Vec<u64>>,
+    vertex_faces: std::collections::HashMap<u64, Vec<u64>>,
     max_edge_faces: usize,
     revision: u64,
     #[cfg(test)]
@@ -3544,6 +3578,7 @@ pub struct CachedFace {
     positions: Vec<DVec3>,
     pub normal: DVec3,
     pub center: DVec3,
+    snap_center: OnceLock<Option<DVec3>>,
     pub triangles: Vec<[DVec3; 3]>,
     pub area: f64,
     pub bounds: (DVec3, DVec3),
@@ -3559,61 +3594,81 @@ impl FaceCache {
             self.source_revision = Some(revision);
         }
     }
+    pub(crate) fn snap_center(&self, model: &Model, id: u64) -> Option<DVec3> {
+        *self.faces[&id]
+            .snap_center
+            .get_or_init(|| model.face_center(&model.faces[&id]))
+    }
+    pub fn get(&self, id: u64) -> &CachedFace {
+        &self.faces[&id]
+    }
+    pub fn adjacent_faces(&self, a: u64, b: u64) -> &[u64] {
+        self.adjacent_faces
+            .get(&(a.min(b), a.max(b)))
+            .map_or(&[], Vec::as_slice)
+    }
     pub fn update(&mut self, model: &Model) {
         self.source_revision = None;
-        // Hover and orbit do not change topology. Validate in collection
-        // order rather than looking up every face endpoint in the model.
-        let same_topology = self.faces.len() == model.faces.len()
-            && self
-                .faces
-                .values()
-                .zip(model.faces.values())
-                .all(|(cached, face)| cached.boundary == *face);
-        if same_topology
-            && self
-                .source_vertices
-                .iter()
-                .copied()
-                .eq(model.vertices.iter().map(|(&id, v)| (id, v.position)))
-        {
+        let vertices = changed_ids(
+            self.source_vertices.iter().map(|(id, p)| (*id, p)),
+            model.vertices.iter().map(|(&id, v)| (id, &v.position)),
+        );
+        let mut dirty = changed_ids(
+            self.faces.iter().map(|(&id, face)| (id, &face.boundary)),
+            model.faces.iter().map(|(&id, face)| (id, face)),
+        );
+        #[cfg(test)]
+        let topology_changed = !dirty.is_empty();
+        for vertex in &vertices {
+            if let Some(faces) = self.vertex_faces.get(vertex) {
+                dirty.extend(faces);
+            }
+        }
+        if dirty.is_empty() && vertices.is_empty() {
             return;
         }
-        if !same_topology {
-            self.adjacent_faces.clear();
-            for face in model.faces.values() {
-                for ring in std::iter::once(&face.vertices).chain(face.holes.iter()) {
+        for id in &dirty {
+            if let Some(cached) = self.faces.remove(id) {
+                for ring in
+                    std::iter::once(&cached.boundary.vertices).chain(cached.boundary.holes.iter())
+                {
                     for i in 0..ring.len() {
                         let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
-                        self.adjacent_faces
-                            .entry((a.min(b), a.max(b)))
-                            .or_default()
-                            .push(face.id);
+                        let pair = (a.min(b), a.max(b));
+                        if let Some(faces) = self.adjacent_faces.get_mut(&pair) {
+                            faces.retain(|face| face != id);
+                            if faces.is_empty() {
+                                self.adjacent_faces.remove(&pair);
+                            }
+                        }
+                        if let Some(faces) = self.vertex_faces.get_mut(&a) {
+                            faces.retain(|face| face != id);
+                            if faces.is_empty() {
+                                self.vertex_faces.remove(&a);
+                            }
+                        }
                     }
                 }
             }
-            self.max_edge_faces = self.adjacent_faces.values().map(Vec::len).max().unwrap_or(0);
-            #[cfg(test)]
-            {
-                self.topology_builds += 1;
+            let Some(face) = model.faces.get(id) else {
+                self.revision = self.revision.wrapping_add(1);
+                continue;
+            };
+            for ring in std::iter::once(&face.vertices).chain(face.holes.iter()) {
+                for i in 0..ring.len() {
+                    let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+                    let adjacent = self.adjacent_faces.entry((a.min(b), a.max(b))).or_default();
+                    let index = adjacent.binary_search(id).unwrap_or_else(|index| index);
+                    adjacent.insert(index, *id);
+                    self.vertex_faces.entry(a).or_default().push(*id);
+                }
             }
-        }
-        let previous_len = self.faces.len();
-        self.faces.retain(|id, _| model.faces.contains_key(id));
-        if previous_len != self.faces.len() {
-            self.revision = self.revision.wrapping_add(1);
-        }
-        for face in model.faces.values() {
             let positions = || {
                 face.vertices
                     .iter()
                     .chain(face.holes.iter().flatten())
                     .map(|id| model.vertices[id].position)
             };
-            if self.faces.get(&face.id).is_some_and(|cached| {
-                cached.boundary == *face && cached.positions.iter().copied().eq(positions())
-            }) {
-                continue;
-            }
             let plane = ketchup_core::faces::plane(model, &face.vertices);
             let triangles = model.face_triangles(face);
             let area = triangles
@@ -3651,6 +3706,7 @@ impl FaceCache {
                     positions: points,
                     normal: plane.map_or(DVec3::Z, |plane| plane.normal),
                     center,
+                    snap_center: OnceLock::new(),
                     triangles,
                     area,
                     bounds,
@@ -3659,17 +3715,21 @@ impl FaceCache {
                 },
             );
         }
+        self.max_edge_faces = self
+            .adjacent_faces
+            .values()
+            .map(Vec::len)
+            .max()
+            .unwrap_or(0);
+        #[cfg(test)]
+        {
+            if topology_changed {
+                self.topology_builds += 1;
+            }
+        }
         self.source_vertices.clear();
         self.source_vertices
             .extend(model.vertices.iter().map(|(&id, v)| (id, v.position)));
-    }
-    pub fn get(&self, id: u64) -> &CachedFace {
-        &self.faces[&id]
-    }
-    pub fn adjacent_faces(&self, a: u64, b: u64) -> &[u64] {
-        self.adjacent_faces
-            .get(&(a.min(b), a.max(b)))
-            .map_or(&[], Vec::as_slice)
     }
     pub fn revision(&self) -> u64 {
         self.revision
@@ -3750,6 +3810,7 @@ impl CachedFace {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_ui::ContextExt as _;
     #[test]
     fn grain_rows_are_staggered_and_closer_across_than_along_the_grain() {
         use super::*;
@@ -7066,7 +7127,7 @@ mod tests {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EntityState {
     pub hidden: bool,
     pub locked: bool,
@@ -7094,9 +7155,9 @@ pub struct EntityCache {
     hidden: std::collections::BTreeSet<u64>,
     locked: std::collections::BTreeSet<u64>,
     context: Option<u64>,
-    states: BTreeMap<u64, EntityState>,
-    parents: BTreeMap<u64,u64>,
-    scoped_objects: BTreeMap<u64,Option<u64>>,
+    states: std::collections::HashMap<u64, EntityState>,
+    parents: std::collections::HashMap<u64, u64>,
+    scoped_objects: std::collections::HashMap<u64, Option<u64>>,
     tags: BTreeMap<u64, ketchup_core::Tag>,
     entity_tags: BTreeMap<u64, u64>,
     revision: u64,
@@ -7128,6 +7189,45 @@ impl EntityCache {
             }
             return;
         }
+        // Erasing an edge/face only removes children from existing groups.
+        // Surviving ancestry and inherited state stay valid; rebuilding every
+        // imported entity's state here makes a local edit scale with the scene.
+        if self.hidden == model.hidden
+            && self.locked == model.locked
+            && self.tags == model.tags
+            && self.entity_tags == model.entity_tags
+            && self.objects.len() == model.objects.len()
+            && self
+                .objects
+                .iter()
+                .zip(&model.objects)
+                .all(|((id, children), (key, object))| {
+                    id == key
+                        && object.entities.is_subset(children)
+                        && children
+                            .difference(&object.entities)
+                            .all(|id| !model.contains_entity(id))
+                })
+        {
+            for ((_, children), (_, object)) in self.objects.iter_mut().zip(&model.objects) {
+                for id in children.difference(&object.entities) {
+                    self.states.remove(id);
+                    self.parents.remove(id);
+                }
+                if *children != object.entities {
+                    children.clone_from(&object.entities);
+                }
+            }
+            self.revision = self.revision.wrapping_add(1);
+            if self.context != model.edit_context {
+                self.context = model.edit_context;
+                self.resolve_scope();
+            }
+            return;
+        }
+        if self.update_membership(model) {
+            return;
+        }
         self.revision = self.revision.wrapping_add(1);
         self.tags.clone_from(&model.tags);
         self.entity_tags.clone_from(&model.entity_tags);
@@ -7139,66 +7239,202 @@ impl EntityCache {
             .iter()
             .map(|(id, o)| (*id, o.entities.clone()))
             .collect();
-        let parents: BTreeMap<_, _> = self
+        let parents: std::collections::HashMap<_, _> = self
             .objects
             .iter()
             .flat_map(|(id, entities)| entities.iter().map(|child| (*child, *id)))
             .collect();
         self.states.clear();
-        for id in parents
+        self.parents = parents;
+        for id in self
+            .parents
             .keys()
             .chain(model.objects.keys())
             .chain(model.entity_tags.keys())
             .chain(model.hidden.iter())
         {
-            let mut current = *id;
-            let mut hidden = false;
-            let mut locked = false;
-            let mut object_hidden = false;
-            let mut geometry_hidden = false;
-            let mut tag_hidden = false;
-            let mut tag_color = None;
-            let mut context = None;
-            loop {
-                hidden |= self.hidden.contains(&current);
-                object_hidden |=
-                    self.hidden.contains(&current) && model.objects.contains_key(&current);
-                geometry_hidden |=
-                    self.hidden.contains(&current) && !model.objects.contains_key(&current);
-                if let Some(tag) = model
-                    .entity_tags
-                    .get(&current)
-                    .and_then(|id| model.tags.get(id))
-                {
-                    tag_hidden |= !tag.visible;
-                    tag_color = tag_color.or(Some(tag.color));
-                }
-                locked |= self.locked.contains(&current);
-                let parent = parents.get(&current).copied();
-                if parent.is_none() {
-                    context = Some(current);
-                }
-                let Some(parent) = parent else {
-                    break;
-                };
-                current = parent;
-            }
-            self.states.insert(
-                *id,
-                EntityState {
-                    hidden: hidden || tag_hidden,
-                    entity_hidden: hidden,
-                    object_hidden,
-                    geometry_hidden,
-                    tag_hidden,
-                    tag_color,
-                    locked,
-                    context,
-                },
-            );
+            let state = self.inherited_state(model, *id);
+            self.states.insert(*id, state);
         }
-        self.parents = parents;
         self.resolve_scope();
+    }
+    fn inherited_state(&self, model: &Model, id: u64) -> EntityState {
+        let mut current = id;
+        let mut hidden = false;
+        let mut locked = false;
+        let mut object_hidden = false;
+        let mut geometry_hidden = false;
+        let mut tag_hidden = false;
+        let mut tag_color = None;
+        let mut context = None;
+        loop {
+            hidden |= self.hidden.contains(&current);
+            object_hidden |= self.hidden.contains(&current) && model.objects.contains_key(&current);
+            geometry_hidden |=
+                self.hidden.contains(&current) && !model.objects.contains_key(&current);
+            if let Some(tag) = model
+                .entity_tags
+                .get(&current)
+                .and_then(|id| model.tags.get(id))
+            {
+                tag_hidden |= !tag.visible;
+                tag_color = tag_color.or(Some(tag.color));
+            }
+            locked |= self.locked.contains(&current);
+            let parent = self.parents.get(&current).copied();
+            if parent.is_none() {
+                context = Some(current);
+            }
+            let Some(parent) = parent else {
+                break;
+            };
+            current = parent;
+        }
+        EntityState {
+            hidden: hidden || tag_hidden,
+            entity_hidden: hidden,
+            object_hidden,
+            geometry_hidden,
+            tag_hidden,
+            tag_color,
+            locked,
+            context,
+        }
+    }
+
+    fn update_membership(&mut self, model: &Model) -> bool {
+        let compatible = |old: &std::collections::BTreeSet<u64>,
+                          new: &std::collections::BTreeSet<u64>| {
+            old.difference(new).all(|id| !model.contains_entity(id))
+                && new.difference(old).all(|id| !self.states.contains_key(id))
+        };
+        if !compatible(&self.hidden, &model.hidden)
+            || !compatible(&self.locked, &model.locked)
+            || self.tags != model.tags
+            || self.entity_tags.iter().any(|(id, old)| {
+                model.entity_tags.get(id) != Some(old) && model.contains_entity(id)
+            })
+            || model.entity_tags.iter().any(|(id, new)| {
+                self.entity_tags.get(id) != Some(new) && self.states.contains_key(id)
+            })
+        {
+            return false;
+        }
+        let previous: std::collections::HashSet<_> =
+            self.objects.iter().map(|(id, _)| *id).collect();
+        let mut changed: std::collections::HashMap<u64, Option<u64>> = Default::default();
+        for (id, children) in &self.objects {
+            if let Some(object) = model.objects.get(id) {
+                for child in children.difference(&object.entities) {
+                    changed.entry(*child).or_insert(None);
+                }
+                for child in object.entities.difference(children) {
+                    changed.insert(*child, Some(*id));
+                }
+            } else {
+                changed.entry(*id).or_insert(None);
+                for child in children {
+                    changed.entry(*child).or_insert(None);
+                }
+            }
+        }
+        for object in model
+            .objects
+            .values()
+            .filter(|object| !previous.contains(&object.id))
+        {
+            for child in &object.entities {
+                changed.insert(*child, Some(object.id));
+            }
+            changed.entry(object.id).or_insert(None);
+        }
+        for id in self
+            .hidden
+            .symmetric_difference(&model.hidden)
+            .chain(self.locked.symmetric_difference(&model.locked))
+            .chain(
+                self.entity_tags
+                    .keys()
+                    .chain(model.entity_tags.keys())
+                    .filter(|id| self.entity_tags.get(id) != model.entity_tags.get(id)),
+            )
+        {
+            changed
+                .entry(*id)
+                .or_insert_with(|| self.parents.get(id).copied());
+        }
+        // Moving an existing assembly changes inherited state for descendants.
+        // Keep that case on the complete hierarchy rebuild.
+        if changed.iter().any(|(id, parent)| {
+            previous.contains(id)
+                && model.objects.contains_key(id)
+                && self.parents.get(id).copied() != *parent
+        }) {
+            return false;
+        }
+        self.hidden.clone_from(&model.hidden);
+        self.locked.clone_from(&model.locked);
+        self.entity_tags.clone_from(&model.entity_tags);
+        for (id, parent) in &changed {
+            if let Some(parent) = parent {
+                self.parents.insert(*id, *parent);
+            } else {
+                self.parents.remove(id);
+            }
+        }
+        for id in changed.keys() {
+            if model.contains_entity(id) {
+                let state = self.inherited_state(model, *id);
+                self.states.insert(*id, state);
+            } else {
+                self.states.remove(id);
+            }
+        }
+        let old = std::mem::take(&mut self.objects);
+        let mut old = old.into_iter().peekable();
+        for (&id, object) in &model.objects {
+            while old.peek().is_some_and(|(key, _)| *key < id) {
+                old.next();
+            }
+            let children = if old.peek().is_some_and(|(key, _)| *key == id) {
+                let (_, mut children) = old.next().unwrap();
+                if children != object.entities {
+                    children.clone_from(&object.entities);
+                }
+                children
+            } else {
+                object.entities.clone()
+            };
+            self.objects.push((id, children));
+        }
+        self.context = model.edit_context;
+        self.resolve_scope();
+        self.revision = self.revision.wrapping_add(1);
+        true
+    }
+    pub(crate) fn parent(&self, id: u64) -> Option<u64> {
+        self.parents.get(&id).copied()
+    }
+    pub(crate) fn selected(
+        &self,
+        model: &Model,
+        mut id: u64,
+        selected: &std::collections::BTreeSet<u64>,
+    ) -> bool {
+        loop {
+            if selected.contains(&id) {
+                return true;
+            }
+            let parent = if self.source_revision.is_some() {
+                self.parent(id)
+            } else {
+                model.parent(id)
+            };
+            let Some(parent) = parent else {
+                return false;
+            };
+            id = parent;
+        }
     }
     pub(crate) fn in_set(&self, mut id: u64, roots: &std::collections::BTreeSet<u64>) -> bool {
         loop {
@@ -7234,16 +7470,20 @@ impl EntityCache {
         self.revision
     }
     pub fn get(&self, id: u64) -> EntityState {
-        let mut state = self.states.get(&id).copied().unwrap_or(EntityState {
-            hidden: self.hidden.contains(&id),
-            entity_hidden: self.hidden.contains(&id),
-            object_hidden: false,
-            geometry_hidden: self.hidden.contains(&id),
-            tag_hidden: false,
-            tag_color: None,
-            locked: self.locked.contains(&id),
-            context: self.context.is_none().then_some(id),
-        });
+        let mut state = self
+            .states
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| EntityState {
+                hidden: self.hidden.contains(&id),
+                entity_hidden: self.hidden.contains(&id),
+                object_hidden: false,
+                geometry_hidden: self.hidden.contains(&id),
+                tag_hidden: false,
+                tag_color: None,
+                locked: self.locked.contains(&id),
+                context: self.context.is_none().then_some(id),
+            });
         if self.context.is_some() {
             state.context = if self.parents.get(&id).copied() == self.context {
                 Some(id)
@@ -7263,6 +7503,41 @@ impl EntityCache {
 mod entity_cache_tests {
     use super::*;
     use std::collections::BTreeSet;
+    #[test]
+    fn deletion_updates_keep_inheritance_but_reparenting_rebuilds_it() {
+        let mut model = Model::default();
+        let edge = model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+        let other = model.add_edge(DVec3::Y, DVec3::Y + DVec3::X).unwrap();
+        let inner = model
+            .make_object(&BTreeSet::from([edge, other]), false, "Inner")
+            .unwrap();
+        let outer = model
+            .make_object(&BTreeSet::from([inner]), false, "Outer")
+            .unwrap();
+        let mut cache = EntityCache::default();
+        model.edit_context = Some(inner);
+        cache.update(&model);
+        let before = model.clone();
+        model.erase(&BTreeSet::from([edge]));
+        cache.update(&model);
+        assert!(!cache.states.contains_key(&edge));
+        assert_eq!(cache.get(other).context, Some(other));
+        model = before;
+        cache.update(&model);
+        assert_eq!(cache.get(edge).context, Some(edge));
+        model.hidden.insert(outer);
+        cache.update(&model);
+        assert!(cache.get(edge).hidden);
+        model
+            .objects
+            .get_mut(&outer)
+            .unwrap()
+            .entities
+            .remove(&inner);
+        cache.update(&model);
+        assert!(!cache.get(edge).hidden);
+    }
+
     #[test]
     fn entity_cache_matches_nested_visibility_locks_and_editing_scopes() {
         let mut model = Model::default();

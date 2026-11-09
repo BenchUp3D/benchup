@@ -314,3 +314,51 @@ fn unused_grain_overlay_keeps_gpu_geometry_without_changing_the_preference() {
     );
     assert!(app.doc.display.grain_direction);
 }
+
+#[test]
+fn eraser_hover_stroke_delete_and_undo_keep_resident_geometry_inside_a_group() {
+    let mut doc = Document::default();
+    doc.model = crate::picking::tests::triangle_grid(1024);
+    let group = doc
+        .model
+        .make_object(&doc.model.selectable_entities(), false, "Assembly")
+        .unwrap();
+    doc.camera.fit(doc.model.bounds(), DVec2::new(800., 600.));
+    doc.selection_context = Some(group);
+    let mut app = KetchupApp::with_document(doc, None, true);
+    app.set_tool(Tool::Erase);
+    let edge = *app.doc.model.edges.keys().next().unwrap();
+    let ctx = egui::Context::default();
+    let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.));
+    render(&mut app, &ctx, rect);
+    app.hover = Some(edge);
+    render(&mut app, &ctx, rect);
+    app.gesture = Some(Gesture {
+        button: egui::PointerButton::Primary,
+        start: rect.center(),
+        last: rect.center(),
+        kind: GestureKind::Erase {
+            ids: BTreeSet::from([edge]),
+        },
+    });
+    render(&mut app, &ctx, rect);
+    app.gesture = None;
+    render(&mut app, &ctx, rect);
+    assert_eq!(app.scene_cache.resident_builds(), 1);
+    assert_eq!(app.scene_cache.mesh_builds, 0);
+    let before = app.doc.model.clone();
+    app.doc.model.erase(&BTreeSet::from([edge]));
+    render(&mut app, &ctx, rect);
+    assert_eq!(
+        app.scene_cache.resident_builds(),
+        1,
+        "Deletion must mask the existing GPU buffers"
+    );
+    app.doc.model = before;
+    render(&mut app, &ctx, rect);
+    assert_eq!(
+        app.scene_cache.resident_builds(),
+        1,
+        "Undo must restore the same GPU buffers"
+    );
+}

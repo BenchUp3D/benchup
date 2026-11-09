@@ -46,6 +46,7 @@ struct Outliner<'a> {
 // position or disclosure state. Reuse them while interacting with the scene.
 #[derive(Default)]
 pub(in crate::app) struct OutlinerCache {
+    source: Option<std::sync::Arc<Model>>,
     entities: renderer::EntityCache,
     revision: Option<u64>,
     roots: BTreeSet<u64>,
@@ -71,16 +72,139 @@ fn empty_outliner_label(ui: &mut egui::Ui, icon: &str, label: &str) {
 }
 
 impl OutlinerCache {
+    fn update_shared(&mut self, model: std::sync::Arc<Model>, revision: u64, query: &str) {
+        if self.revision == Some(revision) || self.source.is_none() {
+            self.update(&model, revision, query);
+            self.source = Some(model);
+            return;
+        }
+        let before = self.source.as_ref().unwrap();
+        let mut changed = renderer::changed_ids(
+            before.edges.iter().map(|(&id, v)| (id, v)),
+            model.edges.iter().map(|(&id, v)| (id, v)),
+        );
+        changed.extend(renderer::changed_ids(
+            before.faces.iter().map(|(&id, v)| (id, v)),
+            model.faces.iter().map(|(&id, v)| (id, v)),
+        ));
+        changed.extend(renderer::changed_ids(
+            before.objects.iter().map(|(&id, v)| (id, v)),
+            model.objects.iter().map(|(&id, v)| (id, v)),
+        ));
+        changed.extend(renderer::changed_ids(
+            before.dimensions.iter().map(|(&id, v)| (id, v)),
+            model.dimensions.iter().map(|(&id, v)| (id, v)),
+        ));
+        changed.extend(renderer::changed_ids(
+            before.texts.iter().map(|(&id, v)| (id, v)),
+            model.texts.iter().map(|(&id, v)| (id, v)),
+        ));
+        changed.extend(renderer::changed_ids(
+            before.guides.iter().map(|(&id, v)| (id, v)),
+            model.guides.iter().map(|(&id, v)| (id, v)),
+        ));
+        for (&id, old) in &before.objects {
+            if let Some(new) = model.objects.get(&id) {
+                changed.extend(old.entities.symmetric_difference(&new.entities));
+            } else {
+                changed.extend(&old.entities);
+            }
+        }
+        for object in model
+            .objects
+            .values()
+            .filter(|object| !before.objects.contains_key(&object.id))
+        {
+            changed.extend(&object.entities);
+        }
+        self.roots
+            .retain(|id| model.contains_entity(id) && self.entities.parent(*id).is_none());
+        self.roots.extend(
+            changed
+                .iter()
+                .filter(|id| model.contains_entity(id) && self.entities.parent(**id).is_none()),
+        );
+        let unassigned = model
+            .objects
+            .values()
+            .all(|object| model.object_stock_material(object).is_none());
+        self.materials = if unassigned {
+            model
+                .objects
+                .keys()
+                .map(|&id| (id, OutlinerMaterial::None))
+                .collect()
+        } else {
+            outliner_materials(&model, &self.roots)
+        };
+        changed.extend(renderer::changed_ids(
+            before.face_colors.iter().map(|(&id, v)| (id, v)),
+            model.face_colors.iter().map(|(&id, v)| (id, v)),
+        ));
+        let mut dirty = BTreeSet::new();
+        for id in changed {
+            if model.objects.contains_key(&id) {
+                dirty.insert(id);
+            }
+            let mut parent = self.entities.parent(id);
+            while let Some(id) = parent {
+                dirty.insert(id);
+                parent = self.entities.parent(id);
+            }
+            let mut parent = before.parent(id);
+            while let Some(id) = parent {
+                dirty.insert(id);
+                parent = before.parent(id);
+            }
+        }
+        self.paint.retain(|id, _| model.objects.contains_key(id));
+        fn visit(
+            model: &Model,
+            id: u64,
+            dirty: &mut BTreeSet<u64>,
+            paint: &mut std::collections::BTreeMap<u64, OutlinerPaint>,
+        ) -> OutlinerPaint {
+            if let Some(object) = model.objects.get(&id) {
+                if !dirty.remove(&id) {
+                    return paint.get(&id).copied().unwrap_or(OutlinerPaint::Empty);
+                }
+                let value = object
+                    .entities
+                    .iter()
+                    .fold(OutlinerPaint::Empty, |value, id| {
+                        value.merge(visit(model, *id, dirty, paint))
+                    });
+                paint.insert(id, value);
+                value
+            } else if model.faces.contains_key(&id) {
+                model
+                    .face_colors
+                    .get(&id)
+                    .copied()
+                    .map(OutlinerPaint::Color)
+                    .unwrap_or(OutlinerPaint::Unpainted)
+            } else {
+                OutlinerPaint::Empty
+            }
+        }
+        for id in &self.roots {
+            visit(&model, *id, &mut dirty, &mut self.paint);
+        }
+        self.revision = Some(revision);
+        self.query = query.to_owned();
+        self.filtered_objects = matching_outliner_objects(&model, query);
+        self.source = Some(model);
+        #[cfg(test)]
+        {
+            self.summary_builds += 1;
+        }
+    }
     fn update(&mut self, model: &Model, revision: u64, query: &str) {
         let changed = self.revision != Some(revision);
         if changed {
             self.roots = model.root_entities();
             self.materials = outliner_materials(model, &self.roots);
-            self.paint = if model.face_colors.is_empty() {
-                Default::default()
-            } else {
-                outliner_paint(model, &self.roots)
-            };
+            self.paint = outliner_paint(model, &self.roots);
             self.revision = Some(revision);
             #[cfg(test)]
             {
@@ -137,6 +261,19 @@ fn outliner_materials(
     model: &Model,
     roots: &BTreeSet<u64>,
 ) -> std::collections::BTreeMap<u64, OutlinerMaterial> {
+    // Unassigned geometry already reads as None in the outliner. Imported
+    // scenes need only their object rows, not a status entry for every edge.
+    if model
+        .objects
+        .values()
+        .all(|object| model.object_stock_material(object).is_none())
+    {
+        return model
+            .objects
+            .keys()
+            .map(|&id| (id, OutlinerMaterial::None))
+            .collect();
+    }
     fn visit(
         model: &Model,
         id: u64,
@@ -694,6 +831,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unassigned_imports_store_material_status_for_object_rows_only() {
+        let mut model = crate::picking::tests::triangle_grid(4096);
+        let group = model
+            .make_object(&model.selectable_entities(), false, "Import")
+            .unwrap();
+        let states = outliner_materials(&model, &model.root_entities());
+        assert_eq!(states.len(), model.objects.len());
+        assert_eq!(states[&group], OutlinerMaterial::None);
+        for edge in model.edges.keys().take(4) {
+            assert_eq!(
+                states.get(edge).copied().unwrap_or(OutlinerMaterial::None),
+                OutlinerMaterial::None
+            );
+        }
+    }
+
+    #[test]
     fn cached_summaries_survive_navigation_and_refresh_after_document_edits() {
         let (mut model, _, _) = paintable_model();
         let face = *model.faces.keys().next().unwrap();
@@ -721,6 +875,39 @@ mod tests {
         cache.update(&model, snapshot.update(&model), "");
         assert_eq!(cache.paint, outliner_paint(&model, &cache.roots));
         assert_eq!(cache.summary_builds, 3);
+    }
+
+    #[test]
+    fn incremental_summaries_match_full_traversal_after_drawing_erasing_and_undo() {
+        let (mut model, _, _) = paintable_model();
+        let original = model.clone();
+        let mut cache = OutlinerCache::default();
+        for step in 0..5 {
+            match step {
+                1 => {
+                    let face = *model.faces.keys().next().unwrap();
+                    model.face_colors.insert(face, [44, 55, 66]);
+                }
+                2 => {
+                    model.edit_context = model.faces.keys().next().and_then(|id| model.parent(*id));
+                    let p = DVec3::splat(20.);
+                    model
+                        .draw_polyline(&[p, p + DVec3::X, p + DVec3::Y, p], true)
+                        .unwrap();
+                }
+                3 => {
+                    let face = *model.faces.keys().next_back().unwrap();
+                    model.erase(&BTreeSet::from([face]));
+                }
+                4 => model = original.clone(),
+                _ => {}
+            }
+            cache.entities.update_for_revision(&model, step + 1);
+            cache.update_shared(std::sync::Arc::new(model.clone()), step + 1, "");
+            assert_eq!(cache.roots, model.root_entities());
+            assert_eq!(cache.paint, outliner_paint(&model, &cache.roots));
+            assert_eq!(cache.materials, outliner_materials(&model, &cache.roots));
+        }
     }
 
     fn nested_model() -> (KetchupApp, u64, u64, u64) {
@@ -1469,7 +1656,13 @@ impl KetchupApp {
         }
         let revision = self.document_revision(ui.ctx());
         self.outliner_cache
-            .update(&self.doc.model, revision, &self.outliner_filter);
+            .entities
+            .update_for_revision(&self.doc.model, revision);
+        self.outliner_cache.update_shared(
+            self.document_model.shared(),
+            revision,
+            &self.outliner_filter,
+        );
         let roots = &self.outliner_cache.roots;
         if roots.is_empty() {
             crate::empty_state::EmptyState::new(tr!("outliner.no_objects_or_geometry_yet"), tr!("outliner.draw_geometry_or_import_a_model_to_see")).show(ui);
@@ -1480,7 +1673,6 @@ impl KetchupApp {
             crate::empty_state::EmptyState::new(tr!("outliner.no_matching_objects"), tr!("outliner.try_another_name_or_clear_the_search_to")).show(ui);
             return;
         }
-        self.outliner_cache.entities.update_for_revision(&self.doc.model, revision);
         let hover_id = ui.scope_id().with("outliner_drag_hover");
         let mut tree = Outliner {
             model: &self.doc.model,

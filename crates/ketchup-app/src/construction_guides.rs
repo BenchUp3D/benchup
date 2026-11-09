@@ -229,15 +229,10 @@ impl KetchupApp {
                     .and_then(|edit| edit.preview.as_ref())
             })
             .unwrap_or(&self.doc.model);
-        let selected = if model.guides.is_empty() {
-            BTreeSet::new()
-        } else {
-            model.expand_entities(&self.selected)
-        };
         let colors = Palette::for_painter(p);
         for (id, guide) in model.guides.iter().filter(|(id, _)| !model.is_hidden(**id)) {
             let hovered = self.hover.is_some() && self.hover == model.entity_in_context(*id);
-            let (color, width) = if selected.contains(id) {
+            let (color, width) = if self.entity_cache.selected(model, *id, &self.selected) {
                 (colors.accent, 2.5)
             } else if hovered {
                 (colors.green, 2.)
