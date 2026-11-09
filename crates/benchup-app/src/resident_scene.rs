@@ -14,7 +14,7 @@ mod shadows;
 mod markers;
 
 // Match fragment_visibility: face ID followed by the unmodified f32 depth bits.
-#[cfg(any(test, target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
 #[path = "resident_regression.rs"]
 mod regression;
 const VISIBILITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Uint;
@@ -441,7 +441,7 @@ impl SceneCache {
     pub(crate) fn resident_builds(&self) -> usize {
         self.resident.builds
     }
-    #[cfg(any(test, target_arch = "wasm32"))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn resident_shadow_builds(&self) -> usize {
         self.resident.shadow_builds
     }

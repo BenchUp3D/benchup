@@ -176,7 +176,7 @@ impl PickingCache {
     pub(crate) fn validate_box_selection() -> Result<usize, String> {
         box_selection_regression::validate()
     }
-    #[cfg(any(test, target_arch = "wasm32"))]
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn benchmark_builds(&self) -> [usize; 3] {
         [
             self.hierarchy_builds,

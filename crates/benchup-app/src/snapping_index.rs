@@ -509,7 +509,7 @@ fn for_rect(
     }
 }
 
-#[cfg(any(test, target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
 impl super::PickingCache {
     pub(crate) fn validate_snap_edits(mut model: Model, camera: &Camera) -> Result<usize, String> {
         model.edit_context = None;

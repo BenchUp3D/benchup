@@ -969,7 +969,6 @@ mod attribution_tests {
 
 #[cfg(test)]
 mod applied_navigation_tests {
-    use super::*;
     use crate::{DVec3, Document};
     #[test]
     fn applied_navigation_matches_checked_navigation_and_rolls_back_partial_failure() {
