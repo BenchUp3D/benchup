@@ -159,11 +159,15 @@ def main():
         with tempfile.TemporaryDirectory(prefix="benchup-readme-desktop-") as folder:
             profile = Path(folder)
             shutil.copyfile(ROOT / "assets/examples/Example.bup", profile / "model.json")
+            # Pre-rename executables also need an isolated example profile.
             environment = dict(os.environ, BENCHUP_DATA_DIR=folder,
+                KETCHUP_DATA_DIR=folder,
                 XDG_DATA_HOME=str(profile / "data"), XDG_CONFIG_HOME=str(profile / "config"),
                 XDG_CACHE_HOME=str(profile / "cache"), WINIT_UNIX_BACKEND="x11")
             for key in ("WAYLAND_DISPLAY", "BENCHUP_VIEWPORT_BENCHMARK",
-                        "BENCHUP_BENCH_EDIT_JOINERY", "BENCHUP_BENCH_PROFILE"):
+                        "BENCHUP_BENCH_EDIT_JOINERY", "BENCHUP_BENCH_PROFILE",
+                        "KETCHUP_VIEWPORT_BENCHMARK", "KETCHUP_BENCH_EDIT_JOINERY",
+                        "KETCHUP_BENCH_PROFILE"):
                 environment.pop(key, None)
             with (profile / "application.log").open("w+") as log:
                 process = subprocess.Popen([str(binary)], cwd=ROOT, env=environment,

@@ -1,5 +1,46 @@
 [
   {
+    "version": "0.6.6",
+    "date": "2026-11-08",
+    "title": "BenchUp, workshop labels, and faster modeling",
+    "sections": [
+      {
+        "title": "Meet BenchUp",
+        "changes": [
+          "KetchUp is now BenchUp, with updated branding and .bup project files. Existing projects, saved data, preferences, and desktop updates remain compatible.",
+          "Explore the refreshed website and woodworking documentation for joinery, grain orientation, materials, cutting plans, and estimates."
+        ]
+      },
+      {
+        "title": "Woodworking and workshop reports",
+        "changes": [
+          "Set wood grain direction with a snapped two-point gesture and axis locks. Grain orientation stays with parts and linked components, with optional surface and end-grain guides at consistent physical spacing.",
+          "Export printable A4 workshop labels from Tools, with one label per physical piece, cutting-plan marks, and finished dimensions.",
+          "Include whole-project joinery in sidebar and PDF time estimates, with adjustable, remembered time allowances for each joint type.",
+          "Find the joint creation action under the clearer Create joinery label."
+        ]
+      },
+      {
+        "title": "Navigation and modeling",
+        "changes": [
+          "Walk through models at eye level with body collisions, steps, slopes, crouching, jumping, and sitting. Adjust person dimensions, walking speed, and look sensitivity with remembered settings.",
+          "Toggle Push/Pull new-face mode with Ctrl to keep the starting face and create a new cap and walls. The mode is remembered across reloads and restarts.",
+          "Choose Settings → Tools → Automatically group new shapes to enable automatic grouping. New installations leave it off, and the preference is saved immediately.",
+          "Import small and warped SketchUp faces more reliably while preserving holes, colors, groups, and positions.",
+          "Recognize Move, Push/Pull, and Rotate more easily with clearer toolbar arrows."
+        ]
+      },
+      {
+        "title": "Performance and project storage",
+        "changes": [
+          "Improve large-model responsiveness with retained GPU geometry and shadows, faster selection overlays, indexed picking and snapping, and background selection measurements on desktop and in the browser.",
+          "Speed up edits inside groups, connected drawing, erasing, undo and redo, and inspector and Outliner updates.",
+          "Save compressed project files while continuing to open legacy uncompressed files with undo history intact. Autosave records incremental edit checkpoints to reduce work after each change."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.6.5",
     "date": "2026-11-07",
     "title": "Editable construction guides and angled wood joints",
