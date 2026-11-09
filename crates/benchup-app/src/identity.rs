@@ -1,5 +1,7 @@
 //! Current identity and read-only compatibility with pre-rename installations.
+#[cfg(not(target_arch = "wasm32"))]
 pub const APP_ID: &str = "io.github.BenchUp3D.BenchUp";
+#[cfg(not(target_arch = "wasm32"))]
 pub const LEGACY_APP_ID: &str = "io.github.Ketchup3D.Ketchup";
 
 pub fn preference_string(storage: &dyn eframe::Storage, key: &str) -> Option<String> {

@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 pub const KEY: &str = "BENCHUP_SERVER_URL";
+#[cfg(any(not(target_arch = "wasm32"), test))]
 const LEGACY_KEY: &str = "KETCHUP_SERVER_URL";
 
 #[derive(Debug)]

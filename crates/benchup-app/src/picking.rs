@@ -14,28 +14,6 @@ struct Bounds {
     hi: DVec3,
 }
 
-fn deleted_keys<'a, T: PartialEq + 'a>(
-    before: impl IntoIterator<Item = (u64, &'a T)>,
-    after: impl IntoIterator<Item = (u64, &'a T)>,
-) -> Option<std::collections::HashSet<u64>> {
-    let mut next = after.into_iter().peekable();
-    let mut removed = std::collections::HashSet::new();
-    for (id, value) in before {
-        match next.peek() {
-            Some((key, other)) if *key == id => {
-                if value != *other {
-                    return None;
-                }
-                next.next();
-            }
-            Some((key, _)) if *key < id => return None,
-            _ => {
-                removed.insert(id);
-            }
-        }
-    }
-    next.next().is_none().then_some(removed)
-}
 impl Bounds {
     fn entry(self, ray: Ray, limit: f64) -> Option<f64> {
         let mut enter = 0.0_f64;
