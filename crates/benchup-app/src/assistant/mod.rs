@@ -4,6 +4,7 @@
 //! default preset is endlesstokens.ai. `panel` is the chat UI and `window`
 //! hosts it docked in the inspector or detached in its own window.
 use super::*;
+use agent_host::restore_scope;
 use benchup_core::tr;
 use client::{ChatError, ChatTransport, Message, Role};
 use std::{collections::BTreeMap, sync::mpsc::Receiver};
@@ -95,6 +96,8 @@ pub(super) enum EntryRole {
     User,
     Assistant,
     Error,
+    /// A change made by an external agent (see `agent_link`).
+    Agent,
 }
 /// What a finished turn changed, for the change card.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -374,6 +377,22 @@ impl Assistant {
         true
     }
 
+    /// Show a change made by an external agent as an "Agent activity" card.
+    /// Transcript only: the model never sees it as chat history (it sees the
+    /// changes through the scene summary).
+    pub(super) fn record_agent(&mut self, client: &str, tool: &str, changes: Changes) {
+        const MAX_ENTRIES: usize = 500;
+        if self.transcript.len() >= MAX_ENTRIES {
+            self.transcript.remove(0);
+        }
+        let client = if client.trim().is_empty() { tr!("agent_link.unnamed_client") } else { client.trim() };
+        self.transcript.push(Entry {
+            role: EntryRole::Agent,
+            text: tr!("agent_link.activity_entry", client = client, tool = tool),
+            changes: Some(changes),
+        });
+    }
+
     /// Record a finished turn in the transcript and the model-facing history.
     /// Returns whether a change card was added for it.
     pub(super) fn record(&mut self, result: &TurnResult) -> bool {
@@ -428,12 +447,6 @@ impl Assistant {
     }
 }
 
-/// Put the user back in the editing scope they had before the turn, or at the
-/// top level if that object is gone.
-fn restore_scope(model: &mut Model, scope: Option<u64>) {
-    model.edit_context = scope.filter(|id| model.objects.contains_key(id));
-}
-
 impl BenchUpApp {
     /// Called once per frame from `ui`.
     pub(super) fn poll_assistant(&mut self, ctx: &egui::Context) {
@@ -465,16 +478,8 @@ impl BenchUpApp {
     }
 
     pub(super) fn assistant_send(&mut self, ctx: &egui::Context, request: Prompt) -> Result<(), String> {
-        let catalog = self
-            .general_settings
-            .stock
-            .wood
-            .iter()
-            .map(|stock| (stock.id, stock.definition()))
-            .collect();
-        let read_only = !self.shared_edit_allowed(ctx);
-        let lease = self.shared_lease();
-        self.assistant.send(ctx, &self.doc.model, &self.selected, catalog, read_only, lease, request)
+        let env = self.tool_env(ctx);
+        self.assistant.send(ctx, &self.doc.model, &self.selected, env.catalog, env.read_only, env.lease, request)
     }
 
     pub(super) fn assistant_stop(&mut self, ctx: &egui::Context) {
@@ -514,21 +519,11 @@ impl BenchUpApp {
                     None => rolled_back,
                 });
             }
-            let touched: BTreeSet<u64> = result.created.iter().chain(&result.modified).copied().collect();
-            let model = &self.doc.model;
-            let focus: BTreeSet<u64> = touched
-                .into_iter()
-                .filter(|id| model.entity_in_context(*id) == Some(*id) && !model.is_hidden(*id))
-                .collect();
-            if !focus.is_empty() {
-                self.selected = focus;
-            }
+            let touched: Vec<u64> = result.created.iter().chain(&result.modified).copied().collect();
+            self.focus_touched(touched);
         }
         if let Some(selection) = result.selection.take() {
-            self.selected = selection
-                .into_iter()
-                .filter(|id| self.doc.model.contains_entity(id) && !self.doc.model.is_hidden(*id))
-                .collect();
+            self.apply_agent_selection(selection);
         }
         let card = self.assistant.record(&result);
         // Remember where this turn sits in the history, so "Undo turn" is only

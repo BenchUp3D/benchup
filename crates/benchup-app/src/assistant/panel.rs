@@ -851,6 +851,7 @@ fn transcript_entry(
         EntryRole::User => (colors.hovered, colors.border, colors.ink),
         EntryRole::Assistant => (colors.surface, colors.border, colors.ink),
         EntryRole::Error => (colors.selected, colors.accent, colors.accent),
+        EntryRole::Agent => (colors.surface, colors.border, colors.ink),
     };
     egui::Frame::new()
         .fill(fill)
@@ -863,6 +864,7 @@ fn transcript_entry(
                 EntryRole::User => tr!("assistant.you"),
                 EntryRole::Assistant => tr!("assistant.name"),
                 EntryRole::Error => tr!("assistant.error_label"),
+                EntryRole::Agent => tr!("agent_link.activity"),
             };
             ui.add(egui::Label::new(RichText::new(who).small().strong().color(colors.muted)));
             if !entry.text.is_empty() {

@@ -493,6 +493,8 @@ mod rendering;
 mod text_tools;
 #[path = "assistant/ui_tests.rs"]
 mod assistant_ui;
+#[path = "agent_link/ui_tests.rs"]
+mod agent_link_ui;
 
 struct Harness {
     ctx: egui::Context,

@@ -19,6 +19,8 @@ pub(super) enum Section {
     Diagnostics,
     Rendering,
     Tools,
+    /// Appended: saved layouts store the variant name.
+    AddOns,
 }
 
 impl Section {
@@ -29,10 +31,10 @@ impl Section {
             tr!("settings.materials_estimates"),
             &[Self::StockPricing, Self::SurfaceTreatment],
         ),
-        (tr!("settings.system"), &[Self::Diagnostics, Self::Rendering]),
+        (tr!("settings.system"), &[Self::Diagnostics, Self::Rendering, Self::AddOns]),
     ];
     #[cfg(test)]
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::Units,
         Self::Navigation,
         Self::Shortcuts,
@@ -43,6 +45,7 @@ impl Section {
         Self::Diagnostics,
         Self::Rendering,
         Self::Tools,
+        Self::AddOns,
     ];
     fn label(self) -> &'static str {
         match self {
@@ -56,6 +59,7 @@ impl Section {
             Self::Diagnostics => tr!("settings.diagnostics"),
             Self::Rendering => tr!("settings.rendering"),
             Self::Tools => tr!("settings.tools"),
+            Self::AddOns => tr!("settings.add_ons"),
         }
     }
 
@@ -71,6 +75,7 @@ impl Section {
             Self::Diagnostics => "diagnostics",
             Self::Rendering => "settings_colors",
             Self::Tools => "settings_shortcuts",
+            Self::AddOns => "diagnostics",
         }
     }
 
@@ -156,6 +161,8 @@ pub(super) struct GeneralSettings {
     /// Key of the Ctrl/Cmd+Shift shortcut that toggles Build with MIRA.
     pub assistant_key: String,
     pub stock: stock_settings::Settings,
+    /// Agent connection add-on: on/off and port. The pairing token is not here.
+    pub agent_link: agent_link::Preferences,
 }
 
 impl Default for GeneralSettings {
@@ -175,6 +182,7 @@ impl Default for GeneralSettings {
             stock: Default::default(),
             tool_keys: TOOLS.iter().map(|(_, key)| key.to_string()).collect(),
             assistant_key: "M".into(),
+            agent_link: Default::default(),
         }
     }
 }
@@ -183,6 +191,7 @@ impl GeneralSettings {
     pub(super) fn normalize(&mut self) {
         self.walk.normalize();
         self.stock.normalize();
+        self.agent_link.normalize();
         if !LANGUAGES.iter().any(|&(code, _)| code == self.language.as_str()) {
             self.language = DEFAULT_LANGUAGE.into();
         }
@@ -359,6 +368,7 @@ impl BenchUpApp {
                                     Section::Diagnostics => "settings/diagnostics",
                                     Section::Rendering => "settings/rendering",
                                     Section::Tools => "settings/tools",
+                                    Section::AddOns => "settings/add_ons",
                                 };
                                 let scroll = sidebar::restored_scroll_area(
                                     ui,
@@ -412,6 +422,7 @@ impl BenchUpApp {
 
     fn settings_contents(&mut self, ui: &mut egui::Ui) {
         match self.general_settings.section {
+            Section::AddOns => self.agent_link_settings(ui),
             Section::Tools => {
                 ui.checkbox(
                     &mut self.general_settings.reset_axis_locks_on_action,

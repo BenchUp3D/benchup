@@ -2,8 +2,7 @@
 //! natively, `localStorage` on the web. It never enters eframe storage,
 //! preferences, or project files.
 use super::client::normalize_base;
-#[cfg(target_arch = "wasm32")]
-use benchup_core::tr;
+use crate::app::credentials as secrets;
 
 /// FNV-1a keeps file names stable and free of URL characters.
 #[cfg(any(not(target_arch = "wasm32"), test))]
@@ -16,89 +15,42 @@ fn base_hash(base: &str) -> u64 {
         })
 }
 #[cfg(any(not(target_arch = "wasm32"), test))]
-fn key_file(dir: &std::path::Path, base: &str) -> std::path::PathBuf {
-    dir.join(format!("assistant-{:016x}.key", base_hash(base)))
+fn key_file_name(base: &str) -> String {
+    format!("assistant-{:016x}.key", base_hash(base))
 }
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(target_arch = "wasm32")]
+fn key_file_name(_base: &str) -> String {
+    String::new()
+}
+#[cfg(test)]
+fn key_file(dir: &std::path::Path, base: &str) -> std::path::PathBuf {
+    dir.join(key_file_name(base))
+}
 fn storage_name(base: &str) -> String {
     format!("benchup.assistant.key.{}", normalize_base(base))
 }
 
-#[cfg(any(not(target_arch = "wasm32"), test))]
+#[cfg(test)]
 fn save_in(dir: &std::path::Path, base: &str, key: &str) -> Result<(), String> {
-    use std::io::Write;
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).write(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let path = key_file(dir, base);
-    let mut file = options.open(&path).map_err(|e| e.to_string())?;
-    // `mode` only applies when the file is created; tighten an existing one too.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
-    }
-    file.write_all(key.trim().as_bytes()).map_err(|e| e.to_string())
+    secrets::save_in(dir, &key_file_name(base), key)
 }
-#[cfg(any(not(target_arch = "wasm32"), test))]
+#[cfg(test)]
 fn load_in(dir: &std::path::Path, base: &str) -> Option<String> {
-    let key = std::fs::read_to_string(key_file(dir, base)).ok()?;
-    let key = key.trim();
-    (!key.is_empty()).then(|| key.to_owned())
+    secrets::load_in(dir, &key_file_name(base))
 }
-#[cfg(any(not(target_arch = "wasm32"), test))]
+#[cfg(test)]
 fn forget_in(dir: &std::path::Path, base: &str) -> Result<(), String> {
-    match std::fs::remove_file(key_file(dir, base)) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.to_string()),
-    }
+    secrets::forget_in(dir, &key_file_name(base))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn load(base: &str) -> Option<String> {
-    load_in(&crate::storage::data_dir().ok()?, base)
+    secrets::load(&key_file_name(base), &storage_name(base))
 }
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn save(base: &str, key: &str) -> Result<(), String> {
-    save_in(&crate::storage::data_dir()?, base, key)
+    secrets::save(&key_file_name(base), &storage_name(base), key)
 }
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn forget(base: &str) -> Result<(), String> {
-    forget_in(&crate::storage::data_dir()?, base)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn local_storage() -> Result<web_sys::Storage, String> {
-    web_sys::window()
-        .ok_or(tr!("assistant.error.no_browser"))?
-        .local_storage()
-        .map_err(|_| tr!("assistant.error.storage_unavailable"))?
-        .ok_or(tr!("assistant.error.storage_unavailable"))
-        .map_err(Into::into)
-}
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn load(base: &str) -> Option<String> {
-    let key = local_storage().ok()?.get_item(&storage_name(base)).ok()??;
-    let key = key.trim();
-    (!key.is_empty()).then(|| key.to_owned())
-}
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn save(base: &str, key: &str) -> Result<(), String> {
-    local_storage()?
-        .set_item(&storage_name(base), key.trim())
-        .map_err(|_| tr!("assistant.error.cannot_save_key").to_owned())
-}
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn forget(base: &str) -> Result<(), String> {
-    local_storage()?
-        .remove_item(&storage_name(base))
-        .map_err(|_| tr!("assistant.error.cannot_save_key").to_owned())
+    secrets::forget(&key_file_name(base), &storage_name(base))
 }
 
 #[cfg(test)]

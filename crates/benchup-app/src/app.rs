@@ -85,8 +85,14 @@ pub(crate) mod viewport_benchmark;
 #[path = "web_viewport_benchmark.rs"]
 mod web_viewport_benchmark;
 
+#[path = "agent_host.rs"]
+mod agent_host;
+#[path = "agent_link/mod.rs"]
+mod agent_link;
 #[path = "assistant/mod.rs"]
 mod assistant;
+#[path = "credentials.rs"]
+mod credentials;
 #[path = "fasteners.rs"]
 mod fasteners;
 #[path = "sharing.rs"]
@@ -320,6 +326,7 @@ pub struct BenchUpApp {
     viewport_benchmark: Option<viewport_benchmark::Benchmark>,
     account: crate::account::Account,
     assistant: assistant::Assistant,
+    agent_link: agent_link::AgentLink,
     joinery_geometry: joinery::GeometryCache,
     joinery: joinery::Preferences,
     joinery_dialog: joinery::Dialog,
@@ -501,6 +508,7 @@ impl BenchUpApp {
             updates: crate::updates::Updater::default(),
             account: Default::default(),
             assistant: Default::default(),
+            agent_link: Default::default(),
             joinery_geometry: Default::default(),
             joinery: Default::default(),
             joinery_dialog: Default::default(),
@@ -2952,6 +2960,9 @@ impl BenchUpApp {
             )
             .show(ui, |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(agent) = self.agent_status_text() {
+                        ui.text_label(RichText::new(agent).size(12.).color(colors.muted));
+                    }
                     let drawing_orbit = self.drawing_orbit_modifier(ctx.input(|i| i.modifiers));
                     let navigating = self
                         .gesture
@@ -6431,6 +6442,7 @@ impl eframe::App for BenchUpApp {
         self.poll_project(&ctx);
         self.poll_sharing(&ctx);
         self.poll_assistant(&ctx);
+        self.poll_agent_link(&ctx);
         self.sharing_before_frame(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
         {
