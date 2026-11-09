@@ -66,6 +66,125 @@ impl InstanceTransform {
 }
 
 impl Model {
+    /// Drawing only needs the loose geometry at this level.
+    /// Nested assemblies stay in place and never enter the drawing transaction.
+    pub(crate) fn try_draw_scoped_geometry(
+        &mut self,
+        points: &[DVec3],
+        allow_existing: bool,
+    ) -> Result<bool, &'static str> {
+        let Some(context) = self.edit_context else {
+            return Ok(false);
+        };
+        if !self.objects.contains_key(&context) {
+            return Ok(false);
+        }
+        if self.is_locked(context) {
+            return Err(tr!("core.edit_context.unlock_the_object_before_editing_it"));
+        }
+        if self
+            .edit_path()
+            .iter()
+            .any(|id| !matches!(self.objects[id].kind, ObjectKind::Group))
+        {
+            return Ok(false);
+        }
+        let roots: BTreeSet<_> = self.objects[&context]
+            .entities
+            .iter()
+            .copied()
+            .filter(|id| !self.objects.contains_key(id))
+            .collect();
+        let before = self.copy_entities(&roots);
+        if before.root_entities() != roots {
+            return Ok(false);
+        }
+        let mut drawing = before.clone();
+        drawing.draw_polyline(points, allow_existing)?;
+        // Existing positions are shared by other groups. Drawing can split
+        // edges and faces locally, but may not move their shared vertices.
+        if before
+            .vertices
+            .iter()
+            .any(|(id, value)| drawing.vertices.get(id) != Some(value))
+        {
+            return Ok(false);
+        }
+        let removed_pairs: std::collections::HashSet<_> = before
+            .edges
+            .iter()
+            .filter(|(id, edge)| drawing.edges.get(id) != Some(*edge))
+            .map(|(_, edge)| (edge.a.min(edge.b), edge.a.max(edge.b)))
+            .collect();
+        if !removed_pairs.is_empty()
+            && self
+                .faces
+                .values()
+                .filter(|face| !before.faces.contains_key(&face.id))
+                .any(|face| {
+                    std::iter::once(&face.vertices)
+                        .chain(face.holes.iter())
+                        .any(|ring| {
+                            (0..ring.len()).any(|i| {
+                                let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+                                removed_pairs.contains(&(a.min(b), a.max(b)))
+                            })
+                        })
+                })
+        {
+            return Ok(false);
+        }
+        // A closing edge/face made entirely from old vertices might already
+        // belong to another group. Keep those cross-boundary edits transactional.
+        let old_pairs: std::collections::HashSet<_> = drawing
+            .edges
+            .values()
+            .filter(|edge| {
+                !before.edges.contains_key(&edge.id)
+                    && edge.a <= self.next_id
+                    && edge.b <= self.next_id
+            })
+            .map(|edge| (edge.a.min(edge.b), edge.a.max(edge.b)))
+            .collect();
+        if !old_pairs.is_empty()
+            && self.edges.values().any(|edge| {
+                !before.edges.contains_key(&edge.id)
+                    && old_pairs.contains(&(edge.a.min(edge.b), edge.a.max(edge.b)))
+            })
+        {
+            return Ok(false);
+        }
+        for face in drawing.faces.values().filter(|face| {
+            !before.faces.contains_key(&face.id)
+                && face.vertices.iter().all(|id| *id <= self.next_id)
+        }) {
+            let ring = crate::faces::canonical_ring(&face.vertices);
+            if self
+                .faces
+                .values()
+                .filter(|other| {
+                    !before.faces.contains_key(&other.id)
+                        && other.vertices.len() == face.vertices.len()
+                        && other.vertices.contains(&face.vertices[0])
+                })
+                .any(|other| crate::faces::canonical_ring(&other.vertices) == ring)
+            {
+                return Ok(false);
+            }
+        }
+        drawing.validate()?;
+        let change = crate::history::ModelChange::between(&before, &drawing);
+        if !change.apply_checked(self, true) {
+            return Ok(false);
+        }
+        let next = drawing.root_entities();
+        let entities = &mut self.objects.get_mut(&context).unwrap().entities;
+        for id in roots.difference(&next) {
+            entities.remove(id);
+        }
+        entities.extend(next);
+        Ok(true)
+    }
     /// Resolve a leaf to the immediate selectable child of the current context.
     pub fn entity_in_context(&self, mut id: u64) -> Option<u64> {
         if !self.contains_entity(&id) || self.edit_context == Some(id) {

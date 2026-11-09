@@ -33,13 +33,7 @@ impl KetchupApp {
         };
         drawing.edit_context = context.or(continuing_group);
         let faces_before = drawing.faces.len();
-        for pair in points.windows(2) {
-            if self.tool == Tool::Line {
-                drawing.add_edge(pair[0], pair[1])?;
-            } else {
-                drawing.ensure_edge(pair[0], pair[1])?;
-            }
-        }
+        drawing.draw_polyline(points, self.tool != Tool::Line)?;
         let closed = drawing.faces.len() > faces_before;
         if new_group {
             let mut model = self.doc.model.clone();

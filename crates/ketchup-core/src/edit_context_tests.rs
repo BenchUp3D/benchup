@@ -463,3 +463,137 @@ fn old_instance_frames_default_to_an_identity_rotation() {
     assert_eq!(old.linear() * DVec3::ONE, DVec3::new(-2., 4., 2.));
     assert!(old.valid());
 }
+
+#[test]
+fn group_erase_matches_transactional_edit_and_preserves_other_groups_and_undo() {
+    for component_parent in [false, true] {
+        for locked in [false, true] {
+            let mut model = Model::default();
+            rectangle(&mut model);
+            let inner = object(&mut model, false, "Panel");
+            let outer = object(&mut model, component_parent, "Assembly");
+            model.add_edge(DVec3::X * 5., DVec3::X * 7.).unwrap();
+            if locked {
+                model.locked.insert(inner);
+            }
+            model.edit_context = Some(inner);
+            let edge = *model.objects[&inner]
+                .entities
+                .iter()
+                .find(|id| model.edges.contains_key(id))
+                .unwrap();
+            let before = model.clone();
+            let ids = BTreeSet::from([edge]);
+            let mut reference = before.clone();
+            let _ = reference.edit_in_context(|contents| {
+                contents.erase(&ids);
+                Ok(())
+            });
+            model.erase(&ids);
+            assert_eq!(model, reference);
+            assert!(model.objects.contains_key(&outer));
+            model.validate().unwrap();
+            let mut history = History::default();
+            history.record("Erase edge", before.clone(), &model);
+            if !locked {
+                assert!(history.undo(&mut model));
+                assert_eq!(model, before);
+            }
+        }
+    }
+}
+
+#[test]
+fn batched_drawing_matches_scoped_edge_transactions_and_preserves_other_objects() {
+    for component in [false, true] {
+        let mut model = Model::default();
+        rectangle(&mut model);
+        let inner = object(&mut model, false, "Inner");
+        let outer = object(&mut model, component, "Outer");
+        let outside = model
+            .add_edge(DVec3::splat(20.), DVec3::splat(21.))
+            .unwrap();
+        model.edit_context = Some(inner);
+        let mut reference = model.clone();
+        let points = [
+            DVec3::X * 3.,
+            DVec3::X * 4.,
+            DVec3::new(4., 1., 0.),
+            DVec3::new(3., 1., 0.),
+            DVec3::X * 3.,
+        ];
+        model.draw_polyline(&points, true).unwrap();
+        for pair in points.windows(2) {
+            reference.draw_edge(pair[0], pair[1], true).unwrap();
+        }
+        assert_eq!(model, reference);
+        assert_eq!(model.parent(inner), Some(outer));
+        assert!(model.edges.contains_key(&outside));
+        model.validate().unwrap();
+    }
+}
+
+#[test]
+fn local_erasing_matches_the_group_transaction_for_edges_faces_and_objects() {
+    for target in 0..3 {
+        let mut model = Model::default();
+        rectangle(&mut model);
+        let inner = object(&mut model, false, "Inner");
+        let outer = object(&mut model, false, "Outer");
+        let outside = model.add_edge(DVec3::X * 10., DVec3::X * 11.).unwrap();
+        let face = first_face(&model, inner);
+        let edge = *model.edges.keys().find(|id| **id != outside).unwrap();
+        let (context, id) = match target {
+            0 => (inner, edge),
+            1 => (inner, face),
+            _ => (outer, inner),
+        };
+        model.edit_context = Some(context);
+        let mut reference = model.clone();
+        reference
+            .edit_in_context(|local| {
+                local.erase(&BTreeSet::from([id]));
+                Ok(())
+            })
+            .unwrap();
+        model.erase(&BTreeSet::from([id]));
+        assert_eq!(model, reference, "target {target}");
+        assert!(model.edges.contains_key(&outside));
+        assert_eq!(model.edit_context, Some(context));
+        model.validate().unwrap();
+    }
+}
+
+#[test]
+fn crossing_and_inset_rectangles_match_full_context_drawing_transactions() {
+    for inset in [false, true] {
+        let mut model = Model::default();
+        rectangle(&mut model);
+        let group = object(&mut model, false, "Drawing");
+        model.edit_context = Some(group);
+        let mut reference = model.clone();
+        let points = if inset {
+            [
+                DVec3::new(0.5, 0.5, 0.),
+                DVec3::new(1.5, 0.5, 0.),
+                DVec3::new(1.5, 1.5, 0.),
+                DVec3::new(0.5, 1.5, 0.),
+                DVec3::new(0.5, 0.5, 0.),
+            ]
+        } else {
+            [
+                DVec3::new(1., -1., 0.),
+                DVec3::new(3., -1., 0.),
+                DVec3::new(3., 1., 0.),
+                DVec3::new(1., 1., 0.),
+                DVec3::new(1., -1., 0.),
+            ]
+        };
+        reference
+            .edit_in_context(|local| local.draw_polyline(&points, true))
+            .unwrap();
+        model.draw_polyline(&points, true).unwrap();
+        assert_eq!(model, reference, "inset={inset}");
+        model.validate().unwrap();
+    }
+}

@@ -47,8 +47,18 @@ impl Model {
         origin: DVec3,
         direction: Option<DVec3>,
     ) -> Result<u64, &'static str> {
-        if self.edit_context.is_some() {
-            return self.edit_in_context(|model| model.add_guide(origin, direction));
+        if let Some(context) = self.edit_context {
+            if !self.objects.contains_key(&context)
+                || self
+                    .edit_path()
+                    .iter()
+                    .any(|id| !matches!(self.objects[id].kind, crate::ObjectKind::Group))
+            {
+                return self.edit_in_context(|model| model.add_guide(origin, direction));
+            }
+            if self.is_locked(context) {
+                return Err(tr!("core.edit_context.unlock_the_object_before_editing_it"));
+            }
         }
         let direction = direction
             .map(|d| d.try_normalize().ok_or(tr!("core.guides.choose_a_direction_for_the_guide")))
@@ -59,6 +69,9 @@ impl Model {
         }
         let id = self.id();
         self.guides.insert(id, guide);
+        if let Some(context) = self.edit_context {
+            self.objects.get_mut(&context).unwrap().entities.insert(id);
+        }
         Ok(id)
     }
 }
@@ -247,5 +260,34 @@ mod tests {
         let id = model.add_guide(DVec3::ZERO, Some(DVec3::X)).unwrap();
         model.guides.get_mut(&id).unwrap().direction = Some(DVec3::X * 2.);
         assert!(model.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod local_guide_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+    #[test]
+    fn plain_group_guides_match_transactions_and_reject_locked_or_invalid_edits() {
+        let mut model = Model::default();
+        let edge = model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+        let group = model
+            .make_object(&BTreeSet::from([edge]), false, "Group")
+            .unwrap();
+        model.edit_context = Some(group);
+        let mut reference = model.clone();
+        reference
+            .edit_in_context(|local| local.add_guide(DVec3::Y, Some(DVec3::X)))
+            .unwrap();
+        model.add_guide(DVec3::Y, Some(DVec3::X)).unwrap();
+        assert_eq!(model, reference);
+        let before = model.clone();
+        assert!(model.add_guide(DVec3::splat(f64::NAN), None).is_err());
+        assert_eq!(model, before);
+        model.locked.insert(group);
+        let before = model.clone();
+        assert!(model.add_guide(DVec3::Y, None).is_err());
+        assert_eq!(model, before);
+        model.validate().unwrap();
     }
 }

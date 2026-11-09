@@ -264,7 +264,7 @@ struct Entry {
     label: String,
     change: ModelChange,
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct History {
     format_version: u32,
@@ -272,6 +272,64 @@ pub struct History {
     redo: Vec<Entry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     actions: Vec<HistoryAction>,
+    #[serde(skip, default)]
+    validated: bool,
+}
+impl PartialEq for History {
+    fn eq(&self, other: &Self) -> bool {
+        self.format_version == other.format_version
+            && self.undo == other.undo
+            && self.redo == other.redo
+            && self.actions == other.actions
+    }
+}
+/// Autosave retains unchanged history in its base document. Only changed tails
+/// are written with an edit, including attribution updates and branched redo.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Checkpoint {
+    undo_prefix: usize,
+    undo: Vec<Entry>,
+    redo_prefix: usize,
+    redo: Vec<Entry>,
+    actions: Vec<HistoryAction>,
+}
+impl Checkpoint {
+    pub(crate) fn between(base: &History, current: &History) -> Self {
+        let undo_prefix = base
+            .undo
+            .iter()
+            .zip(&current.undo)
+            .take_while(|(a, b)| a == b)
+            .count();
+        let redo_prefix = base
+            .redo
+            .iter()
+            .zip(&current.redo)
+            .take_while(|(a, b)| a == b)
+            .count();
+        Self {
+            undo_prefix,
+            undo: current.undo[undo_prefix..].to_vec(),
+            redo_prefix,
+            redo: current.redo[redo_prefix..].to_vec(),
+            actions: current.actions.clone(),
+        }
+    }
+    pub(crate) fn restore(self, base: &History) -> Option<History> {
+        if self.undo_prefix > base.undo.len() || self.redo_prefix > base.redo.len() {
+            return None;
+        }
+        let mut history = History {
+            undo: base.undo[..self.undo_prefix].to_vec(),
+            redo: base.redo[..self.redo_prefix].to_vec(),
+            actions: self.actions,
+            validated: false,
+            ..History::default()
+        };
+        history.undo.extend(self.undo);
+        history.redo.extend(self.redo);
+        Some(history)
+    }
 }
 impl Default for History {
     fn default() -> Self {
@@ -280,6 +338,7 @@ impl Default for History {
             undo: Vec::new(),
             redo: Vec::new(),
             actions: Vec::new(),
+            validated: true,
         }
     }
 }
@@ -302,6 +361,7 @@ impl History {
         if change.is_empty() {
             return;
         }
+        self.validated = false;
         self.undo.push(Entry {
             id: Some(uuid::Uuid::new_v4()),
             author,
@@ -316,6 +376,20 @@ impl History {
             self.undo.remove(0);
         }
     }
+    /// Record an operation applied by a modeling client that maintains valid
+    /// geometry. Loaded histories establish the same guarantee in restore().
+    pub fn record_applied_attributed(
+        &mut self,
+        label: impl Into<String>,
+        before: Model,
+        after: &Model,
+        author: Option<HistoryAuthor>,
+        timestamp: Option<u64>,
+    ) {
+        let validated = self.validated;
+        self.record_attributed(label, before, after, author, timestamp);
+        self.validated = validated;
+    }
     /// Keep shared catalog definitions current without adding an object edit.
     /// Presence remains part of each edit, so undoing an assignment still removes
     /// a definition introduced by that edit. Missing catalog entries stay portable.
@@ -327,6 +401,9 @@ impl History {
             for (id, before, after) in &mut entry.change.stock_materials {
                 if let Some(material) = catalog.get(id) {
                     for definition in [before, after].into_iter().flatten() {
+                        if definition != material {
+                            self.validated = false;
+                        }
                         definition.clone_from(material);
                     }
                 }
@@ -336,6 +413,7 @@ impl History {
     /// Replace the committed result of a compound action, such as revising a
     /// copy array, while retaining its original label and single undo step.
     pub fn amend_last(&mut self, original: &Model, after: &Model) -> bool {
+        self.validated = false;
         let Some(entry) = self.undo.last_mut() else {
             return false;
         };
@@ -427,6 +505,27 @@ impl History {
         author: Option<HistoryAuthor>,
         timestamp: Option<u64>,
     ) -> bool {
+        self.navigate_attributed(model, position, author, timestamp, false)
+    }
+    /// The current model must be the valid result of loaded/applied edits.
+    /// Preconditions still check every changed entity and failure rolls back.
+    pub fn seek_applied_attributed(
+        &mut self,
+        model: &mut Model,
+        position: usize,
+        author: Option<HistoryAuthor>,
+        timestamp: Option<u64>,
+    ) -> bool {
+        self.navigate_attributed(model, position, author, timestamp, true)
+    }
+    fn navigate_attributed(
+        &mut self,
+        model: &mut Model,
+        position: usize,
+        author: Option<HistoryAuthor>,
+        timestamp: Option<u64>,
+        applied: bool,
+    ) -> bool {
         let current = self.position();
         let mut ids: Vec<_> = self
             .undo
@@ -439,7 +538,11 @@ impl History {
         if position < current {
             ids.reverse();
         }
-        if !self.seek(model, position) {
+        if !(if applied {
+            self.seek_applied(model, position)
+        } else {
+            self.seek(model, position)
+        }) {
             return false;
         }
         for entry_id in ids {
@@ -461,6 +564,51 @@ impl History {
     /// Number of applied edits, relative to the oldest retained state.
     pub fn position(&self) -> usize {
         self.undo.len()
+    }
+    fn seek_applied(&mut self, model: &mut Model, position: usize) -> bool {
+        if !self.validated {
+            return self.seek(model, position);
+        }
+        let original = self.position();
+        if position > self.undo.len() + self.redo.len() || position == original {
+            return false;
+        }
+        let context = model.edit_context;
+        fn transfer(
+            from: &mut Vec<Entry>,
+            to: &mut Vec<Entry>,
+            model: &mut Model,
+            forward: bool,
+        ) -> bool {
+            let Some(entry) = from.last() else {
+                return false;
+            };
+            if !entry.change.apply_checked(model, forward) {
+                return false;
+            }
+            to.push(from.pop().unwrap());
+            true
+        }
+        while self.position() != position {
+            let did = if self.position() > position {
+                transfer(&mut self.undo, &mut self.redo, model, false)
+            } else {
+                transfer(&mut self.redo, &mut self.undo, model, true)
+            };
+            if !did {
+                while self.position() != original {
+                    let restored = if self.position() > original {
+                        transfer(&mut self.undo, &mut self.redo, model, false)
+                    } else {
+                        transfer(&mut self.redo, &mut self.undo, model, true)
+                    };
+                    assert!(restored, "A just-applied history change must be reversible");
+                }
+                model.edit_context = context;
+                return false;
+            }
+        }
+        true
     }
     /// Restore a retained state atomically. Zero is the state before the first entry.
     pub fn seek(&mut self, model: &mut Model, position: usize) -> bool {
@@ -516,6 +664,8 @@ impl History {
                 });
         if !valid {
             *self = Self::default();
+        } else {
+            self.validated = true;
         }
     }
 }
@@ -814,5 +964,34 @@ mod attribution_tests {
             Some(&author("alice"))
         );
         assert_eq!(doc.history.attributed_labels().next().unwrap().2, Some(100));
+    }
+}
+
+#[cfg(test)]
+mod applied_navigation_tests {
+    use super::*;
+    use crate::{DVec3, Document};
+    #[test]
+    fn applied_navigation_matches_checked_navigation_and_rolls_back_partial_failure() {
+        let mut doc = Document::default();
+        for i in 0..3 {
+            let before = doc.model.clone();
+            doc.model
+                .add_edge(DVec3::Y * i as f64, DVec3::Y * i as f64 + DVec3::X)
+                .unwrap();
+            doc.history.record("Line", before, &doc.model);
+        }
+        let mut doc = Document::from_json(&serde_json::to_string(&doc).unwrap()).unwrap();
+        let mut reference = doc.clone();
+        assert!(doc.history.validated);
+        for position in [1, 3, 0, 2, 3] {
+            assert!(reference.history.seek(&mut reference.model, position));
+            assert!(doc.history.seek_applied(&mut doc.model, position));
+            assert_eq!(doc, reference);
+        }
+        doc.model.vertices.values_mut().next().unwrap().position.z += 10.;
+        let before = doc.clone();
+        assert!(!doc.history.seek_applied(&mut doc.model, 0));
+        assert_eq!(doc, before);
     }
 }

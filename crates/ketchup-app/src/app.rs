@@ -1047,10 +1047,9 @@ impl KetchupApp {
                 }
             }
         }
-        let before = self.doc.model.clone();
         match self.drawn_geometry(&[start, end], self.line_group) {
             Ok((model, group, closed_shape)) => {
-                self.doc.model = model;
+                let before = std::mem::replace(&mut self.doc.model, model);
                 self.line_group = group;
                 if let Some(group) = group { self.selected = BTreeSet::from([group]); }
                 self.finish_edit(tr!("app.draw_line"), before, ctx);
@@ -1329,13 +1328,14 @@ impl KetchupApp {
             }
             return;
         }
-        let before = self.doc.model.clone();
         let (model, group, _) = match self.drawn_geometry(&points, None) {
             Ok(result) => result,
             Err(message) => { self.say(ctx, message); return; }
         };
-        self.doc.model = model;
-        if let Some(group) = group { self.selected = BTreeSet::from([group]); }
+        let before = std::mem::replace(&mut self.doc.model, model);
+        if let Some(group) = group {
+            self.selected = BTreeSet::from([group]);
+        }
         let action = match self.tool {
             Tool::Rectangle => tr!("app.draw_rectangle"),
             Tool::Circle => tr!("app.draw_circle"),

@@ -235,7 +235,14 @@ impl Model {
         result
     }
     pub(crate) fn boundary_edges(&self, faces: &BTreeSet<u64>) -> BTreeSet<u64> {
-        let pairs: BTreeSet<_> = faces
+        self.boundary_edges_excluding(faces, &BTreeSet::new())
+    }
+    fn boundary_edges_excluding(
+        &self,
+        faces: &BTreeSet<u64>,
+        selected: &BTreeSet<u64>,
+    ) -> BTreeSet<u64> {
+        let mut pairs: BTreeSet<_> = faces
             .iter()
             .filter_map(|id| self.faces.get(id))
             .flat_map(|face| std::iter::once(&face.vertices).chain(face.holes.iter()))
@@ -246,6 +253,12 @@ impl Model {
                 })
             })
             .collect();
+        for edge in selected.iter().filter_map(|id| self.edges.get(id)) {
+            pairs.remove(&(edge.a.min(edge.b), edge.a.max(edge.b)));
+        }
+        if pairs.is_empty() {
+            return BTreeSet::new();
+        }
         self.edges
             .values()
             .filter(|e| pairs.contains(&(e.a.min(e.b), e.a.max(e.b))))
@@ -299,15 +312,22 @@ impl Model {
             .collect()
     }
     pub(crate) fn erasable_entities(&self, roots: &BTreeSet<u64>) -> BTreeSet<u64> {
+        let locked = self.expand_entities(&self.locked);
         let roots = roots
             .iter()
             .copied()
-            .map(|id| self.root_entity(id))
+            .filter_map(|id| {
+                if self.edit_context.is_some() {
+                    self.entity_in_context(id)
+                } else {
+                    Some(self.root_entity(id))
+                }
+            })
             .filter(|id| {
                 !self
                     .expand_entities(&BTreeSet::from([*id]))
                     .iter()
-                    .any(|id| self.is_locked(*id))
+                    .any(|id| locked.contains(id))
             })
             .collect();
         let mut ids = self.expand_entities(&roots);
@@ -316,7 +336,7 @@ impl Model {
             .faces
             .keys()
             .copied()
-            .filter(|id| self.is_locked(*id))
+            .filter(|id| locked.contains(id))
             .collect();
         let protected_edges = self.boundary_edges(&protected);
         ids.retain(|id| !protected_edges.contains(id));
@@ -370,7 +390,7 @@ impl Model {
     /// Include face outlines without inventing fills that the user has erased.
     pub fn copy_entities(&self, roots: &BTreeSet<u64>) -> Self {
         let mut ids = self.expand_entities(roots);
-        ids.extend(self.boundary_edges(&ids));
+        ids.extend(self.boundary_edges_excluding(&ids, &ids));
         fn subset<T: Clone>(source: &BTreeMap<u64, T>, ids: &BTreeSet<u64>) -> BTreeMap<u64, T> {
             ids.iter().filter_map(|id| source.get(id).map(|value| (*id, value.clone()))).collect()
         }

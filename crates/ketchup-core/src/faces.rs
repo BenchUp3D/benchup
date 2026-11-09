@@ -375,15 +375,17 @@ impl Model {
                 rings.insert(canonical_ring(&ring), ring);
             }
         }
-        let loose_faces: BTreeSet<_> = self
-            .faces
-            .keys()
-            .copied()
-            .filter(|id| self.parent(*id).is_none() && !self.is_hidden(*id) && !self.is_locked(*id))
-            .collect();
+        if rings.is_empty() {
+            return false;
+        }
         let existing: BTreeSet<_> = self
             .faces
             .values()
+            .filter(|face| {
+                rings.keys().any(|ring| {
+                    ring.len() == face.vertices.len() && face.vertices.contains(&ring[0])
+                })
+            })
             .map(|f| canonical_ring(&f.vertices))
             .collect();
         let fresh: Vec<_> = rings
@@ -394,6 +396,24 @@ impl Model {
         if fresh.is_empty() {
             return false;
         }
+        let children: std::collections::HashSet<_> = self
+            .objects
+            .values()
+            .flat_map(|object| object.entities.iter().copied())
+            .collect();
+        let hidden = self.expand_entities(&self.hidden);
+        let locked = self.expand_entities(&self.locked);
+        let loose_faces: BTreeSet<_> = self
+            .faces
+            .keys()
+            .copied()
+            .filter(|id| {
+                !children.contains(id)
+                    && !hidden.contains(id)
+                    && !locked.contains(id)
+                    && !self.is_tag_hidden(*id)
+            })
+            .collect();
         let hole_candidates: Vec<_> = self
             .faces
             .values()
@@ -441,9 +461,10 @@ impl Model {
             .faces
             .values()
             .filter(|face| {
-                self.parent(face.id).is_none()
-                    && !self.is_hidden(face.id)
-                    && !self.is_locked(face.id)
+                !children.contains(&face.id)
+                    && !hidden.contains(&face.id)
+                    && !locked.contains(&face.id)
+                    && !self.is_tag_hidden(face.id)
             })
             .map(|face| {
                 let candidates: BTreeMap<_, _> = hole_candidates

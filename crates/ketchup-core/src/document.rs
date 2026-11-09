@@ -204,6 +204,24 @@ impl Model {
     pub fn ensure_edge(&mut self, start: DVec3, end: DVec3) -> Result<u64, &'static str> {
         self.draw_edge(start, end, true)
     }
+    /// Commit a connected drawing in one scoped transaction. A rectangle must
+    /// not copy, replace and synchronize the same assembly four times.
+    pub fn draw_polyline(
+        &mut self,
+        points: &[DVec3],
+        allow_existing: bool,
+    ) -> Result<(), &'static str> {
+        if self.edit_context.is_some() {
+            if self.try_draw_scoped_geometry(points, allow_existing)? {
+                return Ok(());
+            }
+            return self.edit_in_context(|model| model.draw_polyline(points, allow_existing));
+        }
+        for pair in points.windows(2) {
+            self.draw_edge(pair[0], pair[1], allow_existing)?;
+        }
+        Ok(())
+    }
     fn draw_edge(
         &mut self,
         start: DVec3,
@@ -259,15 +277,40 @@ impl Model {
         Ok(id)
     }
     pub fn erase(&mut self, ids: &BTreeSet<u64>) {
-        if self.edit_context.is_some() {
+        if let Some(context) = self.edit_context {
+            // Removing geometry from ordinary groups cannot change a component
+            // definition. Keep this local edit off the full-model transactional
+            // copy, component propagation and validation used for other edits.
+            if self
+                .edit_path()
+                .iter()
+                .all(|id| matches!(self.objects[id].kind, crate::ObjectKind::Group))
+            {
+                if self.is_locked(context) {
+                    return;
+                }
+                self.erase_in_scope(ids);
+                return;
+            }
             let _ = self.edit_in_context(|model| {
                 model.erase(ids);
                 Ok(())
             });
             return;
         }
+        self.erase_in_scope(ids);
+    }
+    fn erase_in_scope(&mut self, ids: &BTreeSet<u64>) {
         self.sync_dimensions();
         let ids = self.erasable_entities(ids);
+        if ids.is_empty() {
+            return;
+        }
+        let vertices: std::collections::HashSet<_> = ids
+            .iter()
+            .filter_map(|id| self.edges.get(id))
+            .flat_map(|edge| [edge.a, edge.b])
+            .collect();
         self.dimensions.retain(|id, _| !ids.contains(id));
         self.texts.retain(|id, _| !ids.contains(id));
         self.guides.retain(|id, _| !ids.contains(id));
@@ -277,25 +320,58 @@ impl Model {
             .filter(|e| ids.contains(&e.id))
             .map(|e| (e.a.min(e.b), e.a.max(e.b)))
             .collect();
-        self.faces.retain(|id, face| {
-            !ids.contains(id)
-                && !std::iter::once(&face.vertices)
-                    .chain(face.holes.iter())
-                    .any(|ring| {
-                        (0..ring.len()).any(|i| {
-                            let a = ring[i];
-                            let b = ring[(i + 1) % ring.len()];
-                            removed.contains(&(a.min(b), a.max(b)))
+        let removed_faces: BTreeSet<_> = self
+            .faces
+            .iter()
+            .filter_map(|(&id, face)| {
+                (ids.contains(&id)
+                    || (std::iter::once(&face.vertices)
+                        .chain(face.holes.iter())
+                        .any(|ring| {
+                            (0..ring.len()).any(|i| {
+                                let a = ring[i];
+                                let b = ring[(i + 1) % ring.len()];
+                                removed.contains(&(a.min(b), a.max(b)))
+                            })
                         })
-                    })
-        });
+                        && (self.edit_context.is_none() || self.entity_in_context(id).is_some())))
+                .then_some(id)
+            })
+            .collect();
+        for id in &removed_faces {
+            self.faces.remove(id);
+            self.face_colors.remove(id);
+        }
         self.face_colors.retain(|id, _| self.faces.contains_key(id));
         self.edges.retain(|id, _| !ids.contains(id));
-        let used: BTreeSet<_> = self.edges.values().flat_map(|e| [e.a, e.b]).collect();
-        self.vertices.retain(|id, _| used.contains(id));
+        let used: std::collections::HashSet<_> = self
+            .edges
+            .values()
+            .flat_map(|e| [e.a, e.b])
+            .filter(|id| vertices.contains(id))
+            .collect();
+        for id in vertices.difference(&used) {
+            self.vertices.remove(id);
+        }
         self.sync_dimensions();
         self.objects.retain(|id, _| !ids.contains(id));
-        self.clean_entity_state();
+        let removed: BTreeSet<_> = ids.union(&removed_faces).copied().collect();
+        for id in &removed {
+            self.entity_tags.remove(id);
+            self.hidden.remove(id);
+            self.locked.remove(id);
+        }
+        if removed.len() <= 512 {
+            for object in self.objects.values_mut() {
+                for id in &removed {
+                    object.entities.remove(id);
+                }
+            }
+        } else {
+            for object in self.objects.values_mut() {
+                object.entities.retain(|id| !removed.contains(id));
+            }
+        }
     }
     pub fn bounds(&self) -> Option<(DVec3, DVec3)> {
         // Expand inherited visibility once; walking every object's membership
@@ -523,8 +599,38 @@ impl Default for Document {
     }
 }
 impl Document {
+    /// A durable edit checkpoint avoids serializing all unchanged geometry and
+    /// the original import in history on every mouse click.
+    pub fn checkpoint(&self, base_model: &Model, base_history: &History) -> DocumentCheckpoint {
+        let metadata = Self {
+            shared_project: self.shared_project.clone(),
+            project_author: self.project_author.clone(),
+            project_id: self.project_id,
+            version: self.version,
+            name: self.name.clone(),
+            model: Model::default(),
+            history: History::default(),
+            camera: self.camera.clone(),
+            viewport_cameras: self.viewport_cameras.clone(),
+            selection: self.selection.clone(),
+            selection_context: self.selection_context,
+            snap_to_geometry: self.snap_to_geometry,
+            snap_to_axes: self.snap_to_axes,
+            display: self.display.clone(),
+        };
+        DocumentCheckpoint {
+            metadata,
+            model: crate::history::ModelChange::between(base_model, &self.model),
+            history: crate::history::Checkpoint::between(base_history, &self.history),
+        }
+    }
     pub fn from_json(json: &str) -> Result<Self, String> {
         let mut doc: Self = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        doc.restore_loaded()?;
+        Ok(doc)
+    }
+    fn restore_loaded(&mut self) -> Result<(), String> {
+        let doc = self;
         if doc.version != 1 && doc.version != 2 {
             return Err(tr!("core.document.unsupported_document_version").into());
         }
@@ -544,6 +650,28 @@ impl Document {
         if !doc.camera.valid() || doc.viewport_cameras.values().any(|camera| !camera.valid()) {
             return Err(tr!("core.document.invalid_camera").into());
         }
+        Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DocumentCheckpoint {
+    metadata: Document,
+    model: crate::history::ModelChange,
+    history: crate::history::Checkpoint,
+}
+impl DocumentCheckpoint {
+    pub fn restore(self, base_model: &Model, base_history: &History) -> Result<Document, String> {
+        let mut doc = self.metadata;
+        doc.model = base_model.clone();
+        if !self.model.apply_checked(&mut doc.model, true) {
+            return Err("Autosave edits do not match the saved project.".into());
+        }
+        doc.history = self
+            .history
+            .restore(base_history)
+            .ok_or("Autosave history does not match the saved project.")?;
+        doc.restore_loaded()?;
         Ok(doc)
     }
 }
@@ -616,5 +744,60 @@ mod legacy_json_map_tests {
         let mut json = serde_json::to_value(Document::default()).unwrap();
         json["model"]["vertices"] = serde_json::json!([{"id":1,"position":[0,0,0]}]);
         assert!(Document::from_json(&json.to_string()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::*;
+    #[test]
+    fn small_checkpoints_restore_metadata_history_undo_and_branches() {
+        let mut base = Document::default();
+        let empty = base.model.clone();
+        for i in 0..256 {
+            base.model
+                .add_edge(DVec3::X * i as f64, DVec3::X * i as f64 + DVec3::Y)
+                .unwrap();
+        }
+        base.history.record("Import", empty, &base.model);
+        let mut doc = base.clone();
+        for action in 0..4 {
+            let before = doc.model.clone();
+            doc.model
+                .add_edge(
+                    DVec3::Z * (action + 1) as f64,
+                    DVec3::Z * (action + 1) as f64 + DVec3::X,
+                )
+                .unwrap();
+            doc.history.record("Draw", before, &doc.model);
+            if action == 1 {
+                assert!(doc.history.undo(&mut doc.model));
+            }
+            doc.name = format!("Edited {action}");
+            doc.selection = doc
+                .model
+                .edges
+                .keys()
+                .next_back()
+                .copied()
+                .into_iter()
+                .collect();
+            doc.snap_to_geometry = false;
+            let encoded =
+                serde_json::to_string(&doc.checkpoint(&base.model, &base.history)).unwrap();
+            assert!(encoded.len() < serde_json::to_string(&doc).unwrap().len() / 3);
+            let saved: DocumentCheckpoint = serde_json::from_str(&encoded).unwrap();
+            let restored = saved.restore(&base.model, &base.history).unwrap();
+            assert_eq!(doc, restored);
+        }
+        let mut wrong = base.model.clone();
+        wrong.vertices.values_mut().next().unwrap().position.x += 1.;
+        // A checkpoint that changes this vertex must reject an incompatible base.
+        doc.model.vertices.values_mut().next().unwrap().position.x += 2.;
+        assert!(
+            doc.checkpoint(&base.model, &base.history)
+                .restore(&wrong, &base.history)
+                .is_err()
+        );
     }
 }
