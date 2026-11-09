@@ -51,3 +51,13 @@ All user-facing application text must be in English, even when the user requests
 # PDF export header
 
 All PDF exports, current and future, must use the shared header in `crates/ketchup-app/src/pdf_header.rs`, based on Time & Cost Estimates: the bundled KetchUp logo and brand, report type, project name, generation date, and separator on every page. Keep body content below `body_top`; preserve page size, orientation, readability and existing transparency. Do not introduce a separate PDF header implementation.
+
+# GPU viewport rendering
+
+Always prioritize GPU rendering for anything displayed in the viewport. This is a standing requirement for existing viewport optimizations and every future viewport feature, on both desktop and web.
+
+- Prefer retained GPU buffers, instancing, shaders, and cached render passes for geometry, edges, shadows, grids, selection and hover highlights, endpoint handles, previews, guides, gizmos, text, and other viewport overlays.
+- Handle camera projection, visual clipping, shading, and repeated drawing on the GPU wherever supported. Update uniforms, interaction textures, and small geometry deltas instead of rebuilding or projecting the entire scene on the CPU each frame.
+- Keep CPU work focused on authoritative model operations, topology, layout, and preparing incremental GPU data. Avoid generating large per-frame CPU meshes or individual UI shapes for dense viewport geometry and overlays.
+- Preserve the GPU path when adding tools, display modes, and editing previews. Use a CPU fallback only when correctness or backend limitations require it; keep its cost bounded and document the reason.
+- Verify viewport changes on large scenes such as Rooftop, including interaction and selection costs, using hardware GPU rendering on the relevant desktop and browser backends. Follow the existing build and compilation-check rules when validating changes.
