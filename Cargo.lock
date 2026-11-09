@@ -460,6 +460,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "benchup-mcp"
+version = "0.6.6"
+dependencies = [
+ "benchup-core",
+ "benchup-tools",
+ "serde_json",
+ "tempfile",
+ "tungstenite",
+]
+
+[[package]]
 name = "benchup-tools"
 version = "0.6.6"
 dependencies = [
