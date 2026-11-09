@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) const SCENE_BUDGET: usize = 24_000;
 const MAX_FACES: usize = 80;
+const MAX_LISTED_SELECTION: usize = 200;
+const MAX_LISTED_TAGS: usize = 100;
 
 /// Metres to millimetres, rounded to 0.1 mm.
 pub(crate) fn mm(metres: f64) -> f64 {
@@ -136,8 +138,8 @@ pub(crate) fn summary(
         "units": "mm",
         "up_axis": "z",
         "edit_path": model.edit_path(),
-        "selection": selection,
-        "tags": model.tags.values().map(|t| json!({"id": t.id, "name": t.name, "visible": t.visible})).collect::<Vec<_>>(),
+        "selection": selection.iter().take(MAX_LISTED_SELECTION).collect::<Vec<_>>(),
+        "tags": model.tags.values().take(MAX_LISTED_TAGS).map(|t| json!({"id": t.id, "name": t.name, "visible": t.visible})).collect::<Vec<_>>(),
         "stock_catalog": stock.iter().take(40).collect::<Vec<_>>(),
         "joints": joints,
         "loose_geometry": {
@@ -161,6 +163,9 @@ pub(crate) fn summary(
         }
         used += cost;
         objects.push(entry);
+    }
+    if selection.len() > MAX_LISTED_SELECTION {
+        out["selection_total"] = json!(selection.len());
     }
     let omitted = order.len() - objects.len();
     out["objects"] = Value::Array(objects);
@@ -247,11 +252,18 @@ pub(crate) fn describe(model: &Model, id: u64) -> Option<Value> {
     None
 }
 
-/// Details for entities the prompt names, keyed by id.
-pub(crate) fn references(model: &Model, ids: &BTreeSet<u64>) -> Value {
+/// Details for entities the prompt names, keyed by id, within `budget`
+/// characters; the rest are counted under `omitted` (use get_object for them).
+pub(crate) fn references(model: &Model, ids: &BTreeSet<u64>, budget: usize) -> Value {
     let mut out = serde_json::Map::new();
-    for id in ids {
+    let mut used = 0;
+    for (index, id) in ids.iter().enumerate() {
         let entry = describe(model, *id).unwrap_or_else(|| json!({"id": id, "kind": "missing"}));
+        used += entry.to_string().len() + 8;
+        if used > budget && index > 0 {
+            out.insert("omitted".into(), json!(ids.len() - index));
+            break;
+        }
         out.insert(id.to_string(), entry);
     }
     Value::Object(out)

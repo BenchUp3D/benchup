@@ -239,3 +239,19 @@ fn drawing_tools_are_paused_in_the_viewport_while_mira_works_but_selecting_is_no
     h.key(Key::Escape);
     assert!(!h.app.assistant.busy());
 }
+
+#[test]
+fn assistant_shortcut_keys_cannot_collide_with_ctrl_shift_commands() {
+    use crate::app::settings::GeneralSettings;
+    // Save As (S), Redo (Z), Paste in place (V) and the other Ctrl/Cmd letters.
+    for key in ["S", "Z", "V", "A", "C", "X", "Y", "F", "N", "O", "Space"] {
+        assert!(!GeneralSettings::assistant_key_allowed(key), "{key}");
+        let mut settings = GeneralSettings { assistant_key: key.into(), ..Default::default() };
+        settings.normalize();
+        assert_eq!(settings.assistant_key, "M", "a saved {key} falls back to the default");
+    }
+    for key in ["M", "K", "B", "J"] {
+        assert!(GeneralSettings::assistant_key_allowed(key), "{key}");
+    }
+    assert!(!GeneralSettings::assistant_key_allowed("m") && !GeneralSettings::assistant_key_allowed(""));
+}

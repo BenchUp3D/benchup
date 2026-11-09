@@ -205,7 +205,7 @@ impl GeneralSettings {
                 .unwrap();
             self.tool_keys.push(key.into());
         }
-        if !valid_tool_key(&self.assistant_key) || self.assistant_key == "Space" {
+        if !Self::assistant_key_allowed(&self.assistant_key) {
             self.assistant_key = Self::default().assistant_key;
         }
         if self.tool_keys.len() != TOOLS.len()
@@ -217,6 +217,15 @@ impl GeneralSettings {
         {
             self.tool_keys = Self::default().tool_keys;
         }
+    }
+
+    /// Letters already bound to a Ctrl/Cmd(+Shift) command in the keyboard
+    /// handler: New, Open, Save (as), Undo/Redo, Select all, Cut, Copy, Paste
+    /// (in place), Find. Shift is ignored when those match, so MIRA cannot use them.
+    pub(super) const RESERVED_ASSISTANT_KEYS: [&'static str; 11] = ["A", "C", "F", "N", "O", "S", "V", "X", "Y", "Z", "Space"];
+
+    pub(super) fn assistant_key_allowed(key: &str) -> bool {
+        valid_tool_key(key) && !Self::RESERVED_ASSISTANT_KEYS.contains(&key)
     }
 
     pub(super) fn tool_for_key(&self, key: Key) -> Option<Tool> {
@@ -546,16 +555,28 @@ impl BenchUpApp {
                 if assistant_label.to_lowercase().contains(&query) {
                     matches += 1;
                     table.row(ui, "settings_assistant_key", |column, ui| {
+                        let rejected_id = egui::Id::NULL.with("settings_assistant_key_rejected");
                         if column == 0 {
                             let modifier = if ui.ctx().os() == egui::os::OperatingSystem::Mac { "⌘ Shift" } else { "Ctrl+Shift" };
-                            ui.text_label(tr!("assistant.shortcut_label", name = assistant_label, modifier = modifier));
+                            ui.vertical(|ui| {
+                                ui.text_label(tr!("assistant.shortcut_label", name = assistant_label, modifier = modifier));
+                                if let Some(key) = ui.data(|d| d.get_temp::<String>(rejected_id)) {
+                                    let message = tr!("assistant.shortcut_reserved", key = super::shortcut_input::key_label(&key));
+                                    ui.colored_label(ui.visuals().warn_fg_color, message);
+                                }
+                            });
                         } else if let Some(key) = shortcut_input(
                             ui,
                             "settings_assistant_key_input",
                             &self.general_settings.assistant_key,
                             ui.available_width(),
                         ) {
-                            self.general_settings.assistant_key = key;
+                            if GeneralSettings::assistant_key_allowed(&key) {
+                                self.general_settings.assistant_key = key;
+                                ui.data_mut(|d| d.remove_temp::<String>(rejected_id));
+                            } else {
+                                ui.data_mut(|d| d.insert_temp(rejected_id, key));
+                            }
                         }
                     });
                 }

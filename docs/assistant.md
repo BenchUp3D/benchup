@@ -55,4 +55,6 @@ The API key is stored only on your device: in a private file in the BenchUp data
 - **Requests fail or time out:** each key allows two parallel sessions; close other apps using the same key, then try again.
 - **"Cannot reach the assistant server":** check your connection and the server address under **Advanced**.
 - **Read-only shared project:** MIRA cannot edit a shared project you only have view access to.
+- **"not-leased" or "The shared project changed; MIRA stopped":** in a shared project MIRA may only edit what you have selected (your edit lease), and a turn ends if the server replaces the project or your editing access lapses. Select the parts and ask again.
+- **"result out of range" / "too many ..." errors:** MIRA checks every request before applying it (at most 32 tool calls per reply, 1000 polyline points, 500 ids; positions within 100 m, results within 1 km). In the browser build a bug in a tool cannot be caught and recovered (WebAssembly aborts on a panic and the page must be reloaded), so these checks are the only guard there; report any crash with the prompt that caused it.
 - **Wrong results:** attach the parts with **@** so MIRA works on the right objects, and ask for one change at a time. Use **Undo turn** to go back.

@@ -15,7 +15,12 @@ use std::{
 };
 
 pub(crate) const MAX_ROUNDS: usize = 12;
-const MAX_TOOL_RESULT_CHARS: usize = 30_000;
+/// One tool result message sent back to the model.
+const MAX_TOOL_RESULT_CHARS: usize = 8_000;
+/// Tool calls executed per model reply; the rest are answered with an error.
+pub(crate) const MAX_CALLS_PER_REPLY: usize = 32;
+/// Share of the scene budget the `references` block may use.
+const REFERENCE_BUDGET: usize = scene::SCENE_BUDGET / 3;
 
 pub(crate) const SYSTEM_PROMPT: &str = "You are MIRA, a woodworking design assistant inside BenchUp, a 3D modeler. \
 You change the user's model only by calling the provided tools. \
@@ -34,6 +39,8 @@ pub(crate) struct TurnSetup {
     pub include_selection: bool,
     pub catalog: BTreeMap<MaterialId, StockMaterial>,
     pub read_only: bool,
+    /// Shared project: the leased entities; `None` when not shared.
+    pub lease: Option<BTreeSet<u64>>,
     /// Earlier user/assistant text of this chat.
     pub history: Vec<Message>,
 }
@@ -51,6 +58,15 @@ pub(crate) struct TurnResult {
     pub error: Option<String>,
     /// Set when the model used `select`; the editor selection should follow.
     pub selection: Option<BTreeSet<u64>>,
+}
+
+/// Per-frame conditions the app supplies while a turn runs (shared projects).
+#[derive(Default)]
+pub(crate) struct Gate {
+    /// Why further edits are not allowed right now; the turn stops with it.
+    pub block: Option<String>,
+    /// The edit lease to enforce for this round's tool calls.
+    pub lease: Option<BTreeSet<u64>>,
 }
 
 pub(crate) struct Poll {
@@ -99,9 +115,12 @@ impl Turn {
         if setup.include_selection {
             references.extend(&setup.selection);
         }
+        // Selection, tags, references and objects share one budget.
+        let references = scene::references(model, &references, REFERENCE_BUDGET);
+        let remaining = scene::SCENE_BUDGET.saturating_sub(references.to_string().len());
         let context = json!({
-            "scene": scene::summary(model, &setup.selection, &setup.catalog, scene::SCENE_BUDGET),
-            "references": scene::references(model, &references),
+            "scene": scene::summary(model, &setup.selection, &setup.catalog, remaining),
+            "references": references,
         });
         let mut messages = vec![
             Message::text(Role::System, SYSTEM_PROMPT),
@@ -121,6 +140,8 @@ impl Turn {
                 selection: setup.selection,
                 catalog: setup.catalog,
                 before: None,
+                lease: setup.lease,
+                created: BTreeSet::new(),
             },
             selection_used: false,
             pending: None,
@@ -148,7 +169,7 @@ impl Turn {
     }
 
     /// Advance at most one model reply. `model` is the live document model.
-    pub(crate) fn poll(&mut self, ctx: &egui::Context, transport: &dyn ChatTransport, model: &mut Model) -> Poll {
+    pub(crate) fn poll(&mut self, ctx: &egui::Context, transport: &dyn ChatTransport, model: &mut Model, gate: &Gate) -> Poll {
         let idle = Poll { finished: None, mutated: false };
         let Some(receiver) = &self.pending else { return idle };
         let reply = match receiver.try_recv() {
@@ -177,6 +198,13 @@ impl Turn {
                 call.id = format!("call_{}_{index}", self.rounds);
             }
         }
+        if !calls.is_empty()
+            && let Some(reason) = &gate.block
+        {
+            // Editing stopped being allowed (shared project) since the last round.
+            return Poll { finished: Some(self.finish(model, String::new(), Some(reason.clone()), true)), mutated: false };
+        }
+        self.env.lease = gate.lease.clone();
         self.messages.push(Message {
             role: Role::Assistant,
             content: content.clone(),
@@ -187,7 +215,12 @@ impl Turn {
             return Poll { finished: Some(self.finish(model, content, None, false)), mutated: false };
         }
         let mut mutated = false;
-        for call in &calls {
+        for (index, call) in calls.iter().enumerate() {
+            if index >= MAX_CALLS_PER_REPLY {
+                let refused = json!({"ok": false, "error": "too many calls in one reply"});
+                self.messages.push(Message::tool(&call.id, refused.to_string()));
+                continue;
+            }
             let outcome = tools::execute(model, call, &mut self.env);
             self.activity.push(call.function.name.clone());
             mutated |= outcome.mutated;
@@ -200,7 +233,7 @@ impl Turn {
             }
             let mut text = outcome.result.to_string();
             if text.len() > MAX_TOOL_RESULT_CHARS {
-                text = text.chars().take(MAX_TOOL_RESULT_CHARS).collect::<String>() + "...[truncated]";
+                text = text.chars().take(MAX_TOOL_RESULT_CHARS).collect::<String>() + "... (truncated)";
             }
             self.messages.push(Message::tool(&call.id, text));
         }

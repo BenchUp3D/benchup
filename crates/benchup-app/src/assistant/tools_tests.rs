@@ -325,7 +325,7 @@ fn tool_definitions_are_strict_and_match_the_executor() {
 
 #[test]
 fn fenced_json_fallback_is_parsed() {
-    let fenced = "I will add the board.\n```json\n{\"name\": \"create_board\", \"arguments\": {\"name\": \"A\", \"origin_mm\": [0,0,0], \"size_mm\": [1,1,1]}}\n```\nDone.";
+    let fenced = "```json\n{\"name\": \"create_board\", \"arguments\": {\"name\": \"A\", \"origin_mm\": [0,0,0], \"size_mm\": [1,1,1]}}\n```";
     let call = fallback_tool_call(fenced).unwrap();
     assert_eq!(call.function.name, "create_board");
     let arguments: Value = serde_json::from_str(&call.function.arguments).unwrap();
@@ -338,4 +338,116 @@ fn fenced_json_fallback_is_parsed() {
     assert!(fallback_tool_call("Just text, no tool.").is_none());
     assert!(fallback_tool_call("```json\nnot json\n```").is_none());
     assert!(fallback_tool_call("```rust\nfn main() {}\n```").is_none());
+}
+
+#[test]
+fn json_quoted_in_prose_is_never_executed() {
+    let block = "```json\n{\"name\": \"get_scene\", \"arguments\": {}}\n```";
+    for prose in [
+        format!("I will add the board.\n{block}\nDone."),
+        format!("To read the scene you could call:\n{block}"),
+        format!("{block}\nand then\n{block}"),
+        "Use {\"name\": \"get_scene\"} to read it.".to_owned(),
+        "{\"name\": \"get_scene\"} is the call I would make.".to_owned(),
+    ] {
+        assert!(fallback_tool_call(&prose).is_none(), "{prose}");
+    }
+    // The whole reply being one block, with surrounding blanks, still runs.
+    assert_eq!(fallback_tool_call(&format!("\n  {block}\n")).unwrap().function.name, "get_scene");
+}
+
+fn first_face(model: &Model, object: u64) -> u64 {
+    model.expand_entities(&BTreeSet::from([object])).into_iter().find(|f| model.faces.contains_key(f)).unwrap()
+}
+
+#[test]
+fn shared_lease_refuses_entities_outside_it() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let mine = board(&mut model, &mut env, "Mine", [0., 0., 0.], [100., 100., 100.]);
+    let theirs = board(&mut model, &mut env, "Theirs", [500., 0., 0.], [100., 100., 100.]);
+    // Not shared: no restriction.
+    ok(&mut model, &mut env, "move", json!({"ids": [theirs], "delta_mm": [1, 0, 0]}));
+    env.created.clear();
+    env.lease = Some(BTreeSet::from([mine]));
+    let refused = run(&mut model, &mut env, "move", json!({"ids": [mine, theirs], "delta_mm": [1, 0, 0]}));
+    assert!(!refused.ok && !refused.mutated);
+    assert_eq!(refused.result["error"], "not-leased");
+    assert_eq!(refused.result["hint"], "select it first so you hold the edit lease");
+    let face = first_face(&model, theirs);
+    let attempts = [
+        ("rename", json!({"id": theirs, "name": "X"})),
+        ("erase", json!({"ids": [theirs]})),
+        ("tag", json!({"ids": [theirs], "tag": "t"})),
+        ("add_joint", json!({"a": mine, "b": theirs, "kind": "half_lap"})),
+        ("push_pull", json!({"face_id": face, "distance_mm": 5})),
+        ("resize_board", json!({"id": theirs, "size_mm": [10, 10, 10]})),
+    ];
+    for (name, args) in attempts {
+        assert_eq!(err(&mut model, &mut env, name, args), "not-leased", "{name}");
+    }
+    // Leased entities, their faces, and reads remain available.
+    ok(&mut model, &mut env, "move", json!({"ids": [mine], "delta_mm": [1, 0, 0]}));
+    let own_face = first_face(&model, mine);
+    ok(&mut model, &mut env, "push_pull", json!({"face_id": own_face, "distance_mm": 5}));
+    ok(&mut model, &mut env, "get_object", json!({"id": theirs}));
+    // New entities are free to create, and then to edit within the same turn.
+    let fresh = board(&mut model, &mut env, "Fresh", [900., 0., 0.], [50., 50., 50.]);
+    ok(&mut model, &mut env, "move", json!({"ids": [fresh], "delta_mm": [1, 0, 0]}));
+    let copy = ok(&mut model, &mut env, "create_copy", json!({"id": theirs, "offset_mm": [0, 500, 0]})).created[0];
+    ok(&mut model, &mut env, "rename", json!({"id": copy, "name": "Copy"}));
+    let group = ok(&mut model, &mut env, "group", json!({"ids": [fresh, copy], "name": "G", "component": false})).created[0];
+    ok(&mut model, &mut env, "rename", json!({"id": group, "name": "G2"}));
+    assert_eq!(model.objects[&theirs].name, "Theirs");
+}
+
+#[test]
+fn model_output_is_bounded() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "A", [0., 0., 0.], [2000., 100., 100.]);
+    let points: Vec<[f64; 3]> = (0..1001).map(|i| [i as f64, 0., 0.]).collect();
+    assert!(err(&mut model, &mut env, "draw_polyline", json!({"points_mm": points})).contains("too many points"));
+    let ids: Vec<u64> = vec![a; 501];
+    assert!(err(&mut model, &mut env, "move", json!({"ids": ids, "delta_mm": [1, 0, 0]})).contains("too many ids"));
+    // Scale factor bounds.
+    for factor in [0.0, 0.0009, 1001.0, -2.0] {
+        let error = err(&mut model, &mut env, "scale", json!({"ids": [a], "center_mm": [0, 0, 0], "factor": factor}));
+        assert!(error.contains("factor"), "{factor}: {error}");
+    }
+    ok(&mut model, &mut env, "scale", json!({"ids": [a], "center_mm": [0, 0, 0], "factor": 1.5}));
+    // In range but the result leaves the sane absolute range: restored.
+    assert_eq!(
+        err(&mut model, &mut env, "scale", json!({"ids": [a], "center_mm": [0, 0, 0], "factor": 1000.0})),
+        "result out of range"
+    );
+    for _ in 0..9 {
+        ok(&mut model, &mut env, "move", json!({"ids": [a], "delta_mm": [100_000, 0, 0]}));
+    }
+    assert_eq!(err(&mut model, &mut env, "move", json!({"ids": [a], "delta_mm": [100_000, 0, 0]})), "result out of range");
+    // Inputs: |coordinate| <= 100 m, size >= 0.1 mm, strings <= 500 chars.
+    assert!(err(&mut model, &mut env, "create_board", json!({"name": "x", "origin_mm": [100_001, 0, 0], "size_mm": [1, 1, 1]})).contains("out of range"));
+    assert!(err(&mut model, &mut env, "create_board", json!({"name": "x", "origin_mm": [0, 0, 0], "size_mm": [0.05, 1, 1]})).contains("out of range"));
+    let long = "t".repeat(501);
+    assert!(err(&mut model, &mut env, "add_text", json!({"point_mm": [0, 0, 0], "offset_mm": [0, 0, 0], "text": long})).contains("too long"));
+    assert!(err(&mut model, &mut env, "rename", json!({"id": a, "name": long})).contains("name"));
+    assert!(err(&mut model, &mut env, "tag", json!({"ids": [a], "tag": long})).contains("too long"));
+}
+
+#[test]
+fn push_pull_requires_the_whole_owner_chain_to_be_editable() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "A", [0., 0., 0.], [100., 100., 100.]);
+    let b = board(&mut model, &mut env, "B", [500., 0., 0.], [100., 100., 100.]);
+    let outer = ok(&mut model, &mut env, "group", json!({"ids": [a], "name": "Outer", "component": false})).created[0];
+    let inner = *model.objects[&outer].entities.iter().next().unwrap();
+    let face = first_face(&model, inner);
+    // A locked ancestor, however far up, blocks the edit.
+    model.locked.insert(outer);
+    assert!(err(&mut model, &mut env, "push_pull", json!({"face_id": face, "distance_mm": 5})).contains("locked"));
+    model.locked.clear();
+    ok(&mut model, &mut env, "push_pull", json!({"face_id": face, "distance_mm": 5}));
+    // A face outside the open editing scope cannot be reached through its owner.
+    assert!(model.enter_object(outer));
+    let other = first_face(&model, b);
+    assert!(err(&mut model, &mut env, "push_pull", json!({"face_id": other, "distance_mm": 5})).contains("scope"));
+    ok(&mut model, &mut env, "push_pull", json!({"face_id": face, "distance_mm": 5}));
 }

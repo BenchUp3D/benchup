@@ -16,8 +16,16 @@ use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Per call; `entities` enforces it for every tool that takes an id list.
 const MAX_IDS: usize = 500;
-const MAX_COORDINATE_MM: f64 = 1.0e8;
+const MAX_POINTS: usize = 1000;
+const MAX_TEXT_CHARS: usize = 500;
+/// Input positions and sizes: |coordinate| <= 100 m.
+const MAX_COORDINATE_MM: f64 = 1.0e5;
+/// Results may add up (move after move), but must stay finite and within 1 km.
+const MAX_RESULT_M: f64 = 1000.;
+const MIN_SCALE: f64 = 1.0e-3;
+const MAX_SCALE: f64 = 1.0e3;
 
 /// State shared by the tool calls of one turn.
 #[derive(Default)]
@@ -30,6 +38,12 @@ pub(crate) struct ToolEnv {
     pub catalog: BTreeMap<MaterialId, StockMaterial>,
     /// Model as it was before the first successful mutating call.
     pub before: Option<Model>,
+    /// Shared project: the edit lease this user holds. Mutating tools refuse
+    /// entities outside it. `None` means no restriction (not a shared project).
+    pub lease: Option<BTreeSet<u64>>,
+    /// Entities this turn created (or released from a group it dissolved);
+    /// they are not held by anyone else, so they are exempt from the lease.
+    pub created: BTreeSet<u64>,
 }
 
 pub(crate) struct ToolOutcome {
@@ -409,7 +423,7 @@ fn parse<T: DeserializeOwned>(arguments: &str) -> Result<T, Fail> {
 /// Millimetres on the wire to a metre vector in the document.
 fn point(v: V3) -> Result<DVec3, Fail> {
     if v.iter().any(|x| !x.is_finite() || x.abs() > MAX_COORDINATE_MM) {
-        return Err(fail("coordinate out of range", "Use finite values within 100 km, in millimetres."));
+        return Err(fail("coordinate out of range", "Use finite values within 100 m (100000 mm) of the origin, in millimetres."));
     }
     Ok(DVec3::new(from_mm(v[0]), from_mm(v[1]), from_mm(v[2])))
 }
@@ -484,6 +498,9 @@ fn assign_material(model: &mut Model, env: &ToolEnv, object: u64, material: Opti
     Ok(())
 }
 fn tag_named(model: &mut Model, name: &str) -> Result<u64, Fail> {
+    if name.chars().count() > MAX_TEXT_CHARS {
+        return Err(fail("tag name too long", format!("Use at most {MAX_TEXT_CHARS} characters.")));
+    }
     let folded = name.trim().to_lowercase();
     if let Some(tag) = model.tags.values().find(|t| t.name.to_lowercase() == folded) {
         return Ok(tag.id);
@@ -564,6 +581,9 @@ fn draw_polyline(model: &mut Model, a: PolylineArgs) -> Res {
     if a.points_mm.len() < 2 {
         return Err(fail("points_mm needs at least 2 points", "Give the corners in order."));
     }
+    if a.points_mm.len() > MAX_POINTS {
+        return Err(fail("too many points", format!("Pass at most {MAX_POINTS} points per call.")));
+    }
     let mut points = a.points_mm.into_iter().map(point).collect::<Result<Vec<_>, _>>()?;
     if a.close.unwrap_or(false)
         && let Some(first) = points.first().copied()
@@ -590,7 +610,11 @@ fn rotate(model: &mut Model, a: RotateArgs) -> Res {
 }
 fn scale(model: &mut Model, a: ScaleArgs) -> Res {
     let set = entities(model, &a.ids, true)?;
-    model.scale_selection(&set, point(a.center_mm)?, finite(a.factor, "factor")?)?;
+    let factor = finite(a.factor, "factor")?;
+    if !(MIN_SCALE..=MAX_SCALE).contains(&factor) {
+        return Err(fail("factor out of range", format!("Use a factor between {MIN_SCALE} and {MAX_SCALE}; scale in several steps if needed.")));
+    }
+    model.scale_selection(&set, point(a.center_mm)?, factor)?;
     Ok(modified(&set))
 }
 fn resize_board(model: &mut Model, a: ResizeArgs) -> Res {
@@ -621,6 +645,19 @@ fn push_pull(model: &mut Model, a: PushPullArgs) -> Res {
     }
     if model.is_hidden(face) || model.is_locked(face) {
         return Err(fail(format!("face {face} is hidden or locked"), "Pick another face."));
+    }
+    // The edit scope is switched to the face's owner below, so check here, with
+    // the same rules as the other tools, that the owner chain may be edited.
+    let top = model.entity_in_context(face).ok_or_else(|| {
+        fail(format!("face {face} is not editable in the current scope"), unreachable_hint(model, face))
+    })?;
+    entities(model, &[top], true)?;
+    let mut ancestor = model.parent(face);
+    while let Some(owner) = ancestor {
+        if model.is_hidden(owner) || model.is_locked(owner) {
+            return Err(fail(format!("face {face} is inside hidden or locked object {owner}"), "Locked entities cannot be changed; tell the designer to unlock it."));
+        }
+        ancestor = model.parent(owner);
     }
     let distance = from_mm(finite(a.distance_mm, "distance_mm")?) * scene::outward_sign(model, face);
     let owner = model.parent(face);
@@ -785,6 +822,9 @@ fn add_dimension(model: &mut Model, a: DimensionArgs) -> Res {
     Ok(Done { created: vec![id], ..Default::default() })
 }
 fn add_text(model: &mut Model, a: TextArgs) -> Res {
+    if a.text.chars().count() > MAX_TEXT_CHARS {
+        return Err(fail("text too long", format!("Use at most {MAX_TEXT_CHARS} characters.")));
+    }
     let id = model.add_text(point(a.point_mm)?, point(a.offset_mm)?, &a.text)?;
     Ok(Done { created: vec![id], ..Default::default() })
 }
@@ -892,6 +932,43 @@ fn error_outcome(error: String, hint: Option<String>) -> ToolOutcome {
     }
 }
 
+/// Tools that only add new entities: nothing existing is touched, so there is
+/// nothing to lease. (`create_copy` reads its source without changing it.)
+const CREATING: &[&str] = &["create_board", "create_copy", "draw_polyline", "add_dimension", "add_text"];
+
+/// Existing entities a mutating call names, read from the raw arguments.
+fn target_ids(name: &str, arguments: &str) -> Vec<u64> {
+    if CREATING.contains(&name) {
+        return Vec::new();
+    }
+    let Ok(Value::Object(map)) = serde_json::from_str::<Value>(arguments) else { return Vec::new() };
+    let mut ids: Vec<u64> = map.get("ids").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64).collect();
+    ids.extend(["id", "face_id", "a", "b"].iter().filter_map(|key| map.get(*key)?.as_u64()));
+    ids
+}
+
+/// An entity is leased when it, or an object containing it, is in the lease
+/// (or was created by this turn). Always true outside shared projects.
+fn leased(model: &Model, env: &ToolEnv, id: u64) -> bool {
+    let Some(lease) = &env.lease else { return true };
+    let mut current = Some(id);
+    for _ in 0..256 {
+        let Some(c) = current else { break };
+        if lease.contains(&c) || env.created.contains(&c) {
+            return true;
+        }
+        current = model.parent(c);
+    }
+    false
+}
+
+fn out_of_range(model: &Model, done: &Done) -> bool {
+    let touched: BTreeSet<u64> = done.created.iter().chain(&done.modified).copied().filter(|id| model.contains_entity(id)).collect();
+    model
+        .selection_bounds(&touched)
+        .is_some_and(|(lo, hi)| [lo, hi].iter().any(|p| p.to_array().iter().any(|v| !v.is_finite() || v.abs() > MAX_RESULT_M)))
+}
+
 /// Apply one tool call. A failed or panicking mutating call leaves the model
 /// exactly as it was; a successful one records the turn's `before` snapshot.
 pub(crate) fn execute(model: &mut Model, call: &ToolCall, env: &mut ToolEnv) -> ToolOutcome {
@@ -907,8 +984,16 @@ pub(crate) fn execute(model: &mut Model, call: &ToolCall, env: &mut ToolEnv) -> 
             Some("This project is read-only for the designer; describe what you would change instead.".into()),
         );
     }
-    let backup = mutating.then(|| model.clone());
     let arguments = call.function.arguments.as_str();
+    if mutating
+        && target_ids(name, arguments).into_iter().any(|id| model.contains_entity(&id) && !leased(model, env, id))
+    {
+        return error_outcome("not-leased".into(), Some("select it first so you hold the edit lease".into()));
+    }
+    let backup = mutating.then(|| model.clone());
+    // `catch_unwind` cannot help on wasm32, where a panic aborts. Every tool
+    // therefore validates its arguments (counts, ranges, lengths) before it
+    // touches the model, and the result is range-checked below.
     let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(model, env, name, arguments)));
     let result = match attempt {
         Ok(result) => result,
@@ -921,7 +1006,19 @@ pub(crate) fn execute(model: &mut Model, call: &ToolCall, env: &mut ToolEnv) -> 
             }
             error_outcome(failure.error, failure.hint)
         }
+        Ok(done) if backup.is_some() && out_of_range(model, &done) => {
+            *model = backup.unwrap_or_default();
+            error_outcome(
+                "result out of range".into(),
+                Some("The result would be non-finite or beyond 1 km from the origin; use smaller values.".into()),
+            )
+        }
         Ok(done) => {
+            env.created.extend(&done.created);
+            if name == "ungroup" {
+                // Released parts have no leased container any more.
+                env.created.extend(&done.modified);
+            }
             let mut mutated = false;
             if let Some(backup) = backup {
                 mutated = !backup.same_scene(model);
@@ -962,7 +1059,8 @@ pub(crate) fn execute(model: &mut Model, call: &ToolCall, env: &mut ToolEnv) -> 
 }
 
 /// Some servers put a tool call in `content` as a fenced JSON block instead of
-/// `tool_calls`. Accept one such block (or a bare JSON object) for a known tool.
+/// `tool_calls`. Accepted only when the whole reply is exactly one fenced block
+/// or one bare JSON object, so JSON quoted inside prose is never executed.
 pub(crate) fn fallback_tool_call(content: &str) -> Option<ToolCall> {
     let from_json = |text: &str| -> Option<ToolCall> {
         let value: Value = serde_json::from_str(text.trim()).ok()?;
@@ -978,20 +1076,19 @@ pub(crate) fn fallback_tool_call(content: &str) -> Option<ToolCall> {
         };
         Some(ToolCall::new("call_fallback", name, &arguments))
     };
-    for (index, block) in content.split("```").enumerate() {
-        if index % 2 == 1 {
-            let body = block.trim_start();
-            let body = match body.get(..4) {
-                Some(label) if label.eq_ignore_ascii_case("json") => &body[4..],
-                _ => body,
-            };
-            if let Some(call) = from_json(body) {
-                return Some(call);
-            }
+    let content = content.trim();
+    if let Some(inner) = content.strip_prefix("```").and_then(|rest| rest.strip_suffix("```")) {
+        if inner.contains("```") {
+            return None;
         }
+        let body = inner.trim_start();
+        let body = match body.get(..4) {
+            Some(label) if label.eq_ignore_ascii_case("json") => &body[4..],
+            _ => body,
+        };
+        return from_json(body);
     }
-    let bare = content.trim();
-    bare.starts_with('{').then(|| from_json(bare)).flatten()
+    (content.starts_with('{') && content.ends_with('}')).then(|| from_json(content)).flatten()
 }
 
 #[cfg(test)]

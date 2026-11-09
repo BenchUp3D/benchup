@@ -27,7 +27,7 @@ pub(crate) mod window;
 mod tests;
 
 
-use turn::{Turn, TurnResult, TurnSetup};
+use turn::{Gate, Turn, TurnResult, TurnSetup};
 
 const HISTORY_MESSAGES: usize = 20;
 const HISTORY_CHARS: usize = 2000;
@@ -132,7 +132,8 @@ pub(super) struct Assistant {
     pub connection: Connection,
     history: Vec<Message>,
     turn: Option<Turn>,
-    models_receiver: Option<Receiver<Result<Vec<String>, ChatError>>>,
+    /// Reply to a model-list request, with the server it was sent to.
+    models_receiver: Option<(String, Receiver<Result<Vec<String>, ChatError>>)>,
     key_candidate: Option<String>,
     transport: Box<dyn ChatTransport>,
     /// Session-only panel state: composer, chips, dialogs.
@@ -195,13 +196,13 @@ impl Assistant {
         }
         self.connection = Connection::Connecting;
         self.key_candidate = Some(key.to_owned());
-        self.models_receiver = Some(self.transport.models(ctx, &self.settings.base_url, key));
+        self.models_receiver = Some((self.settings.base_url.clone(), self.transport.models(ctx, &self.settings.base_url, key)));
     }
     /// Reload the model list with the stored key.
     pub(super) fn refresh_models(&mut self, ctx: &egui::Context) {
         if let Some(key) = self.key.clone() {
             self.key_candidate = None;
-            self.models_receiver = Some(self.transport.models(ctx, &self.settings.base_url, &key));
+            self.models_receiver = Some((self.settings.base_url.clone(), self.transport.models(ctx, &self.settings.base_url, &key)));
         }
     }
     pub(super) fn forget_key(&mut self) -> Result<(), String> {
@@ -219,18 +220,26 @@ impl Assistant {
     }
 
     fn poll_models(&mut self) {
-        let Some(receiver) = &self.models_receiver else { return };
+        let Some((_, receiver)) = &self.models_receiver else { return };
         let reply = match receiver.try_recv() {
             Ok(reply) => reply,
             Err(std::sync::mpsc::TryRecvError::Empty) => return,
             Err(_) => Err(ChatError::Network(tr!("assistant.error.interrupted").into())),
         };
-        self.models_receiver = None;
+        let base = self.models_receiver.take().map(|(base, _)| base).unwrap_or_default();
         let candidate = self.key_candidate.take();
+        if client::normalize_base(&base) != client::normalize_base(&self.settings.base_url) {
+            // The server setting changed while this request was in flight: the
+            // reply (and any key it validated) belongs to another server.
+            if self.connection == Connection::Connecting {
+                self.connection = Connection::Disconnected;
+            }
+            return;
+        }
         match reply {
             Ok(models) => {
                 if let Some(key) = candidate {
-                    match credentials::save(&self.settings.base_url, &key) {
+                    match credentials::save(&base, &key) {
                         Ok(()) => {}
                         Err(e) => self.transcript.push(Entry {
                             role: EntryRole::Error,
@@ -269,6 +278,7 @@ impl Assistant {
         selection: &BTreeSet<u64>,
         catalog: BTreeMap<benchup_core::MaterialId, benchup_core::StockMaterial>,
         read_only: bool,
+        lease: Option<BTreeSet<u64>>,
         request: Prompt,
     ) -> Result<(), String> {
         let prompt = request.prompt.trim().to_owned();
@@ -292,6 +302,7 @@ impl Assistant {
             include_selection: self.settings.include_selection,
             catalog,
             read_only,
+            lease,
             history: self.history.clone(),
         };
         self.transcript.push(Entry { role: EntryRole::User, text: prompt, changes: None });
@@ -307,10 +318,10 @@ impl Assistant {
 
     /// Advance connection checks and the running turn. Returns the finished
     /// turn once, for the app to commit with `assistant_commit_turn`.
-    pub(super) fn poll(&mut self, ctx: &egui::Context, model: &mut Model) -> turn::Poll {
+    pub(super) fn poll(&mut self, ctx: &egui::Context, model: &mut Model, gate: &Gate) -> turn::Poll {
         self.poll_models();
         let Some(turn) = &mut self.turn else { return turn::Poll { finished: None, mutated: false } };
-        let poll = turn.poll(ctx, self.transport.as_ref(), model);
+        let poll = turn.poll(ctx, self.transport.as_ref(), model, gate);
         if poll.finished.is_some() {
             self.turn = None;
         } else if !poll.mutated {
@@ -324,6 +335,19 @@ impl Assistant {
     pub(super) fn stop(&mut self, model: &Model) -> Option<TurnResult> {
         let mut turn = self.turn.take()?;
         Some(turn.stop(model))
+    }
+
+    /// End the running turn and throw its edits away (the model it edited was
+    /// replaced): nothing is committed, and the transcript says why.
+    pub(super) fn discard_turn(&mut self, model: &Model, error: String) -> bool {
+        let Some(mut turn) = self.turn.take() else { return false };
+        let mut result = turn.stop(model);
+        result.before = None;
+        result.selection = None;
+        (result.created, result.modified, result.erased, result.joints) = Default::default();
+        result.error = Some(error);
+        self.record(&result);
+        true
     }
 
     /// Record a finished turn in the transcript and the model-facing history.
@@ -372,7 +396,16 @@ impl Assistant {
 impl BenchUpApp {
     /// Called once per frame from `ui`.
     pub(super) fn poll_assistant(&mut self, ctx: &egui::Context) {
-        let poll = self.assistant.poll(ctx, &mut self.doc.model);
+        let gate = if self.assistant.busy() {
+            // Shared projects: editing rights can lapse between rounds.
+            Gate {
+                block: (!self.shared_edit_allowed(ctx)).then(|| self.shared_edit_block_reason(ctx).to_owned()),
+                lease: self.shared_lease(),
+            }
+        } else {
+            Gate::default()
+        };
+        let poll = self.assistant.poll(ctx, &mut self.doc.model, &gate);
         if poll.mutated {
             self.changed(ctx);
         }
@@ -390,7 +423,8 @@ impl BenchUpApp {
             .map(|stock| (stock.id, stock.definition()))
             .collect();
         let read_only = !self.shared_edit_allowed(ctx);
-        self.assistant.send(ctx, &self.doc.model, &self.selected, catalog, read_only, request)
+        let lease = self.shared_lease();
+        self.assistant.send(ctx, &self.doc.model, &self.selected, catalog, read_only, lease, request)
     }
 
     pub(super) fn assistant_stop(&mut self, ctx: &egui::Context) {

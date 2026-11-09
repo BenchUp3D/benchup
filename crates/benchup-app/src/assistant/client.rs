@@ -13,6 +13,9 @@ const TIMEOUT_SECS: u64 = 120;
 #[cfg(any(not(target_arch = "wasm32"), test))]
 const RESPONSE_LIMIT: u64 = 4 * 1024 * 1024;
 
+/// Server error text shown to the user is cut to this many characters.
+const MAX_ERROR_CHARS: usize = 300;
+
 /// Strip surrounding blanks and trailing slashes so one server has one key.
 pub(crate) fn normalize_base(base: &str) -> String {
     base.trim().trim_end_matches('/').to_owned()
@@ -171,7 +174,20 @@ fn error_message(body: &str) -> String {
             .or_else(|| error.as_str())
             .map(str::to_owned)
     });
-    message.unwrap_or_else(|| body.chars().take(300).collect())
+    message.unwrap_or_else(|| body.to_owned()).chars().take(MAX_ERROR_CHARS).collect()
+}
+
+/// True when a 400 message says the model or server rejects tool calling,
+/// as opposed to a bad argument that merely mentions a tool or function.
+fn says_tools_unsupported(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    const REFUSALS: [&str; 6] = ["not support", "unsupported", "does not allow", "doesn't allow", "not allowed", "no support"];
+    const SUBJECTS: [&str; 3] = ["tool", "function calling", "function call"];
+    const NEAR: usize = 40;
+    let positions = |needle: &str| -> Vec<usize> { lower.match_indices(needle).map(|(i, _)| i).collect() };
+    REFUSALS.iter().flat_map(|r| positions(r)).any(|refusal| {
+        SUBJECTS.iter().flat_map(|s| positions(s)).any(|subject| subject.abs_diff(refusal) <= NEAR)
+    })
 }
 
 /// Turn an HTTP status and body into JSON, or the matching typed error.
@@ -182,13 +198,7 @@ pub(crate) fn check_status(status: u16, body: &str) -> Result<Value, ChatError> 
     let message = error_message(body);
     Err(match status {
         401 => ChatError::InvalidKey,
-        400 if {
-            let lower = message.to_lowercase();
-            lower.contains("tool") || lower.contains("function")
-        } =>
-        {
-            ChatError::ToolsUnsupported
-        }
+        400 if says_tools_unsupported(&message) => ChatError::ToolsUnsupported,
         _ => ChatError::Http { status, message },
     })
 }
@@ -317,6 +327,8 @@ fn spawn<T: Send + 'static>(
                 if (a.body !== null) headers['Content-Type'] = 'application/json';
                 const r = await fetch(a.url, {method: a.body === null ? 'GET' : 'POST', body: a.body ?? undefined,
                     headers, credentials: 'omit', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(120000)});
+                const declared = r.headers.get('content-length');
+                if (declared !== null && Number(declared) > 4194304) throw Error('Response too large');
                 const text = await r.text();
                 if (text.length > 4194304) throw Error('Response too large');
                 return JSON.stringify({status: r.status, body: text});
@@ -447,6 +459,41 @@ mod tests {
         assert!(matches!(parse_chat(200, "not json"), Err(ChatError::BadResponse(_))));
         assert!(matches!(parse_chat(200, r#"{"choices":[]}"#), Err(ChatError::BadResponse(_))));
         assert!(!ChatError::InvalidKey.user_message().is_empty());
+    }
+
+    #[test]
+    fn error_messages_are_always_truncated() {
+        let long = "x".repeat(2000);
+        let json = format!(r#"{{"error":{{"message":"{long}"}}}}"#);
+        for body in [json.as_str(), long.as_str()] {
+            let Err(ChatError::Http { message, .. }) = parse_chat(500, body) else { panic!() };
+            assert_eq!(message.chars().count(), 300);
+        }
+    }
+
+    #[test]
+    fn bad_request_maps_to_tools_unsupported_only_when_it_says_so() {
+        let body = |m: &str| serde_json::json!({"error": {"message": m}}).to_string();
+        for message in [
+            "This model does not support tools",
+            "Tool calling is not supported by this model",
+            "function calling is unsupported for qwen",
+            "Tools are not allowed with this endpoint",
+        ] {
+            assert_eq!(parse_chat(400, &body(message)).unwrap_err(), ChatError::ToolsUnsupported, "{message}");
+        }
+        for message in [
+            "Invalid value for function parameter 'name'",
+            "messages.3: tool_call_id is required",
+            "max_tokens is not supported with this model",
+            "Unsupported parameter: temperature",
+        ] {
+            assert_eq!(
+                parse_chat(400, &body(message)).unwrap_err(),
+                ChatError::Http { status: 400, message: message.into() },
+                "{message}"
+            );
+        }
     }
 
     #[test]

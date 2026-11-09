@@ -35,7 +35,14 @@ fn save_in(dir: &std::path::Path, base: &str, key: &str) -> Result<(), String> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(key_file(dir, base)).map_err(|e| e.to_string())?;
+    let path = key_file(dir, base);
+    let mut file = options.open(&path).map_err(|e| e.to_string())?;
+    // `mode` only applies when the file is created; tighten an existing one too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+    }
     file.write_all(key.trim().as_bytes()).map_err(|e| e.to_string())
 }
 #[cfg(any(not(target_arch = "wasm32"), test))]
@@ -120,5 +127,19 @@ mod tests {
         assert_eq!(load_in(dir.path(), a), None);
         forget_in(dir.path(), a).unwrap();
         assert_eq!(storage_name("https://a.example/v1/"), "benchup.assistant.key.https://a.example/v1");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_existing_world_readable_key_file_is_tightened() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let base = "https://a.example/v1";
+        let path = key_file(dir.path(), base);
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        save_in(dir.path(), base, "sk-new").unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(load_in(dir.path(), base).as_deref(), Some("sk-new"));
     }
 }
