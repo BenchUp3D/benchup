@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate KetchUp3D's vector mark, platform icons, and egui geometry.
+"""Regenerate BenchUp's vector mark, platform icons, and egui geometry.
 
 Requires Pillow: python3 -m pip install Pillow
 Run from any directory: python3 scripts/generate_branding.py
@@ -14,11 +14,15 @@ RED = '#D94836'
 FRONT = '#FFF9F2'
 TOP = '#FFE0CD'
 SIDE = '#F2A38B'
-# An extruded K: the upper-right depth gives the mark its modeling-tool character.
-FACE = [(28, 34), (42, 34), (42, 55), (62, 34), (80, 34),
-        (55, 61), (83, 92), (64, 92), (42, 68), (42, 92), (28, 92)]
-FACE = [(x, y + 5) for x, y in FACE]
-DEPTH = (15, -9)
+# An extruded workbench: a solid top, two legs, and a connecting rail.
+# Shared geometry drives the SVG, raster assets, egui toolbar and PDF logo.
+FACES = [
+    (FRONT, [(28, 54), (42, 54), (42, 94), (28, 94)]),
+    (FRONT, [(74, 54), (88, 54), (88, 94), (74, 94)]),
+    ('#FFD0A6', [(42, 72), (74, 72), (74, 82), (42, 82)]),
+    (FRONT, [(20, 42), (96, 42), (96, 56), (20, 56)]),
+]
+DEPTH = (12, -8)
 
 
 def cross(a, b, c):
@@ -48,7 +52,8 @@ def triangles(points):
 
 def surfaces():
     faces = []
-    for a, b in zip(FACE, FACE[1:] + FACE[:1]):
+    for _, face in FACES:
+      for a, b in zip(face, face[1:] + face[:1]):
         # Only the edges facing the extrusion vector are visible.
         if (b[1] - a[1]) * DEPTH[0] - (b[0] - a[0]) * DEPTH[1] > 0:
             points = [a, (a[0] + DEPTH[0], a[1] + DEPTH[1]),
@@ -59,15 +64,15 @@ def surfaces():
 
 def svg(square=True):
     background = f'  <rect width="128" height="128" rx="28" fill="{RED}"/>\n' if square else ''
-    paths = surfaces() + [(FRONT if square else RED, FACE)]
+    paths = surfaces() + FACES
     if not square:
         paths = [('#F07961' if color == TOP else '#A62E25', points)
-                 for color, points in surfaces()] + [(RED, FACE)]
+                 for color, points in surfaces()] + [(RED, face) for _, face in FACES]
     polygons = '\n'.join(f'  <polygon fill="{color}" points="' +
                          ' '.join(f'{x},{y}' for x, y in points) + '"/>'
                          for color, points in paths)
     return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">\n'
-            '  <title id="title">KetchUp3D</title>\n' + background + polygons + '\n</svg>\n')
+            '  <title id="title">BenchUp</title>\n' + background + polygons + '\n</svg>\n')
 
 
 def raster(size, rounded=True, padding=0):
@@ -77,7 +82,7 @@ def raster(size, rounded=True, padding=0):
     unit = size * scale / 128
     draw.rounded_rectangle((0, 0, size * scale - 1, size * scale - 1),
                            radius=28 * unit if rounded else 0, fill=RED)
-    for color, points in surfaces() + [(FRONT, FACE)]:
+    for color, points in surfaces() + FACES:
         draw.polygon([((padding + x * (1 - padding / 64)) * unit,
                        (padding + y * (1 - padding / 64)) * unit)
                       for x, y in points], fill=color)
@@ -99,11 +104,13 @@ def rust():
     for color, points in surfaces():
         coords = ', '.join(f'point({x}., {y}.)' for x, y in points)
         lines.append(f'    p.add(egui::Shape::convex_polygon(vec![{coords}], Color32::from_rgb({rgb(color)}), egui::Stroke::NONE));')
-    lines.append('    let mut face = egui::Mesh::default();')
-    for x, y in FACE:
-        lines.append(f'    face.colored_vertex(point({x}., {y}.), Color32::from_rgb({rgb(FRONT)}));')
-    lines.append('    face.indices = vec![' + ', '.join(map(str, triangles(FACE))) + '];')
-    lines.extend(['    p.add(egui::Shape::mesh(face));', '}', ''])
+    for color, points in FACES:
+        lines.append('    let mut face = egui::Mesh::default();')
+        for x, y in points:
+            lines.append(f'    face.colored_vertex(point({x}., {y}.), Color32::from_rgb({rgb(color)}));')
+        lines.append('    face.indices = vec![' + ', '.join(map(str, triangles(points))) + '];')
+        lines.append('    p.add(egui::Shape::mesh(face));')
+    lines.extend(['}', ''])
     return '\n'.join(lines)
 
 
@@ -117,7 +124,7 @@ if __name__ == '__main__':
     raster(180, rounded=False).save(OUT / 'apple-touch-icon.png')
     raster(512, rounded=False, padding=8).save(OUT / 'icon-maskable-512.png')
     raster(256).save(OUT / 'favicon.ico', sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
-    raster(1024).save(OUT / 'ketchup.icns')
-    rust_path = ROOT / 'crates/ketchup-app/src/brand_mark.rs'
+    raster(1024).save(OUT / 'benchup.icns')
+    rust_path = ROOT / 'crates/benchup-app/src/brand_mark.rs'
     rust_path.write_text(rust())
     subprocess.run(['rustfmt', '--edition', '2024', str(rust_path)], check=True)

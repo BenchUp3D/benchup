@@ -2,8 +2,8 @@
 """Profile a real, isolated native viewport without building or editing the project.
 
 Example:
-    python3 scripts/benchmark_viewport.py --project ~/Downloads/Example.ketchup \
-        --binary target/release/ketchup-app --seconds 30 --output /tmp/ketchup-bench
+    python3 scripts/benchmark_viewport.py --project ~/Downloads/Example.bup \
+        --binary target/release/benchup-app --seconds 30 --output /tmp/benchup-bench
 
 The native benchmark renders the saved camera, an orbit without Wood Joinery,
 the identical orbit with Wood Joinery, and the saved camera again. Each stage
@@ -26,7 +26,7 @@ import subprocess
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", type=Path, required=True)
-    parser.add_argument("--binary", type=Path, default=Path("target/release/ketchup-app"))
+    parser.add_argument("--binary", type=Path, default=Path("target/release/benchup-app"))
     parser.add_argument("--preferences", type=Path, help="Copy an existing desktop app.ron into the isolated benchmark")
     parser.add_argument("--profile", action="store_true", help="Collect detailed CPU scopes (adds timing overhead)")
     parser.add_argument("--edit-joinery", nargs="?", const="auto", metavar="CONNECTION_ID",
@@ -48,13 +48,13 @@ def main():
     shutil.copyfile(project, data / "model.json")
     if args.preferences:
         shutil.copyfile(args.preferences.expanduser().resolve(), data / "preferences.ron")
-    environment = dict(os.environ, KETCHUP_DATA_DIR=str(data),
-                       KETCHUP_VIEWPORT_BENCHMARK=str(output / "frames.json"),
-                       KETCHUP_BENCH_SECONDS=str(args.seconds), KETCHUP_BENCH_PROFILE="1" if args.profile else "0")
+    environment = dict(os.environ, BENCHUP_DATA_DIR=str(data),
+                       BENCHUP_VIEWPORT_BENCHMARK=str(output / "frames.json"),
+                       BENCHUP_BENCH_SECONDS=str(args.seconds), BENCHUP_BENCH_PROFILE="1" if args.profile else "0")
     if args.edit_joinery:
-        environment["KETCHUP_BENCH_EDIT_JOINERY"] = args.edit_joinery
+        environment["BENCHUP_BENCH_EDIT_JOINERY"] = args.edit_joinery
     else:
-        environment.pop("KETCHUP_BENCH_EDIT_JOINERY", None)
+        environment.pop("BENCHUP_BENCH_EDIT_JOINERY", None)
     with (output / "application.log").open("w") as log:
         subprocess.run([str(binary)], env=environment, stdout=log,
                        stderr=subprocess.STDOUT, check=True)

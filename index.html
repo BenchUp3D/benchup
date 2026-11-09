@@ -4,12 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#d94836" />
-    <meta name="description" content="KetchUp3D — a precise little space for your next big idea. A Rust 3D modeler for desktop and web." />
-    <title>KetchUp3D</title>
+    <meta name="description" content="BenchUp — a precise little space for your next big idea. A Rust 3D modeler for desktop and web." />
+    <title>BenchUp</title>
     <script>
       // Match theme.rs before the loading screen paints; other values follow the system.
       try {
-        const preference = localStorage.getItem("ketchup.theme.v1");
+        const preference = (localStorage.getItem("benchup.theme.v1") ?? localStorage.getItem("ketchup.theme.v1"));
         if (preference === "light" || preference === "dark") {
           document.documentElement.dataset.theme = preference;
         }
@@ -17,7 +17,7 @@
         // Storage may be unavailable; the system color scheme still applies.
       }
     </script>
-    <link data-trunk rel="rust" href="crates/ketchup-app/Cargo.toml" data-bin="ketchup-app" />
+    <link data-trunk rel="rust" href="crates/benchup-app/Cargo.toml" data-bin="benchup-app" />
     <link data-trunk rel="copy-dir" href="assets/branding" data-target-path="assets/branding" />
     <link data-trunk rel="copy-dir" href="assets/i18n" data-target-path="assets/i18n" />
     <link rel="icon" type="image/x-icon" href="assets/branding/favicon.ico" sizes="16x16 32x32 48x48 64x64 128x128 256x256" />
@@ -47,13 +47,13 @@
     </style>
   </head>
   <body>
-    <div id="ketchup-workspace">
-      <canvas id="ketchup-canvas" tabindex="0"></canvas>
+    <div id="benchup-workspace">
+      <canvas id="benchup-canvas" tabindex="0"></canvas>
     </div>
     <script id="workspace-shortcuts">
       (() => {
-        const workspace = document.getElementById("ketchup-workspace");
-        const canvas = document.getElementById("ketchup-canvas");
+        const workspace = document.getElementById("benchup-workspace");
+        const canvas = document.getElementById("benchup-canvas");
         // Cancel browser gestures only for contacts that begin in a model pane.
         // Keep egui's event propagation and sidebar/text-input gestures intact.
         const modelTouches = new Set();
@@ -215,7 +215,7 @@
           if (captureState() === "locked" || pointerState() === "locked") exitWalkFromBrowser();
         });
         window.addEventListener("pagehide", releaseWalkKeyboard);
-        // Keep these in sync with KetchupApp::keyboard in app.rs. eframe only
+        // Keep these in sync with BenchUpApp::keyboard in app.rs. eframe only
         // cancels a subset of browser shortcuts, even with should_prevent_default.
         const commandKeys = new Set(["a", "f", "n", "o", "s", "y", "z"]);
         const canvasKeys = new Set([
@@ -251,7 +251,7 @@
     </script>
     <div id="loading">
       <img src="assets/branding/logo.svg" alt="" width="72" height="72" />
-      <strong>KetchUp3D<span>.</span></strong>
+      <strong>BenchUp<span>.</span></strong>
       <p id="loading-label" role="status"></p>
       <div class="loading-progress" role="progressbar" aria-labelledby="loading-label"></div>
     </div>
@@ -260,7 +260,7 @@
         .then(response => response.ok ? response.json() : null)
         .then(messages => {
           if (!messages) return;
-          document.getElementById("ketchup-canvas")
+          document.getElementById("benchup-canvas")
             .setAttribute("aria-label", messages["web.canvas_label"]);
           // The app owns the title and any error as soon as it leaves the loading screen.
           const loading = document.getElementById("loading-label");

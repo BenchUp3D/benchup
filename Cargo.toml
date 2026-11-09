@@ -1,6 +1,6 @@
 [workspace]
-members = ["crates/ketchup-core", "crates/ketchup-app"]
-default-members = ["crates/ketchup-app"]
+members = ["crates/benchup-core", "crates/benchup-app"]
+default-members = ["crates/benchup-app"]
 resolver = "2"
 
 [workspace.package]
@@ -23,7 +23,7 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 2
 
-[profile.dev.package.ketchup-core]
+[profile.dev.package.benchup-core]
 opt-level = 2
 
 [profile.release]

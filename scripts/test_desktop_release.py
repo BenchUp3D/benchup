@@ -41,6 +41,39 @@ class DesktopReleaseTests(unittest.TestCase):
         feed.write_text(json.dumps({"Assets": [asset]}), encoding="utf-8-sig")
         return feed, asset
 
+    def test_packaging_uses_new_identity_executable_and_bundle_on_every_platform(self):
+        self.assertEqual(release.APP_ID, "io.github.BenchUp3D.BenchUp")
+        for platform in release.PLATFORMS:
+            with self.subTest(platform=platform):
+                executable = release.PLATFORMS[platform][1]
+                self.assertEqual(executable, "benchup-app.exe" if platform.startswith("windows") else "benchup-app")
+                (self.directory / executable).touch()
+                with patch.dict(os.environ, {}, clear=True), patch.object(release.subprocess, "run") as run, patch.object(release, "validate_assets"):
+                    release.package(platform, self.tag, self.directory, self.directory / "dist")
+                args = run.call_args.args[0]
+                self.assertEqual(args[args.index("--packId") + 1], release.APP_ID)
+                self.assertEqual(args[args.index("--packTitle") + 1], "BenchUp")
+                self.assertEqual(args[args.index("--mainExe") + 1], executable)
+                self.assertEqual(args[args.index("--channel") + 1], release.PLATFORMS[platform][0])
+                self.assertEqual(args[args.index("--delta") + 1], "None")
+                self.assertTrue(Path(args[args.index("--icon") + 1]).is_file())
+                if platform.startswith("macos"):
+                    self.assertEqual(args[args.index("--bundleId") + 1], release.APP_ID)
+
+    def test_delta_in_migration_feed_prevents_publication(self):
+        feed, asset = self.assets("windows-x64")
+        delta = dict(asset, Type="Delta")
+        feed.write_text(json.dumps({"Assets": [asset, delta]}))
+        with self.assertRaisesRegex(ValueError, "full packages only"):
+            release.validate_assets(self.directory, self.current, ["windows-x64"])
+
+    def test_pre_rename_package_id_cannot_be_published_as_a_new_release(self):
+        feed, asset = self.assets("linux-x64")
+        asset["PackageId"] = "io.github.Ketchup3D.Ketchup"
+        feed.write_text(json.dumps({"Assets": [asset]}))
+        with self.assertRaisesRegex(ValueError, "identity"):
+            release.validate_assets(self.directory, self.current, ["linux-x64"])
+
     def test_only_matching_stable_tags_are_accepted(self):
         self.assertEqual(release.version(self.tag), self.current)
         for invalid in ("latest", self.current, "v01.0.0", self.tag + "-beta.1", "v99999.0.0"):
@@ -97,7 +130,7 @@ class DesktopReleaseTests(unittest.TestCase):
             check=True, capture_output=True, text=True,
         )
         self.assertEqual(result.stdout, release.format_notes(catalog[0]))
-        self.assertIn(f"# KetchUp3D {self.current}", result.stdout)
+        self.assertIn(f"# BenchUp {self.current}", result.stdout)
         for section in catalog[0]["sections"]:
             self.assertIn(f"## {section['title']}", result.stdout)
             for change in section["changes"]:
@@ -175,7 +208,7 @@ class DesktopReleaseTests(unittest.TestCase):
 
     def test_required_signing_never_falls_back_to_unsigned_packages(self):
         for platform in ("windows-x64", "macos-arm64"):
-            with self.subTest(platform=platform), patch.dict(os.environ, {"KETCHUP_REQUIRE_SIGNING": "true"}, clear=True), patch.object(release.subprocess, "run") as run:
+            with self.subTest(platform=platform), patch.dict(os.environ, {"BENCHUP_REQUIRE_SIGNING": "true"}, clear=True), patch.object(release.subprocess, "run") as run:
                 (self.directory / release.PLATFORMS[platform][1]).touch()
                 with self.assertRaisesRegex(ValueError, "signing is required"):
                     release.package(platform, self.tag, self.directory, self.directory / "dist")
@@ -203,7 +236,7 @@ class DesktopReleaseTests(unittest.TestCase):
 
         config = {"Endpoint": "https://example.invalid", "CodeSigningAccountName": "account", "CertificateProfileName": "profile"}
         env = {"AZURE_CREDENTIALS": "configured", "WINDOWS_AZURE_SIGNING": json.dumps(config)}
-        (self.directory / "ketchup-app.exe").touch()
+        (self.directory / "benchup-app.exe").touch()
         with patch.dict(os.environ, env, clear=True), patch.object(release.subprocess, "run", side_effect=fail):
             with self.assertRaises(subprocess.CalledProcessError):
                 release.package("windows-x64", self.tag, self.directory, self.directory / "dist")
@@ -231,7 +264,7 @@ class DesktopReleaseTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as error:
                 macos_signing.main()
         self.assertNotIn("secret-value", str(error.exception))
-        self.assertFalse((self.directory / "ketchup-certificates.p12").exists())
+        self.assertFalse((self.directory / "benchup-certificates.p12").exists())
         self.assertFalse((self.directory / "environment").exists())
 
 

@@ -416,6 +416,49 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
+name = "benchup-app"
+version = "0.6.5"
+dependencies = [
+ "benchup-core",
+ "bytemuck",
+ "cc",
+ "directories",
+ "eframe",
+ "flate2",
+ "glam",
+ "image",
+ "js-sys",
+ "png",
+ "pollster 0.4.0",
+ "rayon",
+ "rfd",
+ "rustls",
+ "serde",
+ "serde_json",
+ "skrifa",
+ "tempfile",
+ "tungstenite",
+ "ureq",
+ "velopack",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
+ "zip",
+]
+
+[[package]]
+name = "benchup-core"
+version = "0.6.5"
+dependencies = [
+ "earcutr",
+ "glam",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1878,49 +1921,6 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "ketchup-app"
-version = "0.6.5"
-dependencies = [
- "bytemuck",
- "cc",
- "directories",
- "eframe",
- "flate2",
- "glam",
- "image",
- "js-sys",
- "ketchup-core",
- "png",
- "pollster 0.4.0",
- "rayon",
- "rfd",
- "rustls",
- "serde",
- "serde_json",
- "skrifa",
- "tempfile",
- "tungstenite",
- "ureq",
- "velopack",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "wgpu",
- "zip",
-]
-
-[[package]]
-name = "ketchup-core"
-version = "0.6.5"
-dependencies = [
- "earcutr",
- "glam",
- "serde",
- "serde_json",
- "uuid",
 ]
 
 [[package]]

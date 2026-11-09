@@ -17,22 +17,22 @@ test('the browser shell uses English catalog messages while loading', async () =
     const attributes = {};
     const canvas = {setAttribute: (name, value) => { attributes[name] = value; }};
     const document = {
-        getElementById: id => ({'ketchup-canvas': canvas, 'loading-label': loading})[id],
+        getElementById: id => ({'benchup-canvas': canvas, 'loading-label': loading})[id],
     };
     await runStartup(document, async url => {
         assert.equal(url, 'assets/i18n/en.json');
         return {ok: true, json: async () => catalog};
     });
-    assert.equal(document.title, 'Untitled model - KetchUp3D');
-    assert.equal(attributes['aria-label'], 'KetchUp3D modeling workspace');
+    assert.equal(document.title, 'Untitled model - BenchUp');
+    assert.equal(attributes['aria-label'], 'BenchUp modeling workspace');
     assert.equal(loading.textContent, 'Making room for your next big idea…');
 });
 
 test('a late catalog response leaves the open project title intact', async () => {
     const document = {
-        title: 'Workshop - KetchUp3D',
-        getElementById: id => id === 'ketchup-canvas' ? {setAttribute() {}} : null,
+        title: 'Workshop - BenchUp',
+        getElementById: id => id === 'benchup-canvas' ? {setAttribute() {}} : null,
     };
     await runStartup(document, async () => ({ok: true, json: async () => catalog}));
-    assert.equal(document.title, 'Workshop - KetchUp3D');
+    assert.equal(document.title, 'Workshop - BenchUp');
 });

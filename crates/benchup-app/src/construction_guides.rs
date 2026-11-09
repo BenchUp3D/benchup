@@ -1,0 +1,294 @@
+use benchup_core::tr;
+use super::*;
+use benchup_core::ConstructionGuide;
+
+const GUIDE_COLOR: Color32 = Color32::from_rgb(0, 174, 214);
+
+impl BenchUpApp {
+    pub(super) fn guide_modifier(
+        &mut self,
+        ctx: &egui::Context,
+        modifiers: egui::Modifiers,
+        shortcuts: bool,
+    ) {
+        let down = modifiers.ctrl || modifiers.command || modifiers.mac_cmd;
+        let pressed = down && !self.guide_modifier_down;
+        let released = !down && self.guide_modifier_down;
+        self.guide_modifier_down = down;
+        let eligible =
+            ctx.input(|i| i.focused) && matches!(self.tool, Tool::TapeMeasure | Tool::Protractor);
+        if pressed {
+            self.guide_toggle_pending = eligible;
+        }
+        if shortcuts || !eligible {
+            self.guide_toggle_pending = false;
+        }
+        // Commit a standalone modifier tap on release, so Ctrl/Cmd shortcuts
+        // (including ones whose key arrives in a later frame) never change mode.
+        let toggle = released && self.guide_toggle_pending;
+        if released {
+            self.guide_toggle_pending = false;
+        }
+        if toggle {
+            self.create_guides = !self.create_guides;
+            self.length_input.clear();
+            if self.measurement.as_ref().is_some_and(|m| m.complete) {
+                self.measurement = None;
+            }
+            if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
+                self.update_measurement(pos);
+            }
+            ctx.request_repaint();
+        }
+    }
+
+    pub(super) fn construction_snap(
+        &self,
+        pos: Pos2,
+        start: Option<DVec3>,
+        lock: Option<Axis>,
+    ) -> Option<Snap> {
+        if !self.doc.display.guides || !self.doc.snap_to_geometry {
+            return None;
+        }
+        let size = dv(self.viewport.size());
+        let cursor = dv(pos - self.viewport.min);
+        let ray = self.doc.camera.ray(cursor, size);
+        let constraint = lock.map(|axis| {
+            self.plane_lock()
+                .map_or(AxisConstraint::Axis(axis), AxisConstraint::Plane)
+        });
+        let mut nearby = vec![];
+        for (_, guide) in self.doc.model.guides.iter().filter(|(id, _)| {
+            !self.doc.model.is_hidden(**id)
+                && self
+                    .modeling
+                    .as_ref()
+                    .is_none_or(|edit| !edit.snap_excluded.contains(id))
+        }) {
+            let point = match guide.direction {
+                None => guide.origin,
+                Some(direction) => match start.zip(constraint) {
+                    Some((start, AxisConstraint::Axis(axis))) => {
+                        let Some(point) = (benchup_core::Ray {
+                            origin: start,
+                            direction: axis.vector(),
+                        })
+                        .axis(guide.origin, direction) else {
+                            continue;
+                        };
+                        if !AxisConstraint::Axis(axis).contains(point - start) {
+                            continue;
+                        }
+                        point
+                    }
+                    Some((start, AxisConstraint::Plane(normal)))
+                        if direction.dot(normal.vector()).abs() > 1e-9 =>
+                    {
+                        guide.origin
+                            + direction
+                                * ((start - guide.origin).dot(normal.vector())
+                                    / direction.dot(normal.vector()))
+                    }
+                    _ => {
+                        let Some(point) = ray.axis(guide.origin, direction) else {
+                            continue;
+                        };
+                        point
+                    }
+                },
+            };
+            if start
+                .zip(constraint)
+                .is_some_and(|(start, constraint)| !constraint.contains(point - start))
+            {
+                continue;
+            }
+            let Some(screen) = self.doc.camera.project(point, size) else {
+                continue;
+            };
+            let distance = screen.distance(cursor);
+            if distance < 8. {
+                nearby.push((guide, point, distance));
+            }
+        }
+        // Intersections are exact targets even when the cursor is a few pixels away.
+        for (i, (a, _, _)) in nearby.iter().enumerate() {
+            let Some(ad) = a.direction else {
+                continue;
+            };
+            for (b, _, _) in &nearby[i + 1..] {
+                let Some(bd) = b.direction else {
+                    continue;
+                };
+                let Some(point) = (benchup_core::Ray {
+                    origin: a.origin,
+                    direction: ad,
+                })
+                .axis(b.origin, bd) else {
+                    continue;
+                };
+                if (point - a.origin).cross(ad).length() < 1e-6
+                    && start
+                        .zip(constraint)
+                        .is_none_or(|(start, c)| c.contains(point - start))
+                    && self
+                        .doc
+                        .camera
+                        .project(point, size)
+                        .is_some_and(|p| p.distance(cursor) < 11.)
+                {
+                    return Some(Snap {
+                        point,
+                        kind: Inference::GuidePoint,
+                    });
+                }
+            }
+        }
+        nearby
+            .into_iter()
+            .min_by(|a, b| {
+                a.0.direction
+                    .is_some()
+                    .cmp(&b.0.direction.is_some())
+                    .then(a.2.total_cmp(&b.2))
+            })
+            .map(|(guide, point, _)| Snap {
+                point,
+                kind: if guide.direction.is_some() {
+                    Inference::OnGuide
+                } else {
+                    Inference::GuidePoint
+                },
+            })
+    }
+
+    pub(super) fn tape_reference_direction(&self, snap: Snap) -> Option<DVec3> {
+        if snap.kind == Inference::OnGuide {
+            return self
+                .doc
+                .model
+                .guides
+                .iter()
+                .filter(|(id, _)| !self.doc.model.is_hidden(**id))
+                .find_map(|(_, g)| {
+                    let direction = g.direction?;
+                    ((snap.point - g.origin).cross(direction).length() < 1e-6).then_some(direction)
+                });
+        }
+        if !matches!(
+            snap.kind,
+            Inference::OnEdge | Inference::Midpoint | Inference::Origin
+        ) {
+            return None;
+        }
+        let nearby = self.picking_cache.reference_edges(
+            &self.face_cache,
+            &self.entity_cache,
+            &self.doc.camera,
+            dv(self.viewport.size()),
+            snap.point,
+        );
+        let edges: Vec<_> = if let Some(ids) = nearby {
+            ids.into_iter()
+                .filter_map(|id| self.doc.model.edges.get(&id))
+                .collect()
+        } else {
+            self.doc.model.edges.values().collect()
+        };
+        edges
+            .into_iter()
+            .filter(|e| !self.doc.model.is_hidden(e.id))
+            .find_map(|e| {
+                let (a, b) = self.doc.model.points(e);
+                let direction = (b - a).normalize();
+                let t = (snap.point - a).dot(direction);
+                (t > 1e-7
+                    && t < a.distance(b) - 1e-7
+                    && (snap.point - a).cross(direction).length() < 1e-6)
+                    .then_some(direction)
+            })
+    }
+
+    pub(super) fn delete_construction_guides(&mut self, ctx: &egui::Context) {
+        let before = self.doc.model.clone();
+        self.doc.model.clear_guides();
+        self.finish_edit(tr!("construction_guides.delete_guides"), before, ctx);
+    }
+
+    pub(super) fn paint_construction_guides(&self, p: &egui::Painter, rect: Rect) {
+        if !self.doc.display.guides {
+            return;
+        }
+        let model = self
+            .history_preview
+            .as_ref()
+            .or_else(|| {
+                self.modeling
+                    .as_ref()
+                    .and_then(|edit| edit.preview.as_ref())
+            })
+            .unwrap_or(&self.doc.model);
+        let colors = Palette::for_painter(p);
+        for (id, guide) in model.guides.iter().filter(|(id, _)| !model.is_hidden(**id)) {
+            let hovered = self.hover.is_some() && self.hover == model.entity_in_context(*id);
+            let (color, width) = if self.entity_cache.selected(model, *id, &self.selected) {
+                (colors.accent, 2.5)
+            } else if hovered {
+                (colors.green, 2.)
+            } else {
+                (GUIDE_COLOR, 1.5)
+            };
+            self.paint_construction_guide(p, rect, guide, color, width);
+        }
+        if let Some(preview) = &self.paste_preview {
+            let offset = preview.point - preview.clipboard.anchor;
+            for (id, guide) in &preview.clipboard.model.guides {
+                if preview.clipboard.model.is_hidden(*id) {
+                    continue;
+                }
+                let mut guide = guide.clone();
+                guide.origin += offset;
+                self.paint_construction_guide(p, rect, &guide, GUIDE_COLOR, 1.5);
+            }
+        }
+        if self.history_preview.is_none()
+            && self.create_guides
+            && matches!(self.tool, Tool::TapeMeasure | Tool::Protractor)
+            && self
+                .measurement
+                .as_ref()
+                .is_some_and(|m| !m.complete || !self.length_input.is_empty())
+            && let Some(guide) = self.measurement_guide()
+        {
+            self.paint_construction_guide(p, rect, &guide, GUIDE_COLOR, 1.5);
+        }
+    }
+
+    fn paint_construction_guide(
+        &self,
+        p: &egui::Painter,
+        rect: Rect,
+        guide: &ConstructionGuide,
+        color: Color32,
+        width: f32,
+    ) {
+        let camera = &self.doc.camera;
+        let size = dv(rect.size());
+        if guide.direction.is_some() {
+            if let Some((a, b)) = guide.screen_segment(camera, size) {
+                p.extend(egui::Shape::dashed_line(
+                    &[rect.min + pv(a), rect.min + pv(b)],
+                    Stroke::new(width, color),
+                    6.,
+                    4.,
+                ));
+            }
+        } else if let Some(point) = camera.project(guide.origin, size) {
+            let point = rect.min + pv(point);
+            for delta in [egui::vec2(4., 4.), egui::vec2(4., -4.)] {
+                p.line_segment([point - delta, point + delta], Stroke::new(width, color));
+            }
+        }
+    }
+}

@@ -15,14 +15,14 @@ import tempfile
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
-APP_ID = "io.github.Ketchup3D.Ketchup"
+APP_ID = "io.github.BenchUp3D.BenchUp"
 VPK_VERSION = "1.2.161"  # Must match the exact Rust dependency.
 RELEASE_NOTES = ROOT / "assets/release-notes.json"
 STABLE_VERSION = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
 PLATFORMS = {
-    "windows-x64": ("win-x64", "ketchup-app.exe", "favicon.ico", ".exe"),
-    "macos-arm64": ("osx-arm64", "ketchup-app", "ketchup.icns", ".pkg"),
-    "linux-x64": ("linux-x64", "ketchup-app", "icon-256.png", ".AppImage"),
+    "windows-x64": ("win-x64", "benchup-app.exe", "favicon.ico", ".exe"),
+    "macos-arm64": ("osx-arm64", "benchup-app", "benchup.icns", ".pkg"),
+    "linux-x64": ("linux-x64", "benchup-app", "icon-256.png", ".AppImage"),
 }
 
 
@@ -32,7 +32,7 @@ def version(tag):
         raise ValueError("Desktop releases require a stable version tag such as v0.1.0.")
     if tag != f"v{current}":
         raise ValueError(f"Tag {tag} must match Cargo.toml version v{current}.")
-    dependency = tomllib.loads((ROOT / "crates/ketchup-app/Cargo.toml").read_text())["target"][
+    dependency = tomllib.loads((ROOT / "crates/benchup-app/Cargo.toml").read_text())["target"][
         'cfg(not(target_arch = "wasm32"))'
     ]["dependencies"]["velopack"]
     if dependency != f"={VPK_VERSION}":
@@ -80,7 +80,7 @@ def release_notes(current):
 
 
 def format_notes(release):
-    lines = [f"# KetchUp3D {release['version']} — {release['title']}", "", release["date"]]
+    lines = [f"# BenchUp {release['version']} — {release['title']}", "", release["date"]]
     for section in release["sections"]:
         lines += ["", f"## {section['title']}", ""]
         lines += [f"- {change}" for change in section["changes"]]
@@ -88,9 +88,9 @@ def format_notes(release):
 
 
 def signing_required():
-    value = os.environ.get("KETCHUP_REQUIRE_SIGNING", "").lower()
+    value = os.environ.get("BENCHUP_REQUIRE_SIGNING", os.environ.get("KETCHUP_REQUIRE_SIGNING", "")).lower()
     if value not in ("", "true", "false"):
-        raise ValueError("KETCHUP_REQUIRE_SIGNING must be true or false.")
+        raise ValueError("BENCHUP_REQUIRE_SIGNING must be true or false.")
     return value == "true"
 
 
@@ -100,15 +100,17 @@ def package(platform, tag, pack_dir, output_dir):
     if not (pack_dir / executable).is_file():
         raise ValueError(f"Missing staged executable: {pack_dir / executable}")
     args = [
-        "vpk", "pack", "--packId", APP_ID, "--packTitle", "KetchUp3D",
-        "--packAuthors", "Ketchup3D", "--packVersion", current,
+        "vpk", "pack", "--packId", APP_ID, "--packTitle", "BenchUp",
+        "--packAuthors", "BenchUp", "--packVersion", current,
         "--packDir", str(pack_dir.resolve()), "--mainExe", executable,
         "--runtime", runtime, "--channel", runtime,
+        # Old 0.6.5 clients must replace the entire app across the identity change.
+        "--delta", "None",
         "--icon", str(ROOT / "assets/branding" / icon),
         "--outputDir", str(output_dir.resolve()),
     ]
     # Keep credentials out of the repository, staged application, and arguments.
-    with tempfile.TemporaryDirectory(prefix="ketchup-signing-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="benchup-signing-") as temporary:
         if platform == "windows-x64":
             credentials = os.environ.get("AZURE_CREDENTIALS", "")
             signing = os.environ.get("WINDOWS_AZURE_SIGNING", "")
@@ -127,7 +129,7 @@ def package(platform, tag, pack_dir, output_dir):
             args += ["--framework", "vcredist143-x64"]
         elif platform == "macos-arm64":
             args += ["--bundleId", APP_ID]
-            names = ("MACOS_SIGN_APP_IDENTITY", "MACOS_SIGN_INSTALL_IDENTITY", "KETCHUP_MACOS_KEYCHAIN", "KETCHUP_MACOS_NOTARY_PROFILE")
+            names = ("MACOS_SIGN_APP_IDENTITY", "MACOS_SIGN_INSTALL_IDENTITY", "BENCHUP_MACOS_KEYCHAIN", "BENCHUP_MACOS_NOTARY_PROFILE")
             values = [os.environ.get(name, "") for name in names]
             if any(values) and not all(values):
                 raise ValueError("macOS signing is incomplete; configure both identities, the keychain, and the notary profile.")
@@ -145,6 +147,8 @@ def validate_assets(directory, current, platforms):
         channel, _, _, installer_suffix = PLATFORMS[platform]
         feed = directory / f"releases.{channel}.json"
         assets = json.loads(feed.read_text(encoding="utf-8-sig"))["Assets"]
+        if any(asset["Type"].lower() == "delta" for asset in assets):
+            raise ValueError(f"Migration feeds must contain full packages only: {channel}.")
         full = [asset for asset in assets if asset["Type"] == "Full" and asset["Version"] == current]
         if len(full) != 1:
             raise ValueError(f"Expected exactly one full update for {channel} {current}.")

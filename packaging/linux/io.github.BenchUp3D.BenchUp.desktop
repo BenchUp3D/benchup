@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=BenchUp
+GenericName=3D Modeler
+Comment=A precise little space for your next big idea
+Exec=benchup-app
+Icon=io.github.BenchUp3D.BenchUp
+Terminal=false
+Categories=Graphics;3DGraphics;
+Keywords=3D;modeling;drawing;
+StartupNotify=true
+StartupWMClass=benchup-app

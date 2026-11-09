@@ -147,8 +147,8 @@ def main():
     if not sys.platform.startswith("linux") or not shutil.which("import"):
         parser.error("Desktop capture requires Linux X11/XWayland and ImageMagick import.")
     candidates = [args.binary.expanduser().resolve()] if args.binary else [
-        *ROOT.glob("target/*/release/ketchup-app"), ROOT / "target/release/ketchup-app",
-        ROOT / "target/debug/ketchup-app",
+        *ROOT.glob("target/*/release/benchup-app"), ROOT / "target/release/benchup-app",
+        ROOT / "target/debug/benchup-app",
     ]
     candidates = [path for path in candidates if path.is_file() and os.access(path, os.X_OK)]
     if not candidates:
@@ -156,14 +156,14 @@ def main():
     binary = max(candidates, key=lambda path: path.stat().st_mtime_ns)
     desktop = Desktop()
     try:
-        with tempfile.TemporaryDirectory(prefix="ketchup-readme-desktop-") as folder:
+        with tempfile.TemporaryDirectory(prefix="benchup-readme-desktop-") as folder:
             profile = Path(folder)
-            shutil.copyfile(ROOT / "assets/examples/Example.ketchup", profile / "model.json")
-            environment = dict(os.environ, KETCHUP_DATA_DIR=folder,
+            shutil.copyfile(ROOT / "assets/examples/Example.bup", profile / "model.json")
+            environment = dict(os.environ, BENCHUP_DATA_DIR=folder,
                 XDG_DATA_HOME=str(profile / "data"), XDG_CONFIG_HOME=str(profile / "config"),
                 XDG_CACHE_HOME=str(profile / "cache"), WINIT_UNIX_BACKEND="x11")
-            for key in ("WAYLAND_DISPLAY", "KETCHUP_VIEWPORT_BENCHMARK",
-                        "KETCHUP_BENCH_EDIT_JOINERY", "KETCHUP_BENCH_PROFILE"):
+            for key in ("WAYLAND_DISPLAY", "BENCHUP_VIEWPORT_BENCHMARK",
+                        "BENCHUP_BENCH_EDIT_JOINERY", "BENCHUP_BENCH_PROFILE"):
                 environment.pop(key, None)
             with (profile / "application.log").open("w+") as log:
                 process = subprocess.Popen([str(binary)], cwd=ROOT, env=environment,
@@ -182,17 +182,17 @@ def main():
                     stable_frame(window, process)
                     desktop.dismiss_modals(window)
                     image = stable_frame(window, process)
-                    destination = ROOT / "assets/screenshots/ketchup.jpg"
+                    destination = ROOT / "assets/screenshots/benchup.jpg"
                     temporary = destination.with_suffix(".jpg.tmp")
                     image.save(temporary, format="JPEG", quality=92)
                     temporary.replace(destination)
                     readme = ROOT / "README.md"
                     text = readme.read_text()
-                    link = "![KetchUp3D editor screenshot](assets/screenshots/ketchup.jpg)"
-                    if re.search(r"!\[KetchUp3D editor screenshot\]\([^)]*\)", text):
-                        updated = re.sub(r"!\[KetchUp3D editor screenshot\]\([^)]*\)", link, text)
+                    link = "![BenchUp editor screenshot](assets/screenshots/benchup.jpg)"
+                    if re.search(r"!\[BenchUp editor screenshot\]\([^)]*\)", text):
+                        updated = re.sub(r"!\[BenchUp editor screenshot\]\([^)]*\)", link, text)
                     else:
-                        updated = text.replace("# KetchUp3D\n", f"# KetchUp3D\n\n{link}\n", 1)
+                        updated = text.replace("# BenchUp\n", f"# BenchUp\n\n{link}\n", 1)
                     if link not in updated:
                         raise RuntimeError("README title not found.")
                     if updated != text:

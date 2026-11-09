@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  KETCHUP_UPDATE_REPOSITORY: ${{ github.repository }}
+  BENCHUP_UPDATE_REPOSITORY: ${{ github.repository }}
   CARGO_TERM_COLOR: always
   VPK_VERSION: '1.2.161'
 
@@ -34,6 +34,12 @@ jobs:
         run: |
           python scripts/desktop_release.py version --tag "$TAG_NAME"
           python -m unittest discover -s scripts -p 'test_desktop_release.py'
+          python -m unittest discover -s scripts -p 'test_verify_update_transfer.py'
+
+      - name: Verify old updater URLs survived the repository transfer
+        env:
+          SOURCE_REPOSITORY: ${{ github.repository }}
+        run: python scripts/verify_update_transfer.py --repository "$SOURCE_REPOSITORY"
 
   build:
     name: Build ${{ matrix.platform }}
@@ -47,15 +53,15 @@ jobs:
           - platform: windows-x64
             os: windows-2022
             target: x86_64-pc-windows-msvc
-            executable: ketchup-app.exe
+            executable: benchup-app.exe
           - platform: macos-arm64
             os: macos-15
             target: aarch64-apple-darwin
-            executable: ketchup-app
+            executable: benchup-app
           - platform: linux-x64
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            executable: ketchup-app
+            executable: benchup-app
 
     defaults:
       run:
@@ -63,7 +69,7 @@ jobs:
 
     env:
       TAG_NAME: ${{ github.ref_name }}
-      KETCHUP_REQUIRE_SIGNING: ${{ vars.KETCHUP_REQUIRE_SIGNING }}
+      BENCHUP_REQUIRE_SIGNING: ${{ vars.BENCHUP_REQUIRE_SIGNING || vars.KETCHUP_REQUIRE_SIGNING }}
       AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
       WINDOWS_AZURE_SIGNING: ${{ secrets.WINDOWS_AZURE_SIGNING }}
       MACOS_SIGN_APP_IDENTITY: ${{ secrets.MACOS_SIGN_APP_IDENTITY }}
@@ -122,19 +128,27 @@ jobs:
           key: desktop-${{ matrix.target }}
 
       - name: Build release executable
-        run: cargo build -p ketchup-app --bin ketchup-app --release --locked --target "${{ matrix.target }}"
+        run: cargo build -p benchup-app --bin benchup-app --release --locked --target "${{ matrix.target }}"
 
       - name: Test update and restart behavior
         run: |
-          cargo test -p ketchup-app --lib --release --locked --target "${{ matrix.target }}" updates::
+          cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" updates::
+
+      - name: Test identity migration and project compatibility
+        run: |
+          cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" update_repository::
+          cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" identity::
+          cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" storage::
+          cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" project_files::
+          cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" server_config::
 
       - name: Stage distribution
         run: |
           mkdir -p dist package/licenses/skp
           cp "target/${{ matrix.target }}/release/${{ matrix.executable }}" package/
           cp LICENSE README.md package/
-          cp crates/ketchup-app/vendor/skp/LICENSE* package/licenses/skp/
-          cp crates/ketchup-app/vendor/skp/native/miniz/LICENSE package/licenses/skp/LICENSE-miniz
+          cp crates/benchup-app/vendor/skp/LICENSE* package/licenses/skp/
+          cp crates/benchup-app/vendor/skp/native/miniz/LICENSE package/licenses/skp/LICENSE-miniz
 
       - name: Create installer and update feed
         run: python scripts/desktop_release.py package --tag "$TAG_NAME" --platform "${{ matrix.platform }}"
@@ -142,14 +156,14 @@ jobs:
       - name: Remove temporary macOS keychain
         if: always() && runner.os == 'macOS'
         run: |
-          if [ -f "$RUNNER_TEMP/ketchup-signing.keychain-db" ]; then
-            security delete-keychain "$RUNNER_TEMP/ketchup-signing.keychain-db"
+          if [ -f "$RUNNER_TEMP/benchup-signing.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/benchup-signing.keychain-db"
           fi
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ketchup-${{ matrix.platform }}
+          name: benchup-${{ matrix.platform }}
           path: dist/*
           if-no-files-found: error
           retention-days: 14
@@ -175,7 +189,7 @@ jobs:
       - name: Download desktop packages
         uses: actions/download-artifact@v8
         with:
-          pattern: ketchup-*
+          pattern: benchup-*
           path: dist
           merge-multiple: true
 

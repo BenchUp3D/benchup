@@ -1,0 +1,13 @@
+{
+  "Assets": [
+    {
+      "PackageId": "io.github.BenchUp3D.BenchUp",
+      "Version": "0.6.6",
+      "Type": "Full",
+      "FileName": "io.github.BenchUp3D.BenchUp-0.6.6-osx-arm64-full.nupkg",
+      "Size": 660,
+      "SHA1": "e8d5a45199b95ba949c021a974ea891a5bad3a4b",
+      "SHA256": "68eba1898e89fc41796f547b854f6b00b32dde8cfa92b9bf1bef2b0689496dcf"
+    }
+  ]
+}

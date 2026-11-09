@@ -3,4 +3,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://ketchup3d.github.io/app/sitemap.xml
+Sitemap: https://benchup3d.github.io/editor/sitemap.xml

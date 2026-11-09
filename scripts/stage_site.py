@@ -10,12 +10,12 @@ import shutil
 from urllib.parse import urlsplit
 from xml.sax.saxutils import escape
 
-DEFAULT_URL = "https://ketchup3d.github.io/app/"
+DEFAULT_URL = "https://benchup3d.github.io/editor/"
 FILES = ("index.html", "styles.css", "llms.txt", "robots.txt", "sitemap.xml")
 
 
 def stage(source: Path, destination: Path, base_url: str, repository: str | None = None) -> None:
-    repository = repository or os.environ.get("GITHUB_REPOSITORY", "Ketchup3D/app")
+    repository = repository or os.environ.get("GITHUB_REPOSITORY", "BenchUp3D/editor")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ValueError("Repository must be a GitHub owner/repository")
     repository_url = "https://github.com/" + repository
@@ -27,7 +27,7 @@ def stage(source: Path, destination: Path, base_url: str, repository: str | None
         raise ValueError("GitHub Pages must supply an HTTPS public URL without credentials, query, or fragment")
     destination.mkdir(parents=True, exist_ok=True)
     for name in FILES:
-        content = (source / name).read_text().replace("https://github.com/Ketchup3D/app", repository_url)
+        content = (source / name).read_text().replace("https://github.com/BenchUp3D/editor", repository_url)
         if name == "index.html":
             # JSON-LD needs JSON escaping; HTML attributes need HTML escaping.
             before, script = content.split('<script type="application/ld+json">', 1)

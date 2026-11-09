@@ -1,10 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
-  <title id="title">KetchUp3D</title>
-  <polygon fill="#F07961" points="28,39 43,30 57,30 42,39"/>
-  <polygon fill="#A62E25" points="42,39 57,30 57,51 42,60"/>
-  <polygon fill="#F07961" points="62,39 77,30 95,30 80,39"/>
-  <polygon fill="#A62E25" points="80,39 95,30 70,57 55,66"/>
-  <polygon fill="#F07961" points="55,66 70,57 98,88 83,97"/>
-  <polygon fill="#A62E25" points="42,73 57,64 57,88 42,97"/>
-  <polygon fill="#D94836" points="28,39 42,39 42,60 62,39 80,39 55,66 83,97 64,97 42,73 42,97 28,97"/>
+  <title id="title">BenchUp</title>
+  <polygon fill="#F07961" points="28,54 40,46 54,46 42,54"/>
+  <polygon fill="#A62E25" points="42,54 54,46 54,86 42,94"/>
+  <polygon fill="#F07961" points="74,54 86,46 100,46 88,54"/>
+  <polygon fill="#A62E25" points="88,54 100,46 100,86 88,94"/>
+  <polygon fill="#F07961" points="42,72 54,64 86,64 74,72"/>
+  <polygon fill="#A62E25" points="74,72 86,64 86,74 74,82"/>
+  <polygon fill="#F07961" points="20,42 32,34 108,34 96,42"/>
+  <polygon fill="#A62E25" points="96,42 108,34 108,48 96,56"/>
+  <polygon fill="#D94836" points="28,54 42,54 42,94 28,94"/>
+  <polygon fill="#D94836" points="74,54 88,54 88,94 74,94"/>
+  <polygon fill="#D94836" points="42,72 74,72 74,82 42,82"/>
+  <polygon fill="#D94836" points="20,42 96,42 96,56 20,56"/>
 </svg>

@@ -41,7 +41,7 @@ TOOLS = {
 WORKFLOWS = {
     "Projects: New / Save / Discard / Cancel": "new_project_save_discard_and_cancel_buttons",
     "Open / invalid and cancelled files": "failed_or_cancelled_file_operations",
-    "Save / Save As / atomic replacement": "ketchup_files_round_trip_complete_projects",
+    "Save / Save As / atomic replacement": "benchup_files_round_trip_complete_projects",
     "Native autosave / corruption / write failure / recovery": "native_autosave_roundtrip",
     "SketchUp import / hierarchy / holes / materials / units": "skp_import_preserves_nested_geometry",
     "OBJ export / holes / visibility": "obj_export_preserves_hole_area",
@@ -107,12 +107,12 @@ def test_results(log):
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="ketchup-feature-audit-") as directory:
-        env = dict(os.environ, KETCHUP_DATA_DIR=directory)
+    with tempfile.TemporaryDirectory(prefix="benchup-feature-audit-") as directory:
+        env = dict(os.environ, BENCHUP_DATA_DIR=directory)
         commands = [
             ("rust", ["cargo", "test", "--workspace", "--locked", "--config",
-                      "profile.test.package.ketchup-app.opt-level=2", "--config",
-                      "profile.test.package.ketchup-core.opt-level=2", "--",
+                      "profile.test.package.benchup-app.opt-level=2", "--config",
+                      "profile.test.package.benchup-core.opt-level=2", "--",
                       "--include-ignored", "--test-threads=1", "--show-output"]),
             ("workers", ["node", "--test", "scripts/test_skp_import.cjs"]),
             ("format", ["cargo", "fmt", "--all", "--", "--check"]),
@@ -133,7 +133,7 @@ def main():
         return {"feature": name, "status": "passed" if tests and all(s == "ok" for s in tests.values()) else "unverified-or-failed", "tests": tests}
 
     features = [evidence(name, pattern) for name, pattern in {**TOOLS, **WORKFLOWS}.items()]
-    fields = re.findall(r"pub (\w+):", (ROOT / "crates/ketchup-core/src/display.rs").read_text().split("impl Default")[0])
+    fields = re.findall(r"pub (\w+):", (ROOT / "crates/benchup-core/src/display.rs").read_text().split("impl Default")[0])
     field_results = []
     for field in fields:
         pairs = {key: value for key, value in comparisons.items()
@@ -157,7 +157,7 @@ def main():
               "tool_cpu": tool_times, "display_cpu_ms": display_times,
               "gpu_comparisons": comparisons, "limitations": limitations}
     (OUT / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-    lines = ["KetchUp3D feature audit", report["timestamp_utc"], report["platform"],
+    lines = ["BenchUp feature audit", report["timestamp_utc"], report["platform"],
              f"Automated checks: {'PASS' if passed else 'FAIL / INCOMPLETE'}",
              f"Rust tests: {sum(s == 'ok' for s in results.values())} passed / {len(results)} recorded",
              f"Worker tests: {len(worker_results)} passed", "", "Feature evidence:"]

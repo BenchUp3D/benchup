@@ -28,7 +28,7 @@ class StageSiteTests(unittest.TestCase):
                 self.assertEqual([node.text for node in locations], [url])
                 self.assertIn(url + 'sitemap.xml', (target / 'robots.txt').read_text())
                 self.assertIn(f'({url})', (target / 'llms.txt').read_text())
-                self.assertTrue((target / 'assets/screenshots/ketchup.png').is_file())
+                self.assertTrue((target / 'assets/screenshots/benchup.png').is_file())
                 self.assertEqual((target / 'play/index.html').read_text(), 'existing editor')
                 if base != DEFAULT_URL:
                     for name in FILES:
@@ -40,12 +40,12 @@ class StageSiteTests(unittest.TestCase):
             target = Path(directory)
             stage(source, target, 'https://fork.example.org/', 'someone/wood-editor')
             for name in FILES:
-                self.assertNotIn('https://github.com/Ketchup3D/app', (target / name).read_text())
+                self.assertNotIn('https://github.com/BenchUp3D/editor', (target / name).read_text())
             page = (target / 'index.html').read_text()
             self.assertIn('https://github.com/someone/wood-editor/releases/latest', page)
             self.assertIn('https://github.com/someone/wood-editor/blob/main/LICENSE', page)
-            self.assertIn('https://fork.example.org/assets/screenshots/ketchup.jpg', page)
-            self.assertTrue((target / 'assets/screenshots/ketchup.jpg').is_file())
+            self.assertIn('https://fork.example.org/assets/screenshots/benchup.jpg', page)
+            self.assertTrue((target / 'assets/screenshots/benchup.jpg').is_file())
 
     def test_reject_invalid_public_urls(self):
         for url in ('http://example.org', 'https://', 'https://user:secret@example.org',

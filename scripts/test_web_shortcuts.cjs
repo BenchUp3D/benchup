@@ -48,7 +48,7 @@ function createWorkspace({keyboardSupported = true, pointerSupported = true, leg
     const document = {
         fullscreenElement: null,
         pointerLockElement: null,
-        getElementById: id => ({'ketchup-workspace': workspace, 'ketchup-canvas': canvas})[id],
+        getElementById: id => ({'benchup-workspace': workspace, 'benchup-canvas': canvas})[id],
         addEventListener(type, callback) { listen(documentListeners, type, callback); },
         async exitFullscreen() {
             calls.exitFullscreen++;
@@ -132,7 +132,7 @@ function cancelled(key, options = {}) {
 }
 
 test('canvas and eframe sibling input share the capture listener', () => {
-    assert.match(html, /<div id="ketchup-workspace">\s*<canvas[^>]*id="ketchup-canvas"[^>]*><\/canvas>\s*<\/div>/);
+    assert.match(html, /<div id="benchup-workspace">\s*<canvas[^>]*id="benchup-canvas"[^>]*><\/canvas>\s*<\/div>/);
 });
 
 test('app commands cancel browser defaults on canvas and in text fields', () => {

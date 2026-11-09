@@ -1,0 +1,938 @@
+//! A shared document with independently framed cameras. Tools use the active
+//! document camera while every view shares the model, selection and history.
+use benchup_core::tr;
+use super::*;
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(super) enum Layout {
+    Pane {
+        id: u64,
+        tabs: Vec<u64>,
+        selected: u64,
+    },
+    Split {
+        id: u64,
+        horizontal: bool,
+        ratio: f32,
+        first: Box<Layout>,
+        second: Box<Layout>,
+    },
+}
+
+impl Default for Layout {
+    fn default() -> Self {
+        Self::Pane {
+            id: 0,
+            tabs: vec![0],
+            selected: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(super) struct Preferences {
+    layout: Layout,
+    active: u64,
+    next_id: u64,
+    cameras: BTreeMap<u64, sidebar::CameraPreferences>,
+    names: BTreeMap<u64, String>,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            layout: Layout::default(),
+            active: 0,
+            next_id: 1,
+            cameras: BTreeMap::new(),
+            names: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct TouchZoom {
+    contacts: BTreeMap<(egui::TouchDeviceId, egui::TouchId), (Pos2, Option<u64>)>,
+    owner: Option<u64>,
+    captured: bool,
+    baseline: Option<(f32, Pos2)>,
+}
+
+impl TouchZoom {
+    fn pair(&self) -> Option<(f32, Pos2)> {
+        if self.contacts.len() != 2 { return None; }
+        let mut contacts = self.contacts.iter();
+        let (a_id, a) = contacts.next()?;
+        let (b_id, b) = contacts.next()?;
+        (a_id.0 == b_id.0 && a.1.is_some() && a.1 == b.1 && a.1 == self.owner)
+            .then_some((a.0.distance(b.0), a.0 + (b.0 - a.0) * 0.5))
+    }
+
+    fn motion(&mut self) -> (Vec2, f64, Option<Pos2>) {
+        let Some((distance, center)) = self.pair() else {
+            self.baseline = None;
+            return (Vec2::ZERO, 0., None);
+        };
+        let (old_distance, old_center) = *self.baseline.get_or_insert((distance, center));
+        let translation = center - old_center;
+        let separation = (distance - old_distance).abs();
+        // Compare complete contact snapshots, never individual finger events:
+        // otherwise parallel movement briefly looks like a pinch. Accumulate
+        // sub-threshold movement so slow deliberate gestures still work.
+        let zooming = old_distance > 1. && distance > 1.
+            && separation > 2.0_f32.max(old_distance * 0.01).max(translation.length() * 0.3);
+        let panning = translation.length() > 2.0_f32.max(separation * 0.35);
+        if zooming || panning { self.baseline = Some((distance, center)); }
+        (if panning { translation } else { Vec2::ZERO },
+            if zooming { (distance as f64 / old_distance as f64).ln() / 0.002 } else { 0. },
+            Some(center))
+    }
+}
+
+pub(super) struct Workspace {
+    layout: Layout,
+    active: u64,
+    next_id: u64,
+    touch_zoom: TouchZoom,
+    cameras: BTreeMap<u64, Camera>,
+    scene_caches: BTreeMap<u64, renderer::SceneCache>,
+    names: BTreeMap<u64, String>,
+    dragging: Option<u64>,
+    pub(super) renaming: Option<(u64, String)>,
+}
+
+impl Default for Workspace {
+    fn default() -> Self {
+        Self {
+            layout: Layout::default(),
+            active: 0,
+            next_id: 1,
+            touch_zoom: TouchZoom::default(),
+            cameras: BTreeMap::new(),
+            scene_caches: BTreeMap::new(),
+            names: BTreeMap::new(),
+            dragging: None,
+            renaming: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DropSide {
+    Center,
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+struct PaneRect {
+    id: u64,
+    selected: u64,
+    rect: Rect,
+}
+
+impl Layout {
+    fn pane_mut(&mut self, pane: u64) -> Option<&mut Self> {
+        match self {
+            Self::Pane { id, .. } if *id == pane => Some(self),
+            Self::Split { first, second, .. } => {
+                first.pane_mut(pane).or_else(|| second.pane_mut(pane))
+            }
+            _ => None,
+        }
+    }
+
+    fn pane_for_tab(&self, tab: u64) -> Option<u64> {
+        match self {
+            Self::Pane { id, tabs, .. } if tabs.contains(&tab) => Some(*id),
+            Self::Split { first, second, .. } => {
+                first.pane_for_tab(tab).or_else(|| second.pane_for_tab(tab))
+            }
+            _ => None,
+        }
+    }
+
+    fn select(&mut self, tab: u64) -> bool {
+        match self {
+            Self::Pane { tabs, selected, .. } if tabs.contains(&tab) => {
+                *selected = tab;
+                true
+            }
+            Self::Split { first, second, .. } => first.select(tab) || second.select(tab),
+            _ => false,
+        }
+    }
+
+    fn remove(&mut self, tab: u64) {
+        match self {
+            Self::Pane { tabs, selected, .. } => {
+                tabs.retain(|id| *id != tab);
+                if *selected == tab {
+                    *selected = tabs.first().copied().unwrap_or(0);
+                }
+            }
+            Self::Split { first, second, .. } => {
+                first.remove(tab);
+                second.remove(tab);
+                if first.empty() {
+                    *self = *second.clone();
+                } else if second.empty() {
+                    *self = *first.clone();
+                }
+            }
+        }
+    }
+
+    fn empty(&self) -> bool {
+        matches!(self, Self::Pane { tabs, .. } if tabs.is_empty())
+    }
+
+    fn tabs(&self, ids: &mut Vec<u64>) {
+        match self {
+            Self::Pane { tabs, .. } => ids.extend(tabs),
+            Self::Split { first, second, .. } => {
+                first.tabs(ids);
+                second.tabs(ids);
+            }
+        }
+    }
+
+    // Validate saved trees before using their IDs or recursively laying them out.
+    fn valid(&self, depth: usize, ids: &mut BTreeSet<u64>, panes: &mut BTreeSet<u64>) -> bool {
+        if depth > 16 {
+            return false;
+        }
+        match self {
+            Self::Pane { id, tabs, selected } => {
+                *id < u64::MAX - 1
+                    && panes.insert(*id)
+                    && !tabs.is_empty()
+                    && tabs.contains(selected)
+                    && tabs.iter().all(|id| *id < u64::MAX - 1 && ids.insert(*id))
+            }
+            Self::Split {
+                id,
+                ratio,
+                first,
+                second,
+                ..
+            } => {
+                *id < u64::MAX - 1
+                    && panes.insert(*id)
+                    && ratio.is_finite()
+                    && (0.1..=0.9).contains(ratio)
+                    && first.valid(depth + 1, ids, panes)
+                    && second.valid(depth + 1, ids, panes)
+            }
+        }
+    }
+
+    fn rectangles(&mut self, ui: &mut egui::Ui, rect: Rect, panes: &mut Vec<PaneRect>) {
+        match self {
+            Self::Pane { id, selected, .. } => panes.push(PaneRect {
+                id: *id,
+                selected: *selected,
+                rect,
+            }),
+            Self::Split {
+                id,
+                horizontal,
+                ratio,
+                first,
+                second,
+            } => {
+                let span = if *horizontal {
+                    rect.width()
+                } else {
+                    rect.height()
+                };
+                let available = (span - 6.).max(0.);
+                let offset = available * *ratio;
+                let (a, divider, b) = if *horizontal {
+                    let x = rect.left() + offset;
+                    (
+                        Rect::from_min_max(rect.min, egui::pos2(x, rect.bottom())),
+                        Rect::from_min_max(
+                            egui::pos2(x, rect.top()),
+                            egui::pos2(x + 6., rect.bottom()),
+                        ),
+                        Rect::from_min_max(egui::pos2(x + 6., rect.top()), rect.max),
+                    )
+                } else {
+                    let y = rect.top() + offset;
+                    (
+                        Rect::from_min_max(rect.min, egui::pos2(rect.right(), y)),
+                        Rect::from_min_max(
+                            egui::pos2(rect.left(), y),
+                            egui::pos2(rect.right(), y + 6.),
+                        ),
+                        Rect::from_min_max(egui::pos2(rect.left(), y + 6.), rect.max),
+                    )
+                };
+                let response = ui.interact(
+                    divider,
+                    ui.scope_id().with(("viewport-divider", *id)),
+                    Sense::drag(),
+                );
+                if response.dragged() && available > 1. {
+                    let delta = ui.input(|i| {
+                        if *horizontal {
+                            i.pointer.delta().x
+                        } else {
+                            i.pointer.delta().y
+                        }
+                    });
+                    *ratio = (*ratio + delta / available).clamp(0.1, 0.9);
+                }
+                response.on_hover_cursor(if *horizontal {
+                    egui::CursorIcon::ResizeHorizontal
+                } else {
+                    egui::CursorIcon::ResizeVertical
+                });
+                ui.painter()
+                    .rect_filled(divider, 0, Palette::for_ui(ui).border);
+                first.rectangles(ui, a, panes);
+                second.rectangles(ui, b, panes);
+            }
+        }
+    }
+}
+
+impl Workspace {
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn resident_builds(&self) -> usize {
+        self.scene_caches.values().map(renderer::SceneCache::resident_builds).sum()
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn resident_shadow_builds(&self) -> usize {
+        self.scene_caches.values().map(renderer::SceneCache::resident_shadow_builds).sum()
+    }
+    fn name(&self, id: u64) -> String {
+        self.names.get(&id).cloned().unwrap_or_else(|| {
+            if id == 0 {
+                tr!("viewports.current").to_owned()
+            } else {
+                tr!("viewports.view", id = id)
+            }
+        })
+    }
+
+    pub(super) fn capture(&self, camera: &Camera) -> Preferences {
+        let mut cameras: BTreeMap<_, _> = self
+            .cameras
+            .iter()
+            .map(|(id, camera)| (*id, sidebar::CameraPreferences::capture(camera)))
+            .collect();
+        cameras.insert(self.active, sidebar::CameraPreferences::capture(camera));
+        Preferences {
+            layout: self.layout.clone(),
+            active: self.active,
+            next_id: self.next_id,
+            cameras,
+            names: self.names.clone(),
+        }
+    }
+
+    pub(super) fn restore(
+        preferences: &Preferences,
+        camera: &mut Camera,
+        saved: &BTreeMap<u64, Camera>,
+    ) -> Self {
+        let mut ids = BTreeSet::new();
+        let mut panes = BTreeSet::new();
+        if !preferences.layout.valid(0, &mut ids, &mut panes)
+            || !ids.contains(&preferences.active)
+            || panes.contains(&u64::MAX)
+        {
+            return Self::default();
+        }
+        let mut workspace = Self {
+            touch_zoom: TouchZoom::default(),
+            layout: preferences.layout.clone(),
+            active: preferences.active,
+            next_id: preferences.next_id.max(
+                ids.iter()
+                    .chain(panes.iter())
+                    .max()
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_add(1),
+            ),
+            names: preferences
+                .names
+                .iter()
+                .filter(|(id, name)| ids.contains(*id) && !name.trim().is_empty())
+                .map(|(id, name)| (*id, name.clone()))
+                .collect(),
+            cameras: ids
+                .into_iter()
+                .map(|id| {
+                    let mut view = saved
+                        .get(&id)
+                        .filter(|view| view.valid())
+                        .cloned()
+                        .unwrap_or_else(|| camera.clone());
+                    if let Some(preference) = preferences.cameras.get(&id) {
+                        preference.restore(&mut view);
+                    }
+                    (id, view)
+                })
+                .collect(),
+            scene_caches: BTreeMap::new(),
+            dragging: None,
+            renaming: None,
+        };
+        workspace.layout.select(workspace.active);
+        *camera = workspace.cameras[&workspace.active].clone();
+        workspace
+    }
+
+    pub(super) fn reframe_project(&mut self, camera: &Camera, saved: &BTreeMap<u64, Camera>) {
+        // Retain reusable orientations, never a different project's target/scale.
+        for (id, view) in &mut self.cameras {
+            if let Some(framing) = saved.get(id).filter(|view| view.valid()) {
+                *view = framing.clone();
+            } else {
+                view.target = camera.target;
+                view.distance = camera.distance;
+            }
+        }
+        self.cameras.insert(self.active, camera.clone());
+        self.dragging = None;
+    }
+
+    fn add(&mut self, pane: u64, camera: &Camera) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        if let Some(Layout::Pane { tabs, selected, .. }) = self.layout.pane_mut(pane) {
+            tabs.push(id);
+            *selected = id;
+        }
+        self.cameras.insert(id, camera.clone());
+        id
+    }
+
+    fn dock(&mut self, tab: u64, pane: u64, side: DropSide) {
+        let Some(Layout::Pane { tabs, .. }) = self.layout.pane_mut(pane) else {
+            return;
+        };
+        if tabs.contains(&tab) && (tabs.len() == 1 || side == DropSide::Center) {
+            return;
+        }
+        // A stack split leaves the original pane alive. Moving its last tab
+        // to another pane collapses the empty source branch.
+        if side == DropSide::Center {
+            self.layout.remove(tab);
+            if let Some(Layout::Pane { tabs, selected, .. }) = self.layout.pane_mut(pane) {
+                tabs.push(tab);
+                *selected = tab;
+            }
+        } else {
+            let new_pane = self.next_id;
+            self.next_id += 2;
+            let target = self.layout.pane_mut(pane).unwrap();
+            let mut original = target.clone();
+            // Remove locally first so the moved tab is not duplicated.
+            original.remove(tab);
+            self.layout.remove(tab);
+            let target = self.layout.pane_mut(pane).unwrap();
+            let fresh = Layout::Pane {
+                id: new_pane,
+                tabs: vec![tab],
+                selected: tab,
+            };
+            let before = matches!(side, DropSide::Left | DropSide::Top);
+            let (first, second) = if before {
+                (fresh, original)
+            } else {
+                (original, fresh)
+            };
+            *target = Layout::Split {
+                id: new_pane + 1,
+                horizontal: matches!(side, DropSide::Left | DropSide::Right),
+                ratio: 0.5,
+                first: Box::new(first),
+                second: Box::new(second),
+            };
+        }
+    }
+}
+
+fn drop_target(rect: Rect, pos: Pos2) -> (DropSide, Rect) {
+    let x = (pos.x - rect.left()) / rect.width().max(1.);
+    let y = (pos.y - rect.top()) / rect.height().max(1.);
+    let distances = [
+        (x, DropSide::Left),
+        (1. - x, DropSide::Right),
+        (y, DropSide::Top),
+        (1. - y, DropSide::Bottom),
+    ];
+    let (distance, side) = distances
+        .into_iter()
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .unwrap();
+    let side = if distance < 0.25 {
+        side
+    } else {
+        DropSide::Center
+    };
+    let mut preview = rect;
+    match side {
+        DropSide::Left => preview.max.x = rect.center().x,
+        DropSide::Right => preview.min.x = rect.center().x,
+        DropSide::Top => preview.max.y = rect.center().y,
+        DropSide::Bottom => preview.min.y = rect.center().y,
+        DropSide::Center => {}
+    }
+    (side, preview)
+}
+
+impl BenchUpApp {
+    pub(super) fn sync_viewport_cameras(&mut self) {
+        self.viewports
+            .cameras
+            .insert(self.viewports.active, self.doc.camera.clone());
+        self.doc.viewport_cameras = self.viewports.cameras.clone();
+    }
+
+    fn activate_viewport(&mut self, id: u64) {
+        if self.viewports.active == id {
+            return;
+        }
+        self.walk.reset();
+        self.viewports
+            .cameras
+            .insert(self.viewports.active, self.doc.camera.clone());
+        self.viewports.active = id;
+        self.viewports.layout.select(id);
+        self.doc.camera = self
+            .viewports
+            .cameras
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| self.doc.camera.clone());
+        self.viewport_pointer = None;
+        self.drawing_orbit_pivot = None;
+        self.hover = None;
+        self.flip_hover = None;
+        self.snap = None;
+    }
+
+    fn close_viewport(&mut self, tab: u64, ctx: &egui::Context) {
+        let mut tabs = Vec::new();
+        self.viewports.layout.tabs(&mut tabs);
+        if tabs.len() <= 1 || !tabs.contains(&tab) || self.gesture.is_some() {
+            return;
+        }
+        self.viewports.layout.remove(tab);
+        if self.viewports.active == tab {
+            let mut remaining = Vec::new();
+            self.viewports.layout.tabs(&mut remaining);
+            self.activate_viewport(remaining[0]);
+        }
+        self.viewports.cameras.remove(&tab);
+        self.viewports.names.remove(&tab);
+        ctx.request_repaint();
+    }
+
+    pub(super) fn viewport_tabs(&mut self, ui: &mut egui::Ui) {
+        let mut tabs = Vec::new();
+        self.viewports.layout.tabs(&mut tabs);
+        let mut activate = None;
+        let mut close = None;
+        let mut add = false;
+        let key = "viewport-tabs";
+        let scroll = sidebar::restored_scroll_area(
+            ui, key, egui::ScrollArea::horizontal()
+                .id_salt("viewport-tabs")
+                .auto_shrink([false, true])
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden),
+        ).show(ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                for tab in &tabs {
+                    ui.push_id(("viewport-tab", *tab), |ui| {
+                        let label = self.viewports.name(*tab);
+                        let response = ui.add(egui::Button::new(label)
+                            .selected(*tab == self.viewports.active)
+                            .sense(Sense::click_and_drag()));
+                        if response.clicked() { activate = Some(*tab); }
+                        if response.drag_started() { self.viewports.dragging = Some(*tab); }
+                        response.context_menu(|ui| {
+                            Self::menu_style(ui.style_mut());
+                            if ui.add_enabled(self.gesture.is_none(), Self::menu_item_button(ui, tr!("viewports.rename"), None)).clicked() {
+                                self.viewports.renaming = Some((*tab, self.viewports.name(*tab)));
+                                Self::request_name_input_focus(ui.ctx(), egui::Id::unique("rename_viewport_name"));
+                                ui.close();
+                            }
+                            if ui.add_enabled(tabs.len() > 1 && self.gesture.is_none(), Self::menu_item_button(ui, tr!("common.close"), Some("close"))).clicked() {
+                                close = Some(*tab);
+                                ui.close();
+                            }
+                        });
+                        response.on_hover_text(tr!("viewports.drag_to_a_viewport_edge_to_split_or"));
+                    });
+                }
+                add = ui.button("+").on_hover_text(tr!("viewports.create_viewport")).clicked();
+                ui.separator();
+                self.edit_context_bar(ui);
+            });
+        });
+        sidebar::remember_scroll(ui.ctx(), key, scroll.state.clamped_offset());
+        if self.gesture.is_none() {
+            if add {
+                // Append to the final pane in tab order, regardless of which
+                // viewport is active (including Current in a split layout).
+                if let Some(pane) = tabs.last()
+                    .and_then(|tab| self.viewports.layout.pane_for_tab(*tab))
+                {
+                    activate = Some(self.viewports.add(pane, &self.doc.camera));
+                }
+            }
+            if let Some(tab) = activate {
+                self.activate_viewport(tab);
+                ui.ctx().request_repaint();
+            }
+            if let Some(tab) = close {
+                self.close_viewport(tab, ui.ctx());
+            }
+        }
+    }
+
+    pub(super) fn rename_viewport_window(&mut self, ctx: &egui::Context) {
+        let Some((id, mut name)) = self.viewports.renaming.take() else {
+            return;
+        };
+        if self.viewports.layout.pane_for_tab(id).is_none() {
+            return;
+        }
+        let mut save = false;
+        let mut cancel = false;
+        let response = Modal::new("rename_viewport", 360.).show(ctx, |modal| {
+            modal.header(|ui| {
+                ui.text_heading(tr!("viewports.rename_view"));
+            });
+            modal.body(|ui| {
+                ui.text_label(tr!("common.name"));
+                let input =
+                    Self::name_input(ui, &mut name, egui::Id::unique("rename_viewport_name"));
+                if name.len() > 1024 {
+                    name.truncate(name.floor_char_boundary(1024));
+                }
+                save = input.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+            });
+            modal.footer(|ui| {
+                cancel = ui.button(tr!("common.cancel")).clicked();
+                let valid = !name.trim().is_empty();
+                save = (primary_button(ui, tr!("common.save"), valid).clicked() || save) && valid;
+            });
+        });
+        if save {
+            self.viewports.names.insert(id, name.trim().to_owned());
+        } else if !cancel && !response.should_close() {
+            self.viewports.renaming = Some((id, name));
+        }
+    }
+
+    // Read raw contacts before synthesized pointer events can reach modeling tools.
+    // Capture lasts until every finger lifts, including cancellation and 2 -> 1.
+    fn touch_viewport_zoom(&mut self, ctx: &egui::Context, views: &[(u64, Rect, egui::Response)]) -> bool {
+        if self.tool == Tool::Walk { return false; }
+        let allowed = ctx.input(|i| i.focused)
+            && !self.project.blocked() && !self.screenshot.open
+            && !self.settings_open
+            && !self.help && !self.about && !self.release_notes.open
+            && self.object_creation.is_none() && self.object_rename.is_none()
+            && self.viewports.renaming.is_none() && self.text_editor.is_none()
+            && self.viewports.dragging.is_none();
+        #[cfg(not(target_arch = "wasm32"))]
+        let allowed = allowed && !self.updates.open;
+        let state = &mut self.viewports.touch_zoom;
+        let mut suppress = state.captured;
+
+        for event in ctx.input(|i| i.events.clone()) {
+            let egui::Event::Touch { device_id, id, phase, pos, .. } = event else { continue; };
+            let key = (device_id, id);
+            let old_count = state.contacts.len();
+            match phase {
+                egui::TouchPhase::Start => {
+                    let view = views.iter().find(|(_, rect, response)|
+                        allowed && response.enabled() && rect.contains(pos)
+                    ).map(|(id, _, _)| *id);
+                    state.contacts.insert(key, (pos, view));
+                    if state.contacts.len() >= 2 {
+                        state.captured |= state.contacts.values().any(|(_, view)| view.is_some());
+                        if state.owner.is_none() && state.contacts.len() == 2 {
+                            let mut contacts = state.contacts.values();
+                            let a = contacts.next().unwrap();
+                            let b = contacts.next().unwrap();
+                            if a.1 == b.1 { state.owner = a.1; }
+                        }
+                    }
+                }
+                egui::TouchPhase::Move => {
+                    if let Some(contact) = state.contacts.get_mut(&key) { contact.0 = pos; }
+                }
+                egui::TouchPhase::End | egui::TouchPhase::Cancel => {
+                    state.contacts.remove(&key);
+                }
+            }
+            if state.contacts.len() != old_count {
+                // Rebase after every membership change, including 3 -> 2.
+                state.baseline = state.pair();
+            }
+            suppress |= state.captured;
+        }
+        if !allowed {
+            // Keep swallowing a captured sequence, but never resume it after a modal/focus change.
+            state.owner = None;
+            state.baseline = None;
+            if !ctx.input(|i| i.focused) {
+                state.contacts.clear();
+            }
+        }
+        let (pan, scroll, anchor) = if allowed { state.motion() } else { (Vec2::ZERO, 0., None) };
+        let owner = state.owner;
+        if state.contacts.is_empty() {
+            state.owner = None;
+            state.captured = false;
+        }
+        if suppress {
+            self.gesture = None;
+            self.section_drag = None;
+            if self.tool == Tool::Freehand { self.drawing = None; }
+            self.viewport_pointer = None;
+            self.hover = None;
+            self.flip_hover = None;
+            self.drawing_orbit_pivot = None;
+            if pan != Vec2::ZERO {
+                if let Some(owner) = owner {
+                    if let Some((_, rect, _)) = views.iter().find(|(id, _, _)| *id == owner) {
+                        self.activate_viewport(owner);
+                        self.viewport = *rect;
+                        // Match Shift+Orbit's direction, sensitivity and viewport scale.
+                        self.doc.camera.pan(dv(pan) * self.general_settings.pan_speed, rect.height() as f64);
+                        self.changed(ctx);
+                    }
+                }
+            }
+            if allowed && scroll.abs() > 1e-9 {
+                if let (Some(owner), Some(anchor)) = (owner, anchor) {
+                    if let Some((_, rect, _)) = views.iter().find(|(id, _, _)| *id == owner) {
+                        self.activate_viewport(owner);
+                        self.viewport = *rect;
+                        self.doc.camera.zoom(scroll * self.general_settings.zoom_speed,
+                            dv(anchor - rect.min), dv(rect.size()));
+                        self.changed(ctx);
+                    }
+                }
+            }
+        }
+        suppress
+    }
+
+    pub(super) fn viewport_workspace(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        if !ui.is_enabled() {
+            self.viewports.dragging = None;
+        }
+        self.viewports
+            .cameras
+            .insert(self.viewports.active, self.doc.camera.clone());
+        let mut panes = Vec::new();
+        self.viewports
+            .layout
+            .rectangles(ui, ui.available_rect_before_wrap(), &mut panes);
+        let mut activate = None;
+        let mut views = Vec::new();
+        // Build every pane first, route input exactly once, then paint every
+        // camera from the updated shared model in this same frame.
+        for pane in &panes {
+            if pane.rect.width() <= 1. || pane.rect.height() <= 1. {
+                continue;
+            }
+            let rect = pane.rect;
+            let response = ui.interact(
+                rect,
+                ui.scope_id().with(("viewport-canvas", pane.id)),
+                Sense::click_and_drag(),
+            );
+            // Activate on press so the first click/drag uses this camera.
+            // Hover and wheel input leave the active camera unchanged.
+            if self.gesture.is_none()
+                && self.section_drag.is_none()
+                && self.viewports.dragging.is_none()
+                && response.enabled()
+                && response.contains_pointer()
+                && ctx.input(|input| input.pointer.any_pressed())
+                && ctx
+                    .input(|input| input.pointer.hover_pos())
+                    .is_some_and(|pos| rect.contains(pos))
+            {
+                activate = Some(pane.selected);
+            }
+            views.push((pane.selected, rect, response));
+        }
+        #[cfg(target_arch = "wasm32")]
+        if let Some(canvas) = web_sys::window().and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id("benchup-canvas")) {
+            let scale = ctx.pixels_per_point() / web_sys::window().map(|w| w.device_pixel_ratio() as f32).unwrap_or(1.);
+            let rects: Vec<[f32; 4]> = views.iter().filter(|(_, _, r)| r.enabled())
+                .map(|(_, r, _)| [r.min.x * scale, r.min.y * scale, r.max.x * scale, r.max.y * scale]).collect();
+            let _ = canvas.set_attribute("data-model-viewports", &serde_json::to_string(&rects).unwrap_or_default());
+        }
+        let touch_navigation = self.touch_viewport_zoom(&ctx, &views);
+        if !touch_navigation && self.gesture.is_none() && self.section_drag.is_none() {
+            if let Some(id) = activate {
+                if self.viewports.active != id {
+                    ctx.request_repaint();
+                }
+                self.activate_viewport(id);
+            }
+        }
+        if self.viewports.dragging.is_none() {
+            if let Some((_, rect, response)) =
+                views.iter().find(|(id, _, _)| *id == self.viewports.active)
+            {
+                self.viewport = *rect;
+                if !touch_navigation { self.viewport_input(&ctx, response); }
+                if !touch_navigation && !ctx
+                    .input(|i| i.pointer.hover_pos())
+                    .is_some_and(|pos| self.compass_contains(pos))
+                    && self.tool != Tool::Walk
+                {
+                    self.context_menu(response);
+                }
+                self.viewports
+                    .cameras
+                    .insert(self.viewports.active, self.doc.camera.clone());
+            }
+        }
+        let mut tabs = Vec::new();
+        self.viewports.layout.tabs(&mut tabs);
+        let show_names = tabs.len() > 1;
+        let active_camera = self.doc.camera.clone();
+        let active_rect = self.viewport;
+        // Occlusion and GPU meshes depend on the camera. Sharing them across
+        // panes would invalidate them on every pane, even in a static frame.
+        self.viewports
+            .scene_caches
+            .retain(|id, _| views.iter().any(|(visible, _, _)| visible == id));
+        for (id, rect, response) in &views {
+            if rect.width() <= 1. || rect.height() <= 1. {
+                continue;
+            }
+            self.doc.camera = self
+                .viewports
+                .cameras
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| active_camera.clone());
+            self.viewport = *rect;
+            // Screen-space drag previews only belong to their input viewport.
+            let inactive_gesture = if *id != self.viewports.active {
+                self.gesture.take()
+            } else {
+                None
+            };
+            if self.gpu_ready {
+                let mut cache = self.viewports.scene_caches.remove(id).unwrap_or_default();
+                std::mem::swap(&mut cache, &mut self.scene_cache);
+                self.paint_scene(ui, *rect);
+                std::mem::swap(&mut cache, &mut self.scene_cache);
+                self.viewports.scene_caches.insert(*id, cache);
+            } else {
+                ui.painter().with_clip_rect(*rect).text(
+                    rect.center(),
+                    Align2::CENTER_CENTER,
+                    tr!("viewports.a_compatible_gpu_renderer_is_required_try_updating"),
+                    FontId::proportional(15.),
+                    ACCENT,
+                );
+            }
+            if *id == self.viewports.active && !touch_navigation {
+                self.fastener_face_handles(ui,*rect);
+                self.joint_marker_handles(ui, *rect);
+            }
+            self.paint_shared_presence(ui, *rect);
+            self.paint_compass(ui, response);
+            self.paint_section_handles(ui, response, *id == self.viewports.active);
+            crate::environment::paint_sun_hint(ui.painter(), *rect, &self.doc.camera, &self.doc.display);
+            if self.general_settings.show_fps {
+                crate::frame_rate::paint(ui, *rect);
+            } else {
+                crate::frame_rate::reset(&ctx);
+            }
+            if show_names {
+                // Paint a passive label so clicks still reach the viewport.
+                let colors = Palette::for_ui(ui);
+                let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+                let mut job = egui::text::LayoutJob::simple(
+                    self.viewports.name(*id),
+                    FontId::proportional(13.),
+                    colors.ink,
+                    (rect.width() - 28.).max(1.),
+                );
+                job.wrap.max_rows = 1;
+                let galley = painter.layout_job(job);
+                let badge = Rect::from_min_size(
+                    rect.left_top() + egui::vec2(8., 8.),
+                    galley.size() + egui::vec2(12., 8.),
+                );
+                painter.rect_filled(badge, 4, colors.paper.gamma_multiply(0.94));
+                painter.galley(badge.min + egui::vec2(6., 4.), galley, colors.ink);
+            }
+            if *id == self.viewports.active {
+                self.paint_tool_cursor(&ctx, response);
+                ui.painter().rect_stroke(
+                    *rect,
+                    0,
+                    Stroke::new(1., Palette::for_ui(ui).accent.gamma_multiply(0.5)),
+                    egui::StrokeKind::Inside,
+                );
+            } else if inactive_gesture.is_some() {
+                self.gesture = inactive_gesture;
+            }
+        }
+        self.doc.camera = active_camera;
+        self.viewport = active_rect;
+        if let Some(tab) = self.viewports.dragging {
+            ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+            if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
+                if let Some(pane) = panes.iter().find(|pane| pane.rect.contains(pos)) {
+                    let (side, preview) = drop_target(pane.rect, pos);
+                    let painter = ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Tooltip,
+                        egui::Id::unique("viewport-drop-preview"),
+                    ));
+                    let color = Palette::for_ui(ui).accent;
+                    painter.rect_filled(preview.shrink(3.), 4, color.gamma_multiply(0.2));
+                    painter.rect_stroke(
+                        preview.shrink(3.),
+                        4,
+                        Stroke::new(2., color),
+                        egui::StrokeKind::Inside,
+                    );
+                    if ctx.input(|i| i.pointer.any_released()) {
+                        self.viewports.dock(tab, pane.id, side);
+                        self.activate_viewport(tab);
+                        ctx.request_repaint();
+                    }
+                }
+            }
+            if ctx.input(|i| !i.pointer.primary_down()) {
+                self.viewports.dragging = None;
+            }
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "viewport_tests.rs"]
+mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "touch_navigation_tests.rs"]
+mod touch_navigation_tests;
