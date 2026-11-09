@@ -2668,6 +2668,31 @@ mod preference_tests {
     }
 
     #[test]
+    fn space_mouse_settings_default_and_save_without_a_model_edit() {
+        let old: InspectorPreferences = serde_json::from_str(r#"{"general":{"orbit_speed":2.0}}"#).unwrap();
+        assert_eq!(old.general.space_mouse, space_mouse::Settings::default());
+        assert!(old.general.space_mouse.enabled);
+
+        let ctx = egui::Context::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        let mut storage = SavedPreferences::default();
+        app.general_settings.space_mouse = space_mouse::Settings {
+            enabled: false,
+            orbit_speed: 2.5,
+            invert_zoom: true,
+            ..Default::default()
+        };
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        assert!(storage.flushed);
+        assert!(!app.project.modified);
+        assert!(app.dirty_since.is_none());
+
+        let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        assert_eq!(restored.general_settings.space_mouse, app.general_settings.space_mouse);
+    }
+
+    #[test]
     fn currency_changes_save_immediately_and_apply_after_switching_projects() {
         let ctx = egui::Context::default();
         let mut app = BenchUpApp::with_document(Document::default(), None, true);

@@ -148,6 +148,7 @@ pub(super) struct GeneralSettings {
     pub zoom_speed: f64,
     pub reverse_zoom: bool,
     pub walk: walk::Settings,
+    pub space_mouse: space_mouse::Settings,
     pub reset_axis_locks_on_action: bool,
     pub auto_group_new_shapes: bool,
     pub show_fps: bool,
@@ -166,6 +167,7 @@ impl Default for GeneralSettings {
             zoom_speed: 1.,
             reverse_zoom: false,
             walk: walk::Settings::default(),
+            space_mouse: space_mouse::Settings::default(),
             reset_axis_locks_on_action: true,
             auto_group_new_shapes: false,
             show_fps: false,
@@ -179,6 +181,7 @@ impl Default for GeneralSettings {
 impl GeneralSettings {
     pub(super) fn normalize(&mut self) {
         self.walk.normalize();
+        self.space_mouse.normalize();
         self.stock.normalize();
         if !LANGUAGES.iter().any(|&(code, _)| code == self.language.as_str()) {
             self.language = DEFAULT_LANGUAGE.into();
@@ -501,6 +504,32 @@ impl BenchUpApp {
                     });
                 }
                 ui.text_weak("WASD / arrows: walk · Shift: crouch · Space: jump · Alt: sit / stand · Move mouse: look · Escape: exit");
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    ui.separator();
+                    ui.text_label(RichText::new("3D mouse (3Dconnexion)").strong());
+                    let space_mouse = &mut self.general_settings.space_mouse;
+                    ui.checkbox(&mut space_mouse.enabled, "Navigate with a 3D mouse");
+                    ui.add_enabled_ui(space_mouse.enabled, |ui| {
+                        for (label, value) in [
+                            ("Orbit speed", &mut space_mouse.orbit_speed),
+                            ("Pan speed", &mut space_mouse.pan_speed),
+                            ("Zoom speed", &mut space_mouse.zoom_speed),
+                        ] {
+                            ui.add(egui::Slider::new(value, 0.1..=4.).text(label).suffix(tr!("settings.format")));
+                        }
+                        ui.checkbox(&mut space_mouse.invert_orbit, "Invert tilt and twist");
+                        ui.checkbox(&mut space_mouse.invert_pan, "Invert pan");
+                        ui.checkbox(&mut space_mouse.invert_zoom, "Invert zoom");
+                    });
+                    let status = match (space_mouse.enabled, self.space_mouse.device()) {
+                        (false, _) => "Disabled".to_owned(),
+                        (true, Some(device)) => format!("Connected: {device}"),
+                        (true, None) => "No device detected".to_owned(),
+                    };
+                    ui.text_weak(status);
+                    ui.text_weak("Tilt or twist the cap to orbit, slide it to pan, and push or pull it to zoom. The Fit button frames the model.");
+                }
             }
             Section::Shortcuts => {
                 ui.text_weak(tr!("settings.click_a_shortcut_then_press_a_letter_or"));

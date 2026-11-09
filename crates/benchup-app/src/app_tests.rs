@@ -6587,3 +6587,52 @@ fn web_physical_control_keys_toggle_move_copy_and_allow_arrays() {
         assert_copy_positions(&h, &[0., 6., 12., 18., 24., 30.]);
     }
 }
+
+#[test]
+fn space_mouse_navigates_only_when_the_viewport_accepts_input() {
+    let mut h = Harness::new();
+    h.app.general_settings.space_mouse.enabled = false;
+    h.frame(vec![], egui::Modifiers::NONE);
+    let tilt = space_mouse::Axes { rotation: DVec3::new(0.5, 0., 0.5), ..Default::default() };
+
+    // Disabled, inside a modal, or walking: the cap never moves the camera.
+    let before = h.app.doc.camera.clone();
+    h.app.space_mouse.inject(tilt, 0);
+    h.frame(vec![], egui::Modifiers::NONE);
+    assert_eq!(h.app.doc.camera, before);
+    h.app.general_settings.space_mouse.enabled = true;
+    h.app.space_mouse.inject(tilt, 0);
+    h.app.settings_open = true;
+    h.frame(vec![], egui::Modifiers::NONE);
+    assert_eq!(h.app.doc.camera, before);
+    h.app.settings_open = false;
+
+    h.app.space_mouse.inject(tilt, 0);
+    h.frame(vec![], egui::Modifiers::NONE);
+    let moved = h.app.doc.camera.clone();
+    assert!(moved.pitch > before.pitch);
+    assert!(moved.yaw > before.yaw);
+    assert!(h.app.doc.history.is_empty());
+
+    // Releasing the cap stops navigation and unlocks the pivot.
+    h.app.space_mouse.inject(space_mouse::Axes::default(), 0);
+    h.frame(vec![], egui::Modifiers::NONE);
+    assert_eq!(h.app.doc.camera, moved);
+    assert!(h.app.space_mouse.pivot.is_none());
+}
+
+#[test]
+fn space_mouse_fit_button_frames_the_model() {
+    let mut h = Harness::new();
+    h.app.general_settings.space_mouse.enabled = false;
+    properties_outline(&mut h.app.doc.model, &[
+        DVec3::new(-10., -10., 0.), DVec3::new(10., -10., 0.),
+        DVec3::new(10., 10., 0.), DVec3::new(-10., 10., 0.),
+    ]);
+    h.frame(vec![], egui::Modifiers::NONE);
+    h.app.doc.camera.target = DVec3::new(500., 0., 0.);
+    h.app.general_settings.space_mouse.enabled = true;
+    h.app.space_mouse.inject(space_mouse::Axes::default(), 1 << 1);
+    h.frame(vec![], egui::Modifiers::NONE);
+    assert!(h.app.doc.camera.target.abs_diff_eq(DVec3::ZERO, 1e-6));
+}

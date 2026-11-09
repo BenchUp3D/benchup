@@ -34,6 +34,8 @@ tempfile = "3"
 # Keep this in sync with the vpk tool in the desktop release workflow.
 velopack = "=1.2.161"
 rayon = "1.12"
+# Shared opening on macOS keeps the 3DxWare driver working alongside BenchUp.
+hidapi = { version = "2.4", default-features = false, features = ["linux-static-hidraw", "macos-shared-device"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 pollster = "0.4"

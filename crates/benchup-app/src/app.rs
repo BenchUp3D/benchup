@@ -106,6 +106,8 @@ pub(crate) use sidebar::{modal_size, remember_modal_size};
 mod selection_measurements;
 #[path = "solid_tools.rs"]
 mod solid_tools;
+#[path = "space_mouse.rs"]
+mod space_mouse;
 #[path = "stock_settings.rs"]
 mod stock_settings;
 #[path = "text_tools.rs"]
@@ -331,6 +333,7 @@ pub struct BenchUpApp {
     screenshot_gpu: Option<(eframe::wgpu::Device, eframe::wgpu::Queue)>,
     tool: Tool,
     walk: walk::Walk,
+    space_mouse: space_mouse::SpaceMouse,
     drawing_tool: Tool,
     measurement_tool: Tool,
     solid_tool: Tool,
@@ -512,6 +515,7 @@ impl BenchUpApp {
             screenshot_gpu: None,
             tool: Tool::Select,
             walk: walk::Walk::default(),
+            space_mouse: Default::default(),
             drawing_tool: Tool::Line,
             measurement_tool: Tool::Dimensions,
             solid_tool: Tool::Union,
@@ -6416,6 +6420,7 @@ impl eframe::App for BenchUpApp {
         self.tool_rail(ui);
         let inspector_order_before = self.inspector_order;
         self.inspector_panel(ui);
+        self.space_mouse_navigation(&ctx);
         self.viewport_panel(ui);
         if theme_before != ctx.options(|options| options.theme_preference)
             && let Some(storage) = frame.storage_mut()
