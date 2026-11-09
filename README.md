@@ -1,6 +1,6 @@
 # BenchUp
 
-![BenchUp editor screenshot](assets/screenshots/benchup.jpg?v=0.6.5-r2)
+![BenchUp editor screenshot](assets/screenshots/ketchup.jpg)
 
 [![Try BenchUp in your browser](https://img.shields.io/badge/Try_BenchUp_in_your_browser-d63b32?style=for-the-badge)](https://benchup3d.github.io/editor/play/)
 
@@ -11,9 +11,27 @@
 [![Download for Linux x64](https://img.shields.io/badge/Linux_x64-E95420?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest/download/io.github.BenchUp3D.BenchUp-linux-x64.AppImage)
 [![See all downloads](https://img.shields.io/badge/All_downloads-555555?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest)
 
-A small 3D edge and face editor written in Rust. The same editor runs as a native Windows, macOS, or Linux application and in a desktop browser through WebAssembly.
+A free, open-source 3D modeling app for woodworking and furniture design, written in Rust. Plan individual boards, wood joints, and complete assemblies with exact measurements before heading to the workshop. The same editor runs as a native Windows, macOS, or Linux application and in a desktop browser through WebAssembly.
 
 The workspace includes Select, Line, Rectangle, Circle, Polygon, Freehand, Push/Pull, Scale, Offset, Move, Rotate, Paint, Tape Measure, Protractor, Dimensions, a Union flyout, Erase, and Orbit, automatic geometry snapping, filled planar faces, measured lines, full-enclosure box selection, groups and components, a right-click object menu, geometry clipboard, undo/redo, local autosave, and portable `.bup` project files, with support for legacy `.k3d` and `.ketchup` projects. It starts with an empty model. File → Import/Export adds SketchUp `.skp` import and Wavefront `.obj` export. Mobile and cloud storage are outside this version.
+
+## Woodworking features
+
+Model shelves, tables, cabinets, workbenches, and other furniture with precisely sized parts. Use groups, reusable components, and tags to keep the assembly organized, then inspect dimensions and fit from any angle.
+
+### Wood joinery
+
+Create mortise-and-tenon, half-lap, tongue-and-groove, rabbet, dovetail, and finger joints between boards, including angled connections. Adjust joint dimensions and clearance with live previews, inspect machining diagnostics and cut guides, and trim excess material past a joint while keeping the original boards editable.
+
+![Finger joint between two selected boards, showing the interlocking geometry and grain-direction guides](assets/screenshots/wood-joinery.png)
+
+### Wood grain orientation
+
+Set the grain direction on groups and components and show grain-direction guides directly on the model. Review how the grain runs across each board and through the full assembly before building. Grain orientation is saved with the project and follows the parts when they rotate.
+
+### Plan materials and workshop work
+
+Assign stock materials and wood types to parts, configure sanding and finishing products, and prepare cut lists, cutting plans, and workshop labels. Export cutting plans and time and cost estimates to PDF to take the design into the workshop.
 
 ## Documentation
 

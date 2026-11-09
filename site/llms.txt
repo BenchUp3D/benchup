@@ -11,9 +11,12 @@ BenchUp helps woodworkers, furniture makers, and DIY builders model shelves, tab
 - Modeling: lines, rectangles, circles, polygons, freehand outlines, Push/Pull, Move, Scale, Offset, and Paint.
 - Precision: exact lengths, geometry and axis snapping, Tape Measure, Protractor, and Dimensions.
 - Organization: groups, reusable components, and tags; undo and redo.
+- Wood joinery: mortise-and-tenon, half-lap, tongue-and-groove, rabbet, dovetail, and finger joints, including angled connections. Adjust dimensions and clearance with live previews; inspect machining diagnostics and cut guides; trim excess material while keeping source boards editable.
+- Wood grain orientation: set grain direction on groups and components and display grain-direction guides across the assembly. Orientation is saved with the project and follows part rotation.
+- Workshop planning: assign stock materials and wood types, configure sanding and finishing products, and prepare cut lists, cutting plans, and workshop labels. Export cutting plans and time and cost estimates to PDF.
 - Storage: local autosave and portable .bup project files (default), with support for legacy .bup files. No account required. Download projects to keep backups; clearing browser data can remove browser autosaves.
 - Interchange: import SketchUp (.skp) geometry; export Wavefront OBJ (.obj) geometry. SketchUp textures, scenes, and some features are not supported; OBJ export does not include materials.
-- Intended use: furniture layout, exploring proportions, and dimensioned 3D woodworking models. Mobile modeling and cloud storage are outside this version.
+- Intended use: furniture layout, exploring proportions, dimensioned 3D woodworking models, wood joinery, grain orientation, and workshop planning. Mobile modeling and cloud storage are outside this version.
 
 ## Official resources
 
