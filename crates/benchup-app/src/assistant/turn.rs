@@ -17,6 +17,8 @@ use std::{
 pub(crate) const MAX_ROUNDS: usize = 12;
 /// One tool result message sent back to the model.
 const MAX_TOOL_RESULT_CHARS: usize = 8_000;
+/// Characters of an oversized result kept in its `preview`.
+const TRUNCATED_PREVIEW_CHARS: usize = 7_000;
 /// Tool calls executed per model reply; the rest are answered with an error.
 pub(crate) const MAX_CALLS_PER_REPLY: usize = 32;
 /// Share of the scene budget the `references` block may use.
@@ -58,15 +60,20 @@ pub(crate) struct TurnResult {
     pub error: Option<String>,
     /// Set when the model used `select`; the editor selection should follow.
     pub selection: Option<BTreeSet<u64>>,
+    /// The editing scope when the turn began; the app puts the user back in it.
+    pub scope: Option<u64>,
 }
 
 /// Per-frame conditions the app supplies while a turn runs (shared projects).
 #[derive(Default)]
-pub(crate) struct Gate {
+pub(crate) struct Gate<'a> {
     /// Why further edits are not allowed right now; the turn stops with it.
     pub block: Option<String>,
     /// The edit lease to enforce for this round's tool calls.
     pub lease: Option<BTreeSet<u64>>,
+    /// Asked again before each mutating tool call of a reply; a reason stops
+    /// the turn before that call runs.
+    pub recheck: Option<&'a dyn Fn() -> Option<String>>,
 }
 
 pub(crate) struct Poll {
@@ -84,6 +91,7 @@ pub(crate) struct Turn {
     tools: Vec<serde_json::Value>,
     env: tools::ToolEnv,
     selection_used: bool,
+    scope: Option<u64>,
     pending: Option<Receiver<Result<ChatResponse, ChatError>>>,
     rounds: usize,
     created: Vec<u64>,
@@ -103,6 +111,20 @@ fn push_unique(list: &mut Vec<u64>, ids: &[u64]) {
     }
 }
 
+/// An oversized tool result replaced by valid JSON: the verdict plus a prefix.
+pub(crate) fn truncated_result(text: &str, ok: bool) -> String {
+    let mut keep = TRUNCATED_PREVIEW_CHARS;
+    loop {
+        let preview: String = text.chars().take(keep).collect();
+        let wrapped = json!({"ok": ok, "truncated": true, "preview": preview}).to_string();
+        // Escaping can make the preview longer; shrink it until the whole fits.
+        if wrapped.len() <= MAX_TOOL_RESULT_CHARS || keep == 0 {
+            return wrapped;
+        }
+        keep = keep * 3 / 4;
+    }
+}
+
 impl Turn {
     pub(crate) fn start(
         ctx: &egui::Context,
@@ -112,14 +134,18 @@ impl Turn {
         setup: TurnSetup,
     ) -> Self {
         let mut references = setup.references.clone();
+        // With "Include selection" off the selection is neither listed in the
+        // scene nor offered by `get_selection`.
+        let mut shared_selection = BTreeSet::new();
         if setup.include_selection {
             references.extend(&setup.selection);
+            shared_selection = setup.selection.clone();
         }
         // Selection, tags, references and objects share one budget.
         let references = scene::references(model, &references, REFERENCE_BUDGET);
         let remaining = scene::SCENE_BUDGET.saturating_sub(references.to_string().len());
         let context = json!({
-            "scene": scene::summary(model, &setup.selection, &setup.catalog, remaining),
+            "scene": scene::summary(model, &shared_selection, &setup.catalog, remaining),
             "references": references,
         });
         let mut messages = vec![
@@ -138,12 +164,14 @@ impl Turn {
             env: tools::ToolEnv {
                 read_only: setup.read_only,
                 selection: setup.selection,
+                hide_selection: !setup.include_selection,
                 catalog: setup.catalog,
                 before: None,
                 lease: setup.lease,
                 created: BTreeSet::new(),
             },
             selection_used: false,
+            scope: model.edit_context,
             pending: None,
             rounds: 0,
             created: Vec::new(),
@@ -221,6 +249,12 @@ impl Turn {
                 self.messages.push(Message::tool(&call.id, refused.to_string()));
                 continue;
             }
+            // Edit access can lapse inside a batch: ask again before every edit.
+            if tools::is_mutating(&call.function.name)
+                && let Some(reason) = gate.recheck.and_then(|recheck| recheck())
+            {
+                return Poll { finished: Some(self.finish(model, String::new(), Some(reason), true)), mutated };
+            }
             let outcome = tools::execute(model, call, &mut self.env);
             self.activity.push(call.function.name.clone());
             mutated |= outcome.mutated;
@@ -233,7 +267,7 @@ impl Turn {
             }
             let mut text = outcome.result.to_string();
             if text.len() > MAX_TOOL_RESULT_CHARS {
-                text = text.chars().take(MAX_TOOL_RESULT_CHARS).collect::<String>() + "... (truncated)";
+                text = truncated_result(&text, outcome.ok);
             }
             self.messages.push(Message::tool(&call.id, text));
         }
@@ -259,6 +293,12 @@ impl Turn {
         let modified: Vec<u64> = exists(&self.modified).into_iter().filter(|id| !created.contains(id)).collect();
         // Ids that were created and then removed in the same turn leave no trace.
         let erased: Vec<u64> = self.erased.iter().copied().filter(|id| !self.created.contains(id)).collect();
+        // The snapshot belongs to the scope the designer was in, whatever
+        // enter_object/exit_to_root did meanwhile, so undo leaves them there.
+        let mut before = self.env.before.take();
+        if let Some(before) = &mut before {
+            before.edit_context = self.scope;
+        }
         let mut summary = summary.trim().to_owned();
         if summary.is_empty() && !stopped && error.is_none() {
             summary = tr!("assistant.default_summary").into();
@@ -270,10 +310,11 @@ impl Turn {
             modified,
             erased,
             joints: exists(&self.joints),
-            before: self.env.before.take(),
+            before,
             stopped,
             error,
             selection: self.selection_used.then(|| self.env.selection.clone()),
+            scope: self.scope,
         }
     }
 }

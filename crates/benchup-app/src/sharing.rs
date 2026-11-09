@@ -369,12 +369,13 @@ impl BenchUpApp {
         });
         let path = self.project.path.clone();
         // Do not replace the whole project: preserve file operation / unsaved prompts.
-        let edit_context = self.doc.model.edit_context;
         let previous_selection = self.sharing.desired.clone();
         // A MIRA turn works on the model that is about to be replaced. Its
         // snapshot would be recorded against the remote history, so drop the
         // turn without committing anything.
-        self.assistant.discard_turn(&self.doc.model, tr!("assistant.error.shared_changed").to_owned());
+        self.assistant.discard_turn(&mut self.doc.model, tr!("assistant.error.shared_changed").to_owned());
+        // After the discard, so a scope the turn opened is not carried over.
+        let edit_context = self.doc.model.edit_context;
         self.doc.project_author = doc.project_author;
         self.doc.model = doc.model;
         self.doc.model.edit_context =

@@ -751,18 +751,23 @@ impl BenchUpApp {
         }
     }
     fn finish_edit(&mut self, label: &str, before: Model, ctx: &egui::Context) {
+        self.commit_edit(label, before, ctx);
+    }
+    /// Like `finish_edit`, and says whether the edit was recorded in the
+    /// history. A refused edit is rolled back and returns `false`.
+    fn commit_edit(&mut self, label: &str, before: Model, ctx: &egui::Context) -> bool {
         let edited = before != self.doc.model;
         // User edits must not interleave with MIRA's tool calls. The assistant's
         // own commit runs after its turn has ended, so it is never refused here.
         if edited && self.assistant.busy() {
             self.doc.model = before;
             self.say(ctx, tr!("assistant.busy_blocked"));
-            return;
+            return false;
         }
         if edited && !self.shared_edit_allowed(ctx) {
             self.doc.model = before;
             self.say(ctx, self.shared_edit_block_reason(ctx));
-            return;
+            return false;
         }
         if edited {
             self.solid_first = None;
@@ -784,6 +789,7 @@ impl BenchUpApp {
             self.changed(ctx);
             self.persist_edit();
         }
+        edited
     }
     fn undo(&mut self, ctx: &egui::Context, redo: bool) {
         let current = self.doc.history.position();

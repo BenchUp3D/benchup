@@ -255,3 +255,49 @@ fn assistant_shortcut_keys_cannot_collide_with_ctrl_shift_commands() {
     }
     assert!(!GeneralSettings::assistant_key_allowed("m") && !GeneralSettings::assistant_key_allowed(""));
 }
+
+fn enter_event(pressed: bool, modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::Key { key: Key::Enter, physical_key: None, pressed, repeat: false, modifiers }
+}
+
+#[test]
+fn enter_sends_the_prompt_and_shift_enter_inserts_a_newline() {
+    let mut h = Harness::new();
+    let fake = crate::app::assistant::client::fake::FakeTransport::default();
+    h.app.assistant = Assistant::with_transport(Box::new(fake.clone()));
+    open_panel(&mut h);
+    h.app.assistant.ui.text = "make it taller".into();
+    h.app.assistant.ui.focus_prompt = true;
+    h.frame(vec![], egui::Modifiers::NONE);
+    h.frame(vec![], egui::Modifiers::NONE);
+    // Shift+Enter: a newline, nothing sent.
+    let shift = egui::Modifiers { shift: true, ..Default::default() };
+    h.frame(vec![enter_event(true, shift)], shift);
+    h.frame(vec![enter_event(false, shift)], egui::Modifiers::NONE);
+    assert!(!h.app.assistant.busy() && fake.requests.lock().unwrap().is_empty(), "Shift+Enter does not send");
+    assert!(h.app.assistant.ui.text.contains('\n'), "{:?}", h.app.assistant.ui.text);
+    // Enter alone sends.
+    h.frame(vec![enter_event(true, egui::Modifiers::NONE)], egui::Modifiers::NONE);
+    h.frame(vec![enter_event(false, egui::Modifiers::NONE)], egui::Modifiers::NONE);
+    assert_eq!(fake.requests.lock().unwrap().len(), 1, "Enter sends the prompt");
+    assert!(h.app.assistant.ui.text.is_empty(), "and clears the composer");
+}
+
+#[test]
+fn change_cards_count_every_row_they_do_not_show() {
+    let mut h = Harness::new();
+    open_panel(&mut h);
+    // 10 created + 5 erased = 15 rows against a 12-row limit.
+    h.app.assistant.transcript.push(Entry {
+        role: EntryRole::Assistant,
+        text: "Big change.".into(),
+        changes: Some(Changes {
+            created: (1000..1010).collect(),
+            erased: (2000..2005).collect(),
+            ..Changes::default()
+        }),
+    });
+    h.frame(vec![], egui::Modifiers::NONE);
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    text_position(&output, "+3 more");
+}

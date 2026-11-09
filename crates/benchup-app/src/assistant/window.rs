@@ -20,6 +20,14 @@ pub(crate) const MIN_SIZE: [f32; 2] = [340., 300.];
 const SETTLE_SECONDS: f64 = 0.4;
 const SECTION_KEY: &str = "assistant";
 
+fn embedded_id() -> egui::Id {
+    egui::Id::unique("benchup.assistant.window")
+}
+/// Layer of the embedded `egui::Window` (web), which "Bring to front" raises.
+pub(crate) fn embedded_layer() -> egui::LayerId {
+    egui::LayerId::new(egui::Order::Middle, embedded_id())
+}
+
 pub(crate) fn viewport_id() -> egui::ViewportId {
     egui::ViewportId::from_hash_of("benchup.assistant")
 }
@@ -106,7 +114,11 @@ impl BenchUpApp {
     }
 
     fn assistant_raise(&self, ctx: &egui::Context) {
-        if !ctx.embed_viewports() {
+        if ctx.embed_viewports() {
+            // Web and other single-window backends: lift the embedded window
+            // above the other layers. The prompt gets focus from `focus_prompt`.
+            ctx.move_to_top(embedded_layer());
+        } else {
             ctx.send_viewport_cmd_to(viewport_id(), egui::ViewportCommand::Focus);
         }
         ctx.request_repaint();
@@ -190,7 +202,7 @@ impl BenchUpApp {
     fn assistant_embedded_window(&mut self, ctx: &egui::Context, size: [f32; 2]) {
         let screen = ctx.content_rect();
         let mut window = egui::Window::new(tr!("assistant.name"))
-            .id(egui::Id::unique("benchup.assistant.window"))
+            .id(embedded_id())
             .collapsible(false)
             .resizable(true)
             .default_size(size)

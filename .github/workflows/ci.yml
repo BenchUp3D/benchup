@@ -48,7 +48,12 @@ jobs:
         run: cargo test -p benchup-core --locked
 
       - name: Test assistant
-        run: cargo test -p benchup-app --lib --locked 'assistant::'
+        # The substring filters also select the assistant_ui tests, the docking
+        # test and the sharing test for the running MIRA turn, which a
+        # module-path filter such as 'assistant::' would skip.
+        run: |
+          cargo test -p benchup-app --lib --locked 'assistant'
+          cargo test -p benchup-app --lib --locked 'mira'
 
       - name: Test release-critical modules
         run: |

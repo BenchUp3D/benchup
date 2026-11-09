@@ -451,3 +451,71 @@ fn push_pull_requires_the_whole_owner_chain_to_be_editable() {
     assert!(err(&mut model, &mut env, "push_pull", json!({"face_id": other, "distance_mm": 5})).contains("scope"));
     ok(&mut model, &mut env, "push_pull", json!({"face_id": face, "distance_mm": 5}));
 }
+
+#[test]
+fn hidden_selection_is_not_revealed_by_get_scene_or_get_selection() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "A", [0., 0., 0.], [100., 100., 20.]);
+    env.selection = BTreeSet::from([a]);
+    let shown = ok(&mut model, &mut env, "get_selection", json!({})).result;
+    assert_eq!(shown["selection"], json!([a]));
+    assert_eq!(ok(&mut model, &mut env, "get_scene", json!({})).result["selection"], json!([a]));
+    env.hide_selection = true;
+    let hidden = ok(&mut model, &mut env, "get_selection", json!({})).result;
+    assert_eq!(hidden, json!({"ok": true, "selection": [], "note": "The designer has turned off sharing their selection."}));
+    let scene = ok(&mut model, &mut env, "get_scene", json!({})).result;
+    assert_eq!(scene["selection"], json!([]));
+    assert!(scene.get("selection_total").is_none_or(|n| n == 0));
+}
+
+#[test]
+fn tag_names_follow_the_core_limit_in_the_tool_and_the_schema() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "A", [0., 0., 0.], [100., 100., 20.]);
+    ok(&mut model, &mut env, "tag", json!({"ids": [a], "tag": "x".repeat(128)}));
+    for long in ["x".repeat(129), "é".repeat(65)] {
+        assert!(err(&mut model, &mut env, "tag", json!({"ids": [a], "tag": long})).contains("too long"));
+    }
+    let board_with_long_tag = err(&mut model, &mut env, "create_board", json!({
+        "name": "B", "origin_mm": [0, 0, 0], "size_mm": [1, 1, 1], "tag": "y".repeat(129)}));
+    assert!(board_with_long_tag.contains("too long"));
+    let definitions = definitions();
+    let property = |tool: &str, name: &str| {
+        definitions.iter().find(|d| d["function"]["name"] == tool).unwrap()["function"]["parameters"]["properties"][name].clone()
+    };
+    assert_eq!(property("tag", "tag")["maxLength"], 128);
+    assert_eq!(property("create_board", "tag")["maxLength"], 128);
+}
+
+#[test]
+fn the_scale_schema_states_the_range_the_executor_enforces() {
+    let definitions = definitions();
+    let scale = definitions.iter().find(|d| d["function"]["name"] == "scale").unwrap();
+    let factor = &scale["function"]["parameters"]["properties"]["factor"];
+    assert_eq!(factor["minimum"], MIN_SCALE);
+    assert_eq!(factor["maximum"], MAX_SCALE);
+    assert!(factor.get("exclusiveMinimum").is_none());
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "A", [0., 0., 0.], [100., 100., 20.]);
+    ok(&mut model, &mut env, "scale", json!({"ids": [a], "center_mm": [0, 0, 0], "factor": MIN_SCALE}));
+    assert!(err(&mut model, &mut env, "scale", json!({"ids": [a], "center_mm": [0, 0, 0], "factor": MAX_SCALE * 2.})).contains("out of range"));
+}
+
+#[test]
+fn select_is_limited_to_the_lease_in_shared_projects() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let mine = board(&mut model, &mut env, "Mine", [0., 0., 0.], [100., 100., 100.]);
+    let theirs = board(&mut model, &mut env, "Theirs", [500., 0., 0.], [100., 100., 100.]);
+    // Not shared: unchanged behaviour.
+    ok(&mut model, &mut env, "select", json!({"ids": [theirs]}));
+    env.created.clear();
+    env.lease = Some(BTreeSet::from([mine]));
+    env.selection.clear();
+    let message = err(&mut model, &mut env, "select", json!({"ids": [mine, theirs]}));
+    assert!(message.contains("lease"), "{message}");
+    assert!(env.selection.is_empty(), "a refused select changes nothing");
+    ok(&mut model, &mut env, "select", json!({"ids": [mine]}));
+    assert_eq!(env.selection, BTreeSet::from([mine]));
+    let fresh = board(&mut model, &mut env, "Fresh", [900., 0., 0.], [50., 50., 50.]);
+    ok(&mut model, &mut env, "select", json!({"ids": [fresh]}));
+}

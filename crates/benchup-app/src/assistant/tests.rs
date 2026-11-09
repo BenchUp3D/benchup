@@ -746,7 +746,8 @@ fn losing_edit_access_between_rounds_stops_the_turn() {
         app.poll_assistant(&ctx);
         assert!(!app.assistant.busy(), "the turn stopped");
         let error = app.assistant.transcript.iter().rev().find(|e| e.role == EntryRole::Error).expect("the reason is reported");
-        assert_eq!(error.text, reason);
+        assert!(error.text.starts_with(reason), "{}", error.text);
+        assert!(error.text.contains("rolled back"), "the edits of the first round were undone too");
         assert!(x_of(&app, mine) < 0.06, "the second round never ran");
     });
 }
@@ -782,8 +783,12 @@ fn only_the_first_32_calls_of_a_reply_run_and_results_are_truncated() {
     let tool_messages: Vec<&Value> = requests[1]["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "tool").collect();
     assert_eq!(tool_messages.len(), 40, "every call is answered");
     let text = |i: usize| tool_messages[i]["content"].as_str().unwrap();
-    assert!(text(31).contains("\"edit_path\""), "call 32 ran");
-    assert!(text(31).len() <= 8_000 + 20 && text(31).ends_with("(truncated)"));
+    assert!(text(31).contains("edit_path"), "call 32 ran");
+    let cut: Value = serde_json::from_str(text(31)).expect("a truncated result is still valid JSON");
+    assert!(text(31).len() <= 8_000);
+    assert_eq!((cut["ok"].clone(), cut["truncated"].clone()), (json!(true), json!(true)));
+    assert!(cut["preview"].as_str().unwrap().starts_with("{\"edit_path\""), "{}", &text(31)[..60]);
+    assert!(cut["preview"].as_str().unwrap().chars().count() <= 7_000);
     let refused: Value = serde_json::from_str(text(32)).unwrap();
     assert_eq!(refused, json!({"ok": false, "error": "too many calls in one reply"}));
 }
@@ -830,4 +835,278 @@ fn a_key_is_saved_only_under_the_server_it_was_validated_against() {
         assert_eq!(credentials::load(second).as_deref(), Some("key-two"));
         assert!(credentials::load(first).is_none());
     });
+}
+
+// ------------------------------------------------- documentation findings
+
+fn plain_setup(prompt: &str) -> turn::TurnSetup {
+    turn::TurnSetup {
+        prompt: prompt.into(),
+        references: BTreeSet::new(),
+        selection: BTreeSet::new(),
+        include_selection: true,
+        catalog: Default::default(),
+        read_only: false,
+        lease: None,
+        history: Vec::new(),
+    }
+}
+fn run_to_end(fake: &FakeTransport, ctx: &egui::Context, model: &mut Model, setup: turn::TurnSetup, gate: &turn::Gate) -> turn::TurnResult {
+    let mut running = turn::Turn::start(ctx, fake, ("https://x.test/v1", "k", "m"), model, setup);
+    loop {
+        if let Some(result) = running.poll(ctx, fake, model, gate).finished {
+            return result;
+        }
+    }
+}
+
+#[test]
+fn include_selection_off_hides_the_selection_from_the_scene_and_get_selection() {
+    let ctx = egui::Context::default();
+    let mut model = Model::default();
+    let id = board(&mut model, &mut tools::ToolEnv::default(), "Shelf", [0., 0., 0.], [600., 200., 19.]);
+    let scene_selection = |include: bool| -> (Value, String) {
+        let fake = FakeTransport::default();
+        fake.push_tool_calls(vec![tool("g", "get_selection", json!({}))]);
+        fake.push_text("ok");
+        let mut setup = plain_setup("look");
+        setup.selection = BTreeSet::from([id]);
+        setup.include_selection = include;
+        run_to_end(&fake, &ctx, &mut model.clone(), setup, &turn::Gate::default());
+        let requests = fake.requests.lock().unwrap();
+        let context = requests[0]["messages"][1]["content"].as_str().unwrap().to_owned();
+        let json_start = context.find('{').unwrap();
+        let scene: Value = serde_json::from_str(&context[json_start..]).unwrap();
+        let tool_text = requests[1]["messages"].as_array().unwrap().last().unwrap()["content"].as_str().unwrap().to_owned();
+        (scene, tool_text)
+    };
+    let (scene, tool_text) = scene_selection(true);
+    assert_eq!(scene["scene"]["selection"], json!([id]));
+    assert!(serde_json::from_str::<Value>(&tool_text).unwrap()["selection"] == json!([id]));
+    let (scene, tool_text) = scene_selection(false);
+    assert_eq!(scene["scene"]["selection"], json!([]), "not listed in the scene summary");
+    assert_eq!(scene["references"]["objects"].as_array().map_or(0, Vec::len), 0, "not attached as references");
+    let reply: Value = serde_json::from_str(&tool_text).unwrap();
+    assert_eq!(reply["selection"], json!([]));
+    assert_eq!(reply["note"], "The designer has turned off sharing their selection.");
+}
+
+#[test]
+fn a_rolled_back_turn_does_not_claim_its_edits_on_the_change_card() {
+    in_temp_data_dir("a_rolled_back_turn_does_not_claim_its_edits_on_the_change_card", || {
+        let fake = FakeTransport::default();
+        let ctx = egui::Context::default();
+        let (mut app, mine, _) = shared_app(&fake, &ctx);
+        fake.push_tool_calls(vec![tool("a", "move", json!({"ids": [mine], "delta_mm": [50, 0, 0]}))]);
+        fake.push_text("never delivered");
+        ask(&mut app, &ctx, "move it");
+        app.poll_assistant(&ctx);
+        assert!((x_of(&app, mine) - 0.05).abs() < 1e-9, "the edit was applied while access held");
+        app.test_expire_lease();
+        app.poll_assistant(&ctx);
+        assert!(!app.assistant.busy());
+        assert!(x_of(&app, mine).abs() < 1e-9, "the commit was refused and rolled back");
+        assert_eq!(app.doc.history.labels().count(), 0);
+        assert!(app.assistant.transcript.iter().all(|e| e.changes.is_none()), "no card claims the rolled-back edits");
+        let error = app.assistant.transcript.iter().rev().find(|e| e.role == EntryRole::Error).unwrap();
+        assert!(error.text.contains("rolled back"), "{}", error.text);
+    });
+}
+
+fn grouped_pair(model: &mut Model) -> (u64, u64) {
+    let mut env = tools::ToolEnv::default();
+    let a = board(model, &mut env, "A", [0., 0., 0.], [100., 100., 20.]);
+    let b = board(model, &mut env, "B", [200., 0., 0.], [100., 100., 20.]);
+    let group = tools_tests::run(model, &mut env, "group", json!({"ids": [a, b], "name": "Pair", "component": false})).created[0];
+    (group, a)
+}
+
+#[test]
+fn a_turn_puts_the_designer_back_in_their_edit_scope_and_undo_keeps_it() {
+    in_temp_data_dir("a_turn_puts_the_designer_back_in_their_edit_scope_and_undo_keeps_it", || {
+        let ctx = egui::Context::default();
+        // Started at the top level; MIRA opens the group and edits inside it.
+        let fake = FakeTransport::default();
+        let mut app = connected_app(&fake);
+        let (group, _) = grouped_pair(&mut app.doc.model);
+        let inner = app.doc.model.objects[&group].entities.iter().copied().find(|id| app.doc.model.objects.contains_key(id)).unwrap();
+        let original = app.doc.model.objects[&inner].name.clone();
+        assert_eq!(app.doc.model.edit_context, None);
+        fake.push_tool_calls(vec![tool("a", "enter_object", json!({"id": group})), tool("b", "rename", json!({"id": inner, "name": "Inner"}))]);
+        fake.push_text("Renamed.");
+        ask(&mut app, &ctx, "rename inside");
+        finish(&mut app, &ctx);
+        assert_eq!(app.doc.model.objects[&inner].name, "Inner");
+        assert_eq!(app.doc.model.edit_context, None, "back at the top level");
+        app.undo(&ctx, false);
+        assert_eq!(app.doc.model.objects[&inner].name, original);
+        assert_eq!(app.doc.model.edit_context, None, "undo leaves the designer where they were");
+
+        // Started inside the group; MIRA leaves it to edit the top level.
+        let fake = FakeTransport::default();
+        let mut app = connected_app(&fake);
+        let (group, _) = grouped_pair(&mut app.doc.model);
+        assert!(app.doc.model.enter_object(group));
+        fake.push_tool_calls(vec![tool("a", "exit_to_root", json!({})), tool("b", "rename", json!({"id": group, "name": "Top"}))]);
+        fake.push_text("Renamed.");
+        ask(&mut app, &ctx, "rename the group");
+        finish(&mut app, &ctx);
+        assert_eq!(app.doc.model.objects[&group].name, "Top");
+        assert_eq!(app.doc.model.edit_context, Some(group), "back in the group");
+        app.undo(&ctx, false);
+        assert_eq!(app.doc.model.objects[&group].name, "Pair");
+        assert_eq!(app.doc.model.edit_context, Some(group));
+    });
+}
+
+#[test]
+fn edit_access_is_rechecked_before_each_mutating_call_in_a_batch() {
+    let fake = FakeTransport::default();
+    let ctx = egui::Context::default();
+    let mut model = Model::default();
+    fake.push_tool_calls(vec![
+        tool("r", "get_scene", json!({})),
+        new_board("b1", "One", [0., 0., 0.], [100., 100., 20.]),
+        new_board("b2", "Two", [200., 0., 0.], [100., 100., 20.]),
+    ]);
+    fake.push_text("never delivered");
+    let asked = std::cell::Cell::new(0);
+    let recheck = || {
+        asked.set(asked.get() + 1);
+        (asked.get() > 1).then(|| "access lapsed".to_owned())
+    };
+    let gate = turn::Gate { recheck: Some(&recheck), ..Default::default() };
+    let result = run_to_end(&fake, &ctx, &mut model, plain_setup("two boards"), &gate);
+    assert_eq!(asked.get(), 2, "read-only calls are not checked; each edit is");
+    assert_eq!(model.objects.len(), 1, "the second board never ran");
+    assert_eq!(result.error.as_deref(), Some("access lapsed"));
+    assert!(result.stopped);
+    assert_eq!(result.created.len(), 1);
+}
+
+#[test]
+fn an_oversized_tool_result_is_still_valid_json() {
+    let mut text = String::from("{\"items\":[");
+    text.push_str(&"\"quoted \\\"text\\\"\",".repeat(2_000));
+    text.push_str("0]}");
+    for ok in [true, false] {
+        let cut = turn::truncated_result(&text, ok);
+        let value: Value = serde_json::from_str(&cut).unwrap();
+        assert_eq!(value["ok"], ok);
+        assert_eq!(value["truncated"], true);
+        assert!(text.starts_with(value["preview"].as_str().unwrap()));
+        assert!(cut.len() <= 8_000, "escaped quotes do not push it over the cap: {}", cut.len());
+    }
+}
+
+#[test]
+fn history_keeps_alternating_roles_after_stopped_and_failed_turns() {
+    in_temp_data_dir("history_keeps_alternating_roles_after_stopped_and_failed_turns", || {
+        let fake = FakeTransport::default();
+        let ctx = egui::Context::default();
+        let mut app = connected_app(&fake);
+        fake.push_text("never delivered");
+        ask(&mut app, &ctx, "first");
+        app.assistant_stop(&ctx);
+        fake.replies.lock().unwrap().push_back(Err(ChatError::InvalidKey));
+        ask(&mut app, &ctx, "second");
+        finish(&mut app, &ctx);
+        fake.push_text("fine");
+        ask(&mut app, &ctx, "third");
+        finish(&mut app, &ctx);
+        let roles: Vec<Role> = app.assistant.history.iter().map(|m| m.role).collect();
+        assert_eq!(roles, [Role::User, Role::Assistant, Role::User, Role::Assistant, Role::User, Role::Assistant]);
+        assert_eq!(app.assistant.history[1].content, "(stopped)");
+        assert!(app.assistant.history[3].content.starts_with("(error: "), "{}", app.assistant.history[3].content);
+        let requests = fake.requests.lock().unwrap();
+        let roles: Vec<&str> = requests.last().unwrap()["messages"].as_array().unwrap().iter().skip(2).map(|m| m["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, ["user", "assistant", "user", "assistant", "user"]);
+    });
+}
+
+#[test]
+fn a_turn_without_changes_leaves_the_earlier_undo_card_intact() {
+    in_temp_data_dir("a_turn_without_changes_leaves_the_earlier_undo_card_intact", || {
+        let fake = FakeTransport::default();
+        let ctx = egui::Context::default();
+        let mut app = connected_app(&fake);
+        fake.push_tool_calls(vec![new_board("b1", "Shelf", [0., 0., 0.], [600., 200., 19.])]);
+        fake.push_text("Added a shelf.");
+        ask(&mut app, &ctx, "add a shelf");
+        finish(&mut app, &ctx);
+        let card = app.assistant.transcript.iter().find_map(|e| e.changes.clone()).unwrap();
+        assert_eq!(card.position, Some(1));
+        fake.push_text("Looks fine, nothing to change.");
+        ask(&mut app, &ctx, "is it fine?");
+        finish(&mut app, &ctx);
+        let cards: Vec<&Changes> = app.assistant.transcript.iter().filter_map(|e| e.changes.as_ref()).collect();
+        assert_eq!(cards, [&card], "the earlier card keeps its position and names");
+    });
+}
+
+#[test]
+fn a_typed_model_survives_a_model_list_that_omits_it() {
+    let fake = FakeTransport::default();
+    let ctx = egui::Context::default();
+    let mut model = Model::default();
+    let mut assistant = Assistant::with_transport(Box::new(fake.clone()));
+    *fake.models.lock().unwrap() = Some(Ok(vec!["alpha".into(), "qwen-3".into()]));
+    assistant.key = Some("k".into());
+    assistant.settings.model = "my-own-model".into();
+    assistant.refresh_models(&ctx);
+    assistant.poll(&ctx, &mut model, &turn::Gate::default());
+    assert_eq!(assistant.settings.model, "my-own-model");
+    assert_eq!(assistant.models, ["alpha", "qwen-3"]);
+    // Only an empty choice gets a default.
+    assistant.settings.model.clear();
+    assistant.refresh_models(&ctx);
+    assistant.poll(&ctx, &mut model, &turn::Gate::default());
+    assert_eq!(assistant.settings.model, "qwen-3");
+}
+
+#[test]
+fn a_new_server_address_is_kept_only_after_a_successful_connect() {
+    in_temp_data_dir("a_new_server_address_is_kept_only_after_a_successful_connect", || {
+        let fake = FakeTransport::default();
+        let ctx = egui::Context::default();
+        let mut model = Model::default();
+        let (old, new) = ("https://old.example/v1", "https://new.example/v1");
+        let mut assistant = Assistant::with_transport(Box::new(fake.clone()));
+        assistant.settings.base_url = old.into();
+        assistant.settings.model = "old-model".into();
+        assistant.key = Some("old-key".into());
+        *fake.models.lock().unwrap() = Some(Err(ChatError::InvalidKey));
+        assistant.connect_to(&ctx, new, "bad-key");
+        assistant.poll(&ctx, &mut model, &turn::Gate::default());
+        assert!(matches!(assistant.connection, Connection::Failed(_)));
+        assert_eq!(assistant.settings.base_url, old, "a rejected key leaves the address alone");
+        assert_eq!(assistant.key.as_deref(), Some("old-key"));
+        assert!(credentials::load(new).is_none());
+        *fake.models.lock().unwrap() = Some(Ok(vec!["new-model".into()]));
+        assistant.connect_to(&ctx, new, "good-key");
+        assert_eq!(assistant.settings.base_url, old, "not yet");
+        assistant.poll(&ctx, &mut model, &turn::Gate::default());
+        assert_eq!(assistant.settings.base_url, new);
+        assert_eq!(assistant.key.as_deref(), Some("good-key"));
+        assert_eq!(assistant.settings.model, "new-model");
+        assert_eq!(credentials::load(new).as_deref(), Some("good-key"));
+    });
+}
+
+#[test]
+fn bring_to_front_raises_the_embedded_window_layer() {
+    let ctx = egui::Context::default();
+    assert!(ctx.embed_viewports(), "this is the web/embedded path");
+    let mut app = BenchUpApp::with_document(benchup_core::Document::default(), None, true);
+    app.assistant.settings.window.detached = true;
+    let other = egui::LayerId::new(egui::Order::Middle, egui::Id::unique("another window"));
+    let top = |ctx: &egui::Context| ctx.memory(|m| m.areas().top_layer_id(egui::Order::Middle));
+    ctx.move_to_top(window::embedded_layer());
+    ctx.move_to_top(other);
+    ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+    assert_eq!(top(&ctx), Some(other));
+    app.assistant_reveal(&ctx);
+    ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+    assert_eq!(top(&ctx), Some(window::embedded_layer()));
+    assert!(app.assistant.ui.focus_prompt, "and the prompt is focused");
 }

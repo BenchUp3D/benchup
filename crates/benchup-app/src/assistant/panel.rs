@@ -6,7 +6,7 @@ use super::super::{
     sidebar::{self, OutlinerDrag},
     BenchUpApp,
 };
-use super::{client, Changes, Connection, Entry, EntryRole, Prompt};
+use super::{client, credentials, Changes, Connection, Entry, EntryRole, Prompt};
 use crate::{
     icons,
     modal::{primary_button, Modal},
@@ -483,23 +483,20 @@ impl BenchUpApp {
         let url = client::normalize_base(&dialog.base_url);
         if connect && !connecting && client::valid_base_url(&url) {
             if url != self.assistant.settings.base_url {
-                // Another server has its own key; drop this one from memory.
-                self.assistant.settings.base_url = url;
-                self.assistant.key = None;
-                self.assistant.models.clear();
-                self.assistant.ui.models_requested = false;
-                self.assistant.ui.key_checked = false;
-                self.assistant.connection = Connection::Disconnected;
-                self.assistant.load_key();
-                self.assistant.ui.key_checked = true;
-            }
-            if dialog.key.trim().is_empty() && self.assistant.key.is_some() {
+                // Another server has its own key. Nothing about the current
+                // server changes until this one accepts the key.
+                let typed = dialog.key.trim();
+                let key = if typed.is_empty() { credentials::load(&url).unwrap_or_default() } else { typed.to_owned() };
+                self.assistant.connect_to(ctx, &url, &key);
+                dialog.submitted = true;
+            } else if dialog.key.trim().is_empty() && self.assistant.key.is_some() {
                 // A key for this server is already stored on the device.
                 self.assistant.refresh_models(ctx);
                 return;
+            } else {
+                self.assistant.connect(ctx, &dialog.key);
+                dialog.submitted = true;
             }
-            self.assistant.connect(ctx, &dialog.key);
-            dialog.submitted = true;
         }
         if cancel || response.should_close() {
             if matches!(self.assistant.connection, Connection::Failed(_)) {
@@ -652,7 +649,9 @@ impl BenchUpApp {
             });
         } else if focused {
             ctx.input_mut(|i| {
-                if !busy && i.consume_key(egui::Modifiers::NONE, Key::Enter) {
+                // egui's key matching ignores Shift, so look at the event itself:
+                // Shift+Enter is left for the text box to insert a newline.
+                if !busy && consume_plain_enter(i) {
                     submit = true;
                 }
                 if state.text.is_empty()
@@ -879,6 +878,17 @@ fn transcript_entry(
         });
 }
 
+/// Remove and report an Enter key press that does not hold Shift.
+fn consume_plain_enter(input: &mut egui::InputState) -> bool {
+    let position = input.events.iter().position(|event| {
+        matches!(event, egui::Event::Key { key: Key::Enter, pressed: true, modifiers, .. } if !modifiers.shift)
+    });
+    position.is_some_and(|index| {
+        input.events.remove(index);
+        true
+    })
+}
+
 fn change_card(
     ui: &mut egui::Ui,
     changes: &Changes,
@@ -913,12 +923,11 @@ fn change_card(
                 .map(|id| (*id, tr!("assistant.card.created")))
                 .chain(changes.modified.iter().map(|id| (*id, tr!("assistant.card.modified"))))
                 .chain(changes.joints.iter().map(|id| (*id, tr!("assistant.card.joint"))));
+            let total = changes.created.len() + changes.modified.len() + changes.joints.len() + changes.erased.len();
             let mut shown = 0;
-            let mut total = 0;
             for (id, verb) in rows {
-                total += 1;
                 if shown >= CARD_ROWS {
-                    continue;
+                    break;
                 }
                 shown += 1;
                 let (name, kind) = entity_label(model, id);
@@ -940,9 +949,6 @@ fn change_card(
                     actions.push(CardAction::Focus(id));
                 }
             }
-            if total > shown {
-                ui.text_weak(tr!("assistant.card.more", count = total - shown));
-            }
             for id in &changes.erased {
                 if shown >= CARD_ROWS {
                     break;
@@ -954,6 +960,10 @@ fn change_card(
                     .cloned()
                     .unwrap_or_else(|| format!("#{id}"));
                 ui.text_weak(format!("{} · {name}", tr!("assistant.card.erased")));
+            }
+            // Every category counts, erased rows included.
+            if total > shown {
+                ui.text_weak(tr!("assistant.card.more", count = total - shown));
             }
             // Only the newest history step can be undone without disturbing later edits.
             let undoable = turn_undoable(changes, position, latest);

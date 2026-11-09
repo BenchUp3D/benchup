@@ -24,6 +24,8 @@ const MAX_TEXT_CHARS: usize = 500;
 const MAX_COORDINATE_MM: f64 = 1.0e5;
 /// Results may add up (move after move), but must stay finite and within 1 km.
 const MAX_RESULT_M: f64 = 1000.;
+/// Longest tag name core accepts (`Model::add_tag` counts bytes).
+const MAX_TAG_BYTES: usize = 128;
 const MIN_SCALE: f64 = 1.0e-3;
 const MAX_SCALE: f64 = 1.0e3;
 
@@ -34,6 +36,9 @@ pub(crate) struct ToolEnv {
     pub read_only: bool,
     /// Current selection; the `select` tool rewrites it.
     pub selection: BTreeSet<u64>,
+    /// The designer turned off "Include selection": `get_scene` and
+    /// `get_selection` must not reveal `selection`.
+    pub hide_selection: bool,
     /// Purchasing catalog the model may assign.
     pub catalog: BTreeMap<MaterialId, StockMaterial>,
     /// Model as it was before the first successful mutating call.
@@ -145,6 +150,12 @@ fn text() -> Value {
 fn number() -> Value {
     json!({"type": "number"})
 }
+/// A tag name: core rejects names over 128 bytes, so the schema says so.
+fn tag_name(nullable: bool) -> Value {
+    let kind = if nullable { json!(["string", "null"]) } else { json!("string") };
+    json!({"type": kind, "maxLength": MAX_TAG_BYTES,
+        "description": format!("At most {MAX_TAG_BYTES} bytes (UTF-8); not \"Untagged\".")})
+}
 fn axis_enum() -> Value {
     json!({"type": "string", "enum": ["x", "y", "z"]})
 }
@@ -174,7 +185,7 @@ pub(crate) fn definitions() -> Vec<Value> {
         def("create_board", "Create one rectangular board as a named group. origin_mm is the minimum corner; size_mm is [x, y, z] extents. Prefer this over drawing.",
             json!({"name": text(), "origin_mm": vec3(), "size_mm": vec3(),
                 "material_id": {"type": "string", "description": "id from list_stock_materials"},
-                "grain_axis": axis_enum(), "tag": text()}),
+                "grain_axis": axis_enum(), "tag": tag_name(false)}),
             &["name", "origin_mm", "size_mm"]),
         def("create_copy", "Copy an object or group, shifted by offset_mm. Returns the new ids.",
             json!({"id": id(), "offset_mm": vec3()}), &["id", "offset_mm"]),
@@ -184,7 +195,7 @@ pub(crate) fn definitions() -> Vec<Value> {
         def("rotate", "Rotate objects about an axis through pivot_mm.",
             json!({"ids": ids(), "pivot_mm": vec3(), "axis": axis_enum(), "degrees": number()}), &["ids", "pivot_mm", "axis", "degrees"]),
         def("scale", "Uniformly scale objects about center_mm.",
-            json!({"ids": ids(), "center_mm": vec3(), "factor": {"type": "number", "exclusiveMinimum": 0}}), &["ids", "center_mm", "factor"]),
+            json!({"ids": ids(), "center_mm": vec3(), "factor": {"type": "number", "minimum": MIN_SCALE, "maximum": MAX_SCALE}}), &["ids", "center_mm", "factor"]),
         def("resize_board", "Resize a board to size_mm (world-axis extents), keeping its minimum corner fixed.",
             json!({"id": id(), "size_mm": vec3()}), &["id", "size_mm"]),
         def("push_pull", "Extrude a face outward by distance_mm (see get_object for face ids). Negative cuts into the part.",
@@ -198,7 +209,7 @@ pub(crate) fn definitions() -> Vec<Value> {
             json!({"ids": ids(), "name": text(), "component": {"type": "boolean"}}), &["ids", "name", "component"]),
         def("ungroup", "Dissolve groups/components one level.", json!({"ids": ids()}), &["ids"]),
         def("tag", "Assign a tag by name (created if missing), or null to clear.",
-            json!({"ids": ids(), "tag": {"type": ["string", "null"]}}), &["ids", "tag"]),
+            json!({"ids": ids(), "tag": tag_name(true)}), &["ids", "tag"]),
         def("paint", "Paint objects or faces with an RGB color.",
             json!({"ids": ids(), "rgb": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 255}, "minItems": 3, "maxItems": 3}}), &["ids", "rgb"]),
         def("erase", "Delete entities.", json!({"ids": ids()}), &["ids"]),
@@ -498,10 +509,11 @@ fn assign_material(model: &mut Model, env: &ToolEnv, object: u64, material: Opti
     Ok(())
 }
 fn tag_named(model: &mut Model, name: &str) -> Result<u64, Fail> {
-    if name.chars().count() > MAX_TEXT_CHARS {
-        return Err(fail("tag name too long", format!("Use at most {MAX_TEXT_CHARS} characters.")));
+    let name = name.trim();
+    if name.len() > MAX_TAG_BYTES {
+        return Err(fail("tag name too long", format!("Use at most {MAX_TAG_BYTES} bytes (UTF-8).")));
     }
-    let folded = name.trim().to_lowercase();
+    let folded = name.to_lowercase();
     if let Some(tag) = model.tags.values().find(|t| t.name.to_lowercase() == folded) {
         return Ok(tag.id);
     }
@@ -854,7 +866,8 @@ fn run(model: &mut Model, env: &mut ToolEnv, name: &str, arguments: &str) -> Res
     match name {
         "get_scene" => {
             parse::<Empty>(arguments)?;
-            read(scene::summary(model, &env.selection, &env.catalog, scene::SCENE_BUDGET))
+            let shared = if env.hide_selection { BTreeSet::new() } else { env.selection.clone() };
+            read(scene::summary(model, &shared, &env.catalog, scene::SCENE_BUDGET))
         }
         "find_objects" => find_objects(model, parse(arguments)?),
         "get_object" => {
@@ -863,6 +876,9 @@ fn run(model: &mut Model, env: &mut ToolEnv, name: &str, arguments: &str) -> Res
         }
         "get_selection" => {
             parse::<Empty>(arguments)?;
+            if env.hide_selection {
+                return read(json!({"selection": [], "note": "The designer has turned off sharing their selection."}));
+            }
             let live: Vec<u64> = env.selection.iter().copied().filter(|id| model.contains_entity(id)).collect();
             read(json!({
                 "selection": live,
@@ -894,7 +910,15 @@ fn run(model: &mut Model, env: &mut ToolEnv, name: &str, arguments: &str) -> Res
         "add_text" => add_text(model, parse(arguments)?),
         "select" => {
             let a: IdsArg = parse(arguments)?;
-            env.selection = entities(model, &a.ids, false)?;
+            let chosen = entities(model, &a.ids, false)?;
+            // Shared project: only what this designer may edit can be selected.
+            if let Some(id) = chosen.iter().find(|id| !leased(model, env, **id)) {
+                return Err(fail(
+                    format!("entity {id} is not in your edit lease"),
+                    "Only entities you hold the edit lease on (or created this turn) can be selected.",
+                ));
+            }
+            env.selection = chosen;
             read(json!({"selection": env.selection}))
         }
         "enter_object" => {

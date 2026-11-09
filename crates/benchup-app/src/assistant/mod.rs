@@ -135,6 +135,9 @@ pub(super) struct Assistant {
     /// Reply to a model-list request, with the server it was sent to.
     models_receiver: Option<(String, Receiver<Result<Vec<String>, ChatError>>)>,
     key_candidate: Option<String>,
+    /// A server being validated from the connect dialog. It becomes
+    /// `settings.base_url` only if the connection succeeds.
+    pending_base: Option<String>,
     transport: Box<dyn ChatTransport>,
     /// Session-only panel state: composer, chips, dialogs.
     pub ui: panel::UiState,
@@ -158,6 +161,7 @@ impl Assistant {
             turn: None,
             models_receiver: None,
             key_candidate: None,
+            pending_base: None,
             transport,
             ui: panel::UiState::default(),
         }
@@ -189,6 +193,13 @@ impl Assistant {
     }
     /// Validate a key by listing models; it is saved only if the server accepts it.
     pub(super) fn connect(&mut self, ctx: &egui::Context, key: &str) {
+        let base = self.settings.base_url.clone();
+        self.connect_to(ctx, &base, key);
+    }
+    /// Like `connect`, for a server that is not the current one yet: the
+    /// address, the key and the model list are adopted only on success.
+    pub(super) fn connect_to(&mut self, ctx: &egui::Context, base: &str, key: &str) {
+        let base = client::normalize_base(base);
         let key = key.trim();
         if key.is_empty() {
             self.connection = Connection::Failed(tr!("assistant.error.invalid_api_key").into());
@@ -196,7 +207,8 @@ impl Assistant {
         }
         self.connection = Connection::Connecting;
         self.key_candidate = Some(key.to_owned());
-        self.models_receiver = Some((self.settings.base_url.clone(), self.transport.models(ctx, &self.settings.base_url, key)));
+        self.pending_base = (base != client::normalize_base(&self.settings.base_url)).then(|| base.clone());
+        self.models_receiver = Some((base.clone(), self.transport.models(ctx, &base, key)));
     }
     /// Reload the model list with the stored key.
     pub(super) fn refresh_models(&mut self, ctx: &egui::Context) {
@@ -228,7 +240,9 @@ impl Assistant {
         };
         let base = self.models_receiver.take().map(|(base, _)| base).unwrap_or_default();
         let candidate = self.key_candidate.take();
-        if client::normalize_base(&base) != client::normalize_base(&self.settings.base_url) {
+        let pending = self.pending_base.take();
+        let expected = pending.as_deref().unwrap_or(&self.settings.base_url);
+        if client::normalize_base(&base) != client::normalize_base(expected) {
             // The server setting changed while this request was in flight: the
             // reply (and any key it validated) belongs to another server.
             if self.connection == Connection::Connecting {
@@ -238,6 +252,15 @@ impl Assistant {
         }
         match reply {
             Ok(models) => {
+                if let Some(new_base) = pending {
+                    // Validated: only now does the new server replace the old one.
+                    self.settings.base_url = new_base;
+                    self.settings.model.clear();
+                    self.key = None;
+                    self.models.clear();
+                    self.ui.models_requested = true;
+                    self.ui.key_checked = true;
+                }
                 if let Some(key) = candidate {
                     match credentials::save(&base, &key) {
                         Ok(()) => {}
@@ -249,7 +272,8 @@ impl Assistant {
                     }
                     self.key = Some(key);
                 }
-                if !models.iter().any(|m| *m == self.settings.model) {
+                // Keep a chosen or typed model even if the list omits it.
+                if self.settings.model.trim().is_empty() {
                     self.settings.model = models
                         .iter()
                         .find(|m| m.to_lowercase().contains(DEFAULT_MODEL_HINT))
@@ -339,9 +363,10 @@ impl Assistant {
 
     /// End the running turn and throw its edits away (the model it edited was
     /// replaced): nothing is committed, and the transcript says why.
-    pub(super) fn discard_turn(&mut self, model: &Model, error: String) -> bool {
+    pub(super) fn discard_turn(&mut self, model: &mut Model, error: String) -> bool {
         let Some(mut turn) = self.turn.take() else { return false };
         let mut result = turn.stop(model);
+        restore_scope(model, result.scope);
         result.before = None;
         result.selection = None;
         (result.created, result.modified, result.erased, result.joints) = Default::default();
@@ -351,8 +376,10 @@ impl Assistant {
     }
 
     /// Record a finished turn in the transcript and the model-facing history.
-    pub(super) fn record(&mut self, result: &TurnResult) {
+    /// Returns whether a change card was added for it.
+    pub(super) fn record(&mut self, result: &TurnResult) -> bool {
         let changed = !(result.created.is_empty() && result.modified.is_empty() && result.erased.is_empty() && result.joints.is_empty());
+        let card = changed;
         if !result.summary.is_empty() {
             self.transcript.push(Entry {
                 role: EntryRole::Assistant,
@@ -385,27 +412,51 @@ impl Assistant {
         }
         let clip = |text: &str| -> String { text.chars().take(HISTORY_CHARS).collect() };
         self.history.push(Message::text(Role::User, clip(&result.prompt)));
-        if !result.summary.is_empty() {
-            self.history.push(Message::text(Role::Assistant, clip(&result.summary)));
-        }
+        // Always answer the user message, so roles keep alternating.
+        let reply = if !result.summary.is_empty() {
+            clip(&result.summary)
+        } else if let Some(error) = &result.error {
+            clip(&format!("(error: {error})"))
+        } else if result.stopped {
+            "(stopped)".to_owned()
+        } else {
+            "(no reply)".to_owned()
+        };
+        self.history.push(Message::text(Role::Assistant, reply));
         let excess = self.history.len().saturating_sub(HISTORY_MESSAGES);
         self.history.drain(..excess);
+        card
     }
+}
+
+/// Put the user back in the editing scope they had before the turn, or at the
+/// top level if that object is gone.
+fn restore_scope(model: &mut Model, scope: Option<u64>) {
+    model.edit_context = scope.filter(|id| model.objects.contains_key(id));
 }
 
 impl BenchUpApp {
     /// Called once per frame from `ui`.
     pub(super) fn poll_assistant(&mut self, ctx: &egui::Context) {
-        let gate = if self.assistant.busy() {
-            // Shared projects: editing rights can lapse between rounds.
-            Gate {
-                block: (!self.shared_edit_allowed(ctx)).then(|| self.shared_edit_block_reason(ctx).to_owned()),
-                lease: self.shared_lease(),
-            }
-        } else {
-            Gate::default()
+        if !self.assistant.busy() {
+            // Still advances connection checks.
+            self.assistant.poll(ctx, &mut self.doc.model, &Gate::default());
+            return;
+        }
+        // Shared projects: editing rights can lapse between rounds, and the
+        // turn asks again before each edit. The check reads only the sharing
+        // state, so the assistant and the model are lent out while it runs.
+        let block = (!self.shared_edit_allowed(ctx)).then(|| self.shared_edit_block_reason(ctx).to_owned());
+        let lease = self.shared_lease();
+        let mut assistant = std::mem::take(&mut self.assistant);
+        let mut model = std::mem::take(&mut self.doc.model);
+        let poll = {
+            let app = &*self;
+            let recheck = || (!app.shared_edit_allowed(ctx)).then(|| app.shared_edit_block_reason(ctx).to_owned());
+            assistant.poll(ctx, &mut model, &Gate { block, lease, recheck: Some(&recheck) })
         };
-        let poll = self.assistant.poll(ctx, &mut self.doc.model, &gate);
+        self.doc.model = model;
+        self.assistant = assistant;
         if poll.mutated {
             self.changed(ctx);
         }
@@ -441,16 +492,29 @@ impl BenchUpApp {
             .as_ref()
             .map(|before| panel::erased_names(before, &result.erased))
             .unwrap_or_default();
+        // Tool calls may have opened or left groups; the designer goes back to
+        // the scope they were in (the snapshot below already has it).
+        restore_scope(&mut self.doc.model, result.scope);
         if let Some(before) = result.before.take() {
-            recorded = before != self.doc.model && self.shared_edit_allowed(ctx);
+            let edited = before != self.doc.model;
             let label = if result.stopped {
                 tr!("assistant.history_stopped").to_owned()
             } else {
                 let summary: String = result.summary.chars().take(60).collect();
                 tr!("assistant.history_label", summary = summary.trim())
             };
-            self.finish_edit(&label, before, ctx);
-            // An edit refused for a shared project is rolled back as a whole.
+            recorded = self.commit_edit(&label, before, ctx);
+            if edited && !recorded {
+                // Shared edit access lapsed: the edits were rolled back as a
+                // whole, so the change card must not claim them.
+                (result.created, result.modified, result.erased, result.joints) = Default::default();
+                result.selection = None;
+                let rolled_back = tr!("assistant.error.rolled_back").to_owned();
+                result.error = Some(match result.error.take() {
+                    Some(error) => format!("{error} {rolled_back}"),
+                    None => rolled_back,
+                });
+            }
             let touched: BTreeSet<u64> = result.created.iter().chain(&result.modified).copied().collect();
             let model = &self.doc.model;
             let focus: BTreeSet<u64> = touched
@@ -467,19 +531,22 @@ impl BenchUpApp {
                 .filter(|id| self.doc.model.contains_entity(id) && !self.doc.model.is_hidden(*id))
                 .collect();
         }
-        self.assistant.record(&result);
+        let card = self.assistant.record(&result);
         // Remember where this turn sits in the history, so "Undo turn" is only
-        // offered while it is still the newest step.
-        let position = recorded.then(|| self.doc.history.position());
-        if let Some(changes) = self
-            .assistant
-            .transcript
-            .iter_mut()
-            .rev()
-            .find_map(|entry| entry.changes.as_mut())
-        {
-            changes.position = position;
-            changes.erased_names = erased_names;
+        // offered while it is still the newest step. A turn without a card
+        // must leave the earlier cards alone.
+        if card {
+            let position = recorded.then(|| self.doc.history.position());
+            if let Some(changes) = self
+                .assistant
+                .transcript
+                .iter_mut()
+                .rev()
+                .find_map(|entry| entry.changes.as_mut())
+            {
+                changes.position = position;
+                changes.erased_names = erased_names;
+            }
         }
         ctx.request_repaint();
     }
