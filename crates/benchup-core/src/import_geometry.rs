@@ -1,5 +1,5 @@
 //! Normalize externally authored surfaces without moving shared vertices.
-use crate::{DVec3, Edge, Face, Model, document::EPS, faces};
+use crate::{DVec3, Edge, Face, Model, faces};
 use std::collections::{BTreeMap, BTreeSet};
 
 impl Model {
@@ -99,8 +99,8 @@ impl Model {
             for t in indices.chunks_exact(3) {
                 let ring = vec![ids[t[0]], ids[t[1]], ids[t[2]]];
                 let [a, b, c] = [points[t[0]], points[t[1]], points[t[2]]];
-                let area = (b - a).cross(c - a).length() * 0.5;
-                if !area.is_finite() {
+                let altitude = faces::min_altitude(a, b, c);
+                if !altitude.is_finite() {
                     return Err(surface_error);
                 }
                 // A boundary split by neighbouring geometry leaves runs of
@@ -112,10 +112,7 @@ impl Model {
                 // altitude decides independently of the vertex order earcut
                 // emits; the plane check is kept as a guard so every face
                 // written here satisfies validation.
-                if area <= EPS * EPS
-                    || faces::min_altitude(a, b, c) <= faces::TOL
-                    || faces::plane(self, &ring).is_none()
-                {
+                if altitude <= faces::TOL || faces::plane(self, &ring).is_none() {
                     continue;
                 }
                 triangles.push(ring);
@@ -384,8 +381,9 @@ mod tests {
         for (id, edge) in &edges {
             assert_eq!(model.edges[id], *edge);
         }
-        // The slivers along the split edge are skipped, not kept or rejected.
-        assert!(model.faces.len() < 8, "{} faces", model.faces.len());
+        // Earcut emits eight triangles; the two slivers along the split edge
+        // are skipped, not kept or rejected.
+        assert_eq!(model.faces.len(), 6);
         for face in model.faces.values() {
             assert_eq!(face.vertices.len(), 3);
             let [a, b, c] = [0, 1, 2].map(|i| model.vertices[&face.vertices[i]].position);
@@ -402,8 +400,8 @@ mod tests {
     #[test]
     fn split_boundary_with_collinear_slivers_imports_as_a_filled_surface() {
         // Every split vertex sits 7 um below the corners, so the slivers
-        // between them are exactly collinear and failed the strict plane
-        // check, which used to reject the whole import.
+        // between them are exactly collinear with zero area, which used to
+        // reject the whole import.
         check_split_board(split_board([7e-6; 3]));
     }
 
@@ -412,8 +410,7 @@ mod tests {
         // The depths of the real deck model. Earcut lists two slivers with
         // their short edge first, so the third vertex clears the plane
         // tolerance even though the triangles are under a micrometre tall.
-        let model = check_split_board(split_board([10e-6, 8e-6, 5e-6]));
-        assert_eq!(model.faces.len(), 6);
+        check_split_board(split_board([10e-6, 8e-6, 5e-6]));
     }
 
     #[test]

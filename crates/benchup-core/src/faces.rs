@@ -49,9 +49,12 @@ pub fn plane(model: &Model, ring: &[u64]) -> Option<Plane> {
     })
 }
 /// Smallest altitude of a triangle: twice its area over its longest edge.
-/// A triangle whose altitude is at or below `TOL` is too thin to carry a
-/// plane whichever vertex comes first, unlike `plane` on a three-vertex
-/// ring, which only measures the third vertex against the first edge.
+/// `plane` on a three-vertex ring only measures the third vertex against
+/// the first edge, so a thin triangle can pass it in one vertex order and
+/// fail in another. An altitude above `TOL` guarantees `plane` succeeds
+/// in every order; one at or below `TOL` fails it at least when the longest
+/// edge comes first. Coincident points give zero; non-finite coordinates
+/// give a non-finite result.
 pub(crate) fn min_altitude(a: DVec3, b: DVec3, c: DVec3) -> f64 {
     let longest = (b - a).length().max((c - b).length()).max((a - c).length());
     if longest > 0. {
