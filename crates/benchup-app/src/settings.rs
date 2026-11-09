@@ -153,6 +153,8 @@ pub(super) struct GeneralSettings {
     pub show_fps: bool,
     pub default_units: benchup_core::UnitSettings,
     pub tool_keys: Vec<String>,
+    /// Key of the Ctrl/Cmd+Shift shortcut that toggles Build with MIRA.
+    pub assistant_key: String,
     pub stock: stock_settings::Settings,
 }
 
@@ -172,6 +174,7 @@ impl Default for GeneralSettings {
             default_units: Default::default(),
             stock: Default::default(),
             tool_keys: TOOLS.iter().map(|(_, key)| key.to_string()).collect(),
+            assistant_key: "M".into(),
         }
     }
 }
@@ -201,6 +204,9 @@ impl GeneralSettings {
                 .find(|key| !self.tool_keys.iter().any(|saved| saved.as_str() == *key))
                 .unwrap();
             self.tool_keys.push(key.into());
+        }
+        if !valid_tool_key(&self.assistant_key) || self.assistant_key == "Space" {
+            self.assistant_key = Self::default().assistant_key;
         }
         if self.tool_keys.len() != TOOLS.len()
             || self
@@ -536,11 +542,30 @@ impl BenchUpApp {
                         }
                     });
                 }
+                let assistant_label = tr!("assistant.name");
+                if assistant_label.to_lowercase().contains(&query) {
+                    matches += 1;
+                    table.row(ui, "settings_assistant_key", |column, ui| {
+                        if column == 0 {
+                            let modifier = if ui.ctx().os() == egui::os::OperatingSystem::Mac { "⌘ Shift" } else { "Ctrl+Shift" };
+                            ui.text_label(tr!("assistant.shortcut_label", name = assistant_label, modifier = modifier));
+                        } else if let Some(key) = shortcut_input(
+                            ui,
+                            "settings_assistant_key_input",
+                            &self.general_settings.assistant_key,
+                            ui.available_width(),
+                        ) {
+                            self.general_settings.assistant_key = key;
+                        }
+                    });
+                }
                 if matches == 0 {
                     ui.text_weak(tr!("settings.no_tools_match_your_search"));
                 }
                 if ui.button(tr!("settings.restore_default_shortcuts")).clicked() {
-                    self.general_settings.tool_keys = GeneralSettings::default().tool_keys;
+                    let defaults = GeneralSettings::default();
+                    self.general_settings.tool_keys = defaults.tool_keys;
+                    self.general_settings.assistant_key = defaults.assistant_key;
                 }
             }
             Section::Units => {

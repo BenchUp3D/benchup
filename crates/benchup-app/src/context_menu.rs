@@ -25,6 +25,7 @@ pub(super) enum ContextAction {
     Unhide,
     Lock,
     Unlock,
+    AskAssistant,
 }
 
 impl BenchUpApp {
@@ -49,6 +50,11 @@ impl BenchUpApp {
             self.snap = None;
         }
         match action {
+            AskAssistant if !self.selected.is_empty() => {
+                let ids: Vec<u64> = self.selected.iter().copied().collect();
+                self.assistant_add_chips(ids);
+                self.assistant_reveal(ctx);
+            }
             AutomaticFasteners => self.open_fasteners(ctx),
             WoodJoinery => self.open_joinery(ctx),
             Rename if !locked && self.selected.len() == 1 => {
@@ -317,6 +323,7 @@ impl BenchUpApp {
                 ContextAction::Unhide => Some("eye"),
                 ContextAction::Lock => Some("lock"),
                 ContextAction::Unlock => Some("unlock"),
+                ContextAction::AskAssistant => Some("assistant"),
                 ContextAction::Ungroup | ContextAction::Explode | ContextAction::CleanAligned => None,
             };
             let mut button = Self::menu_item_button(ui, label, icon);
@@ -405,6 +412,8 @@ impl BenchUpApp {
         } else {
             item(ui, tr!("context_menu.lock"), selected, ContextAction::Lock);
         }
+        ui.separator();
+        item(ui, tr!("assistant.ask_about_this"), selected, ContextAction::AskAssistant);
         extra(self, ui);
         if let Some(action) = action {
             self.context_action(ui.ctx(), action);

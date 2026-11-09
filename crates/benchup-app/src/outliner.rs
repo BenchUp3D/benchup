@@ -9,8 +9,8 @@ struct OutlinerAction {
     open: bool,
 }
 
-struct OutlinerDrag {
-    ids: BTreeSet<u64>,
+pub(in crate::app) struct OutlinerDrag {
+    pub(in crate::app) ids: BTreeSet<u64>,
 }
 
 struct OutlinerDrop {

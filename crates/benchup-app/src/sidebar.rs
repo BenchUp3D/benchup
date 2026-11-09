@@ -11,7 +11,7 @@ mod view_controls;
 
 #[path = "outliner.rs"]
 mod outliner;
-pub(super) use outliner::OutlinerCache;
+pub(super) use outliner::{OutlinerCache, OutlinerDrag};
 
 #[path = "inspector_docking.rs"]
 mod docking;
@@ -61,6 +61,7 @@ pub(super) struct InspectorPreferences {
     section_aliases: std::collections::BTreeMap<String, String>,
     scroll_positions: std::collections::BTreeMap<String, [f32; 2]>,
     modal_sizes: std::collections::BTreeMap<String, [f32; 2]>,
+    assistant: assistant::Preferences,
 }
 
 impl Default for InspectorPreferences {
@@ -100,6 +101,7 @@ impl Default for InspectorPreferences {
             section_aliases: Default::default(),
             scroll_positions: Default::default(),
             modal_sizes: Default::default(),
+            assistant: Default::default(),
         }
     }
 }
@@ -564,6 +566,16 @@ pub(super) fn remember_section(ctx: &egui::Context, id: egui::Id, key: &str) {
     }
 }
 
+pub(super) fn section_open(ctx: &egui::Context, key: &str, default_open: bool) -> bool {
+    ctx.data_mut(|data| {
+        data.get_temp_mut_or_default::<SectionMemory>(section_memory_id())
+            .0
+            .get(key)
+            .copied()
+            .unwrap_or(default_open)
+    })
+}
+
 pub(super) fn set_section_open(ctx: &egui::Context, key: &str, open: bool) {
     ctx.data_mut(|data| {
         let memory = data.get_temp_mut_or_default::<SectionMemory>(section_memory_id());
@@ -598,6 +610,7 @@ impl BenchUpApp {
             *position = valid_scroll_position(*position);
         }
         self.sharing.preferences = preferences.sharing.clone();
+        self.assistant.restore(&preferences.assistant);
         self.account.open = preferences.account_open;
         self.account.menu_open = preferences.account_menu_open;
         self.general_settings = preferences.general.clone();
@@ -699,6 +712,7 @@ impl BenchUpApp {
             joinery: self.joinery.clone(),
             fasteners: self.fasteners.clone(),
             sharing: self.sharing.preferences.clone(),
+            assistant: self.assistant.preferences(),
             account_open: self.account.open,
             account_menu_open: self.account.menu_open,
             general: self.general_settings.clone(),
@@ -812,6 +826,9 @@ pub(super) enum InspectorSection {
     TimeCostEstimates,
     Materials,
     History,
+    // Appended after History so saved layouts keep their order; the legacy
+    // Fasteners variant stays last only to migrate old saves.
+    Assistant,
     // Legacy serialized section retained only to migrate saved layouts.
     Fasteners,
 }
@@ -849,6 +866,7 @@ pub(super) fn restore_order(
         InspectorSection::TimeCostEstimates,
         InspectorSection::Materials,
         InspectorSection::History,
+        InspectorSection::Assistant,
     ] {
         if !order.contains(&section) {
             order.push(section);
@@ -1031,13 +1049,13 @@ mod preference_tests {
         let ctx = egui::Context::default();
         let mut storage = SavedPreferences::default();
         let previous: Vec<_> = InspectorSection::ALL.into_iter()
-            .filter(|section| !matches!(section, InspectorSection::History | InspectorSection::Fasteners)).collect();
+            .filter(|section| !matches!(section, InspectorSection::History | InspectorSection::Assistant | InspectorSection::Fasteners)).collect();
         eframe::set_value(&mut storage, ORDER_PREFERENCE_KEY, &previous);
         let mut app = BenchUpApp::with_document(Document::default(), None, true);
         app.restore_inspector_preferences(&ctx, Some(&storage));
         assert_eq!(&app.inspector_order[..previous.len()], previous.as_slice());
         assert_eq!(app.inspector_order[previous.len()], InspectorSection::History);
-        assert_eq!(app.inspector_order.last(), Some(&InspectorSection::History));
+        assert_eq!(app.inspector_order.last(), Some(&InspectorSection::Assistant));
         let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
             assert_eq!(restored_header_open(ui, "history", true), Some(true));
         });
@@ -3396,11 +3414,12 @@ mod preference_tests {
         let restored = restore_order(Some(&storage));
         assert_eq!(&restored[..previous.len()], previous.as_slice());
         assert_eq!(
-            restored[restored.len() - 3],
+            restored[restored.len() - 4],
             InspectorSection::TimeCostEstimates
         );
-        assert_eq!(restored[restored.len() - 2], InspectorSection::Materials);
-        assert_eq!(restored.last(), Some(&InspectorSection::History));
+        assert_eq!(restored[restored.len() - 3], InspectorSection::Materials);
+        assert_eq!(restored[restored.len() - 2], InspectorSection::History);
+        assert_eq!(restored.last(), Some(&InspectorSection::Assistant));
     }
 
     #[test]
@@ -3423,6 +3442,7 @@ mod preference_tests {
             InspectorSection::TimeCostEstimates,
             InspectorSection::Materials,
             InspectorSection::History,
+            InspectorSection::Assistant,
         ];
         let mut storage = SavedPreferences::default();
         eframe::set_value(&mut storage, ORDER_PREFERENCE_KEY, &original);
@@ -3518,11 +3538,12 @@ mod preference_tests {
         assert_eq!(&restored[..previous.len()], previous.as_slice());
         assert_eq!(restored[previous.len()], InspectorSection::Units);
         assert_eq!(
-            restored[restored.len() - 3],
+            restored[restored.len() - 4],
             InspectorSection::TimeCostEstimates
         );
-        assert_eq!(restored[restored.len() - 2], InspectorSection::Materials);
-        assert_eq!(restored.last(), Some(&InspectorSection::History));
+        assert_eq!(restored[restored.len() - 3], InspectorSection::Materials);
+        assert_eq!(restored[restored.len() - 2], InspectorSection::History);
+        assert_eq!(restored.last(), Some(&InspectorSection::Assistant));
     }
 
     #[test]
@@ -3770,6 +3791,7 @@ mod preference_tests {
                 InspectorSection::TimeCostEstimates,
                 InspectorSection::Materials,
                 InspectorSection::History,
+                InspectorSection::Assistant,
             ]
         );
     }
@@ -3976,7 +3998,7 @@ mod preference_tests {
 }
 
 impl InspectorSection {
-    pub(super) const COUNT: usize = 10;
+    pub(super) const COUNT: usize = 11;
 
     pub(super) const ALL: [Self; Self::COUNT] = [
         Self::EntityInfo,
@@ -3989,6 +4011,7 @@ impl InspectorSection {
         Self::TimeCostEstimates,
         Self::Materials,
         Self::History,
+        Self::Assistant,
     ];
 
     fn default_open(self) -> bool {
@@ -4007,6 +4030,7 @@ impl InspectorSection {
             Self::TimeCostEstimates => tr!("sidebar.time_cost_estimates"),
             Self::Materials => tr!("sidebar.materials"),
             Self::History => tr!("sidebar.history"),
+            Self::Assistant => tr!("assistant.name"),
             Self::Fasteners => tr!("sidebar.automatic_fasteners"),
         }
     }
@@ -4023,6 +4047,7 @@ impl InspectorSection {
             Self::TimeCostEstimates => "time_cost_estimates",
             Self::Materials => "materials",
             Self::History => "history",
+            Self::Assistant => "assistant",
             Self::Fasteners => "connections/fasteners",
         }
     }
@@ -4153,6 +4178,7 @@ fn inspector_icon_color(ui: &egui::Ui, id: &str) -> Color32 {
     let (light, dark) = match icons::section_icon(id) {
         "outliner" => ([48, 111, 173], [131, 185, 239]),
         "history" => ([117, 105, 155], [181, 169, 219]),
+        "assistant" => ([17, 129, 133], [103, 207, 211]),
         "entity_info" => ([17, 129, 133], [103, 207, 211]),
         "units" => ([67, 131, 68], [143, 205, 144]),
         "time_cost_estimates" => ([183, 92, 19], [242, 170, 100]),
@@ -4884,6 +4910,7 @@ impl BenchUpApp {
             ui.ctx().request_repaint();
         }
         ui.separator();
+        self.assistant_view_menu_item(ui);
         self.sections_menu(ui);
     }
 

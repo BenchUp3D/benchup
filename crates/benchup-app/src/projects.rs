@@ -163,6 +163,7 @@ impl BenchUpApp {
         path: Option<PathBuf>,
         ctx: &egui::Context,
     ) {
+        self.assistant_stop(ctx);
         self.fasteners.open=false;
         self.fastener_dialog=Default::default();
         self.release_shared_selection(ctx);

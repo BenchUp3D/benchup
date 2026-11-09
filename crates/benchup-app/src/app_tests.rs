@@ -491,6 +491,8 @@ mod release_notes;
 mod rendering;
 #[path = "text_tools_tests.rs"]
 mod text_tools;
+#[path = "assistant/ui_tests.rs"]
+mod assistant_ui;
 
 struct Harness {
     ctx: egui::Context,
@@ -520,7 +522,7 @@ impl Harness {
         // Fresh-layout defaults and restoration have separate preference tests.
         use sidebar::InspectorSection::*;
         let order = [Outliner, EntityInfo, Units, Components, Tags, Display, View,
-            TimeCostEstimates, Materials, History];
+            TimeCostEstimates, Materials, History, Assistant];
         harness.app.inspector_order = order;
         for key in ["outliner", "entity_info", "units", "components", "tags",
             "display", "view", "time_cost_estimates", "materials", "history"] {
@@ -5578,6 +5580,7 @@ fn sidebar_headers_dock_and_rejoin_in_memory_and_keep_their_disclosure_state() {
             InspectorSection::TimeCostEstimates,
             InspectorSection::Materials,
             InspectorSection::History,
+            InspectorSection::Assistant,
         ]
     );
     let order = h.app.inspector_order;

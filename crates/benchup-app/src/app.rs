@@ -85,6 +85,8 @@ pub(crate) mod viewport_benchmark;
 #[path = "web_viewport_benchmark.rs"]
 mod web_viewport_benchmark;
 
+#[path = "assistant/mod.rs"]
+mod assistant;
 #[path = "fasteners.rs"]
 mod fasteners;
 #[path = "sharing.rs"]
@@ -317,6 +319,7 @@ pub struct BenchUpApp {
     #[cfg(not(target_arch = "wasm32"))]
     viewport_benchmark: Option<viewport_benchmark::Benchmark>,
     account: crate::account::Account,
+    assistant: assistant::Assistant,
     joinery_geometry: joinery::GeometryCache,
     joinery: joinery::Preferences,
     joinery_dialog: joinery::Dialog,
@@ -497,6 +500,7 @@ impl BenchUpApp {
             #[cfg(not(target_arch = "wasm32"))]
             updates: crate::updates::Updater::default(),
             account: Default::default(),
+            assistant: Default::default(),
             joinery_geometry: Default::default(),
             joinery: Default::default(),
             joinery_dialog: Default::default(),
@@ -748,6 +752,13 @@ impl BenchUpApp {
     }
     fn finish_edit(&mut self, label: &str, before: Model, ctx: &egui::Context) {
         let edited = before != self.doc.model;
+        // User edits must not interleave with MIRA's tool calls. The assistant's
+        // own commit runs after its turn has ended, so it is never refused here.
+        if edited && self.assistant.busy() {
+            self.doc.model = before;
+            self.say(ctx, tr!("assistant.busy_blocked"));
+            return;
+        }
         if edited && !self.shared_edit_allowed(ctx) {
             self.doc.model = before;
             self.say(ctx, self.shared_edit_block_reason(ctx));
@@ -795,6 +806,7 @@ impl BenchUpApp {
         }
     }
     fn navigate_history(&mut self, ctx: &egui::Context, target: usize) {
+        if self.assistant.busy() { self.say(ctx, tr!("assistant.busy_blocked")); return; }
         if !self.shared_edit_allowed(ctx) { self.say(ctx, self.shared_edit_block_reason(ctx)); return; }
         self.history_preview = None;
         self.drawing_reference = None;
@@ -975,6 +987,7 @@ impl BenchUpApp {
         }
     }
     fn new_model(&mut self, ctx: &egui::Context) {
+        self.assistant_stop(ctx);
         let doc = Document {
             snap_to_geometry: self.doc.snap_to_geometry,
             snap_to_axes: self.doc.snap_to_axes,
@@ -2132,6 +2145,16 @@ impl BenchUpApp {
         }
 
         if self.project.blocked() || self.screenshot.open {
+            return;
+        }
+        if self.assistant_toggle_shortcut(ctx) {
+            return;
+        }
+        // MIRA owns the model while it works; Escape stops it, nothing else edits.
+        if self.assistant.busy() {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
+                self.assistant_stop(ctx);
+            }
             return;
         }
         if self.section_drag.is_some() {
@@ -4477,6 +4500,13 @@ impl BenchUpApp {
                     if self.gesture.is_some() {
                         continue;
                     }
+                    // Camera navigation and selecting stay available while MIRA edits.
+                    if self.assistant.busy()
+                        && button == egui::PointerButton::Primary
+                        && !matches!(self.tool, Tool::Select | Tool::Orbit)
+                    {
+                        continue;
+                    }
                     let kind = if button == egui::PointerButton::Middle
                         || (button == egui::PointerButton::Primary && self.tool == Tool::Orbit)
                     {
@@ -6394,6 +6424,7 @@ impl eframe::App for BenchUpApp {
         self.account.poll(&ctx);
         self.poll_project(&ctx);
         self.poll_sharing(&ctx);
+        self.poll_assistant(&ctx);
         self.sharing_before_frame(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -6422,6 +6453,8 @@ impl eframe::App for BenchUpApp {
         {
             save_preference(&ctx, storage);
         }
+        self.assistant_busy_banner(&ctx);
+        self.assistant_window(&ctx);
         self.object_creation_window(&ctx);
         self.rename_object_window(&ctx);
         self.connection_sidebar_selection(&ctx);

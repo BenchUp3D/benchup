@@ -91,6 +91,10 @@ impl BenchUpApp {
                 .map(|(action, keys)| (*action, (*keys).to_owned()))
                 .collect(),
         };
+        let assistant_keys = format!(
+            "{command} + Shift + {}",
+            shortcut_input::key_label(&self.general_settings.assistant_key)
+        );
         let sections = [
             section(
                 "drawing_measuring",
@@ -279,6 +283,7 @@ impl BenchUpApp {
                         tr!("shortcuts.delete_selection"),
                         tr!("shortcuts.delete_backspace"),
                     ),
+                    (tr!("assistant.name"), assistant_keys.as_str()),
                 ],
             ),
         ];

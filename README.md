@@ -29,6 +29,10 @@ Create mortise-and-tenon, half-lap, tongue-and-groove, rabbet, dovetail, and fin
 
 Set the grain direction on groups and components and show grain-direction guides directly on the model. Review how the grain runs across each board and through the full assembly before building. Grain orientation is saved with the project and follows the parts when they rotate.
 
+### Build with MIRA
+
+Describe a change in plain language, such as "make the left leg 40 mm thicker", and the Build with MIRA assistant applies it with BenchUp's own tools. Refer to parts with @, by dragging from the Outliner, or from the right-click menu. Each request is one undo step, with a review card to jump to what changed. The panel can be detached into its own window on a second monitor. See the [assistant guide](docs/assistant.md).
+
 ### Plan materials and workshop work
 
 Assign stock materials and wood types to parts, configure sanding and finishing products, and prepare cut lists, cutting plans, and workshop labels. Export cutting plans and time and cost estimates to PDF to take the design into the workshop.
