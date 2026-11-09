@@ -48,7 +48,7 @@ jobs:
         run: cargo test -p benchup-core --locked
 
       - name: Test assistant
-        run: cargo test -p benchup-app --lib --locked assistant::
+        run: cargo test -p benchup-app --lib --locked 'assistant::'
 
       - name: Test release-critical modules
         run: |
