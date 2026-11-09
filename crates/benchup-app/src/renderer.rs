@@ -3810,7 +3810,6 @@ impl CachedFace {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_ui::ContextExt as _;
     #[test]
     fn grain_rows_are_staggered_and_closer_across_than_along_the_grain() {
         use super::*;

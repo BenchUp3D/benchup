@@ -10,10 +10,7 @@ use std::{
     },
     time::Duration,
 };
-use velopack::{
-    bundle,
-    locator::{VelopackLocator, VelopackLocatorConfig},
-};
+use velopack::locator::{VelopackLocator, VelopackLocatorConfig, find_latest_full_package};
 
 struct Server {
     base: String,
@@ -182,10 +179,9 @@ fn shipped_065_updater_follows_transfer_and_rename_then_downloads_benchup_on_all
         let pending = manager.get_update_pending_restart().unwrap();
         assert_eq!(pending.PackageId, crate::identity::APP_ID);
         let file = config.PackagesDir.join(&pending.FileName);
-        let manifest = bundle::load_bundle_from_file(&file)
-            .unwrap()
-            .read_manifest()
-            .unwrap();
+        let (downloaded_file, manifest) = find_latest_full_package(&config.PackagesDir)
+            .expect("Downloaded update must contain a valid manifest");
+        assert_eq!(downloaded_file, file);
         let executable = if channel == "win-x64" {
             "benchup-app.exe"
         } else {
