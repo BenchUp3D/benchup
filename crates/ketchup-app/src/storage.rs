@@ -6,6 +6,13 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 static AUTOSAVE_TOKEN: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
+static EDIT_BASE: LazyLock<Mutex<Option<(ketchup_core::Model, ketchup_core::History)>>> =
+    LazyLock::new(|| Mutex::new(None));
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SavedEdits {
+    token: String,
+    checkpoint: ketchup_core::DocumentCheckpoint,
+}
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SavedSelection {
     token: String,
@@ -14,6 +21,7 @@ struct SavedSelection {
 }
 pub(crate) fn invalidate_selection_source() {
     *AUTOSAVE_TOKEN.lock().unwrap() = None;
+    *EDIT_BASE.lock().unwrap() = None;
 }
 fn source_token(json: &str) -> String {
     if let Some((_, tail)) = json.rsplit_once(",\"_ketchup_autosave\":\"")
@@ -36,9 +44,28 @@ fn autosave_json(doc: &Document) -> Result<(String, String), String> {
     json.push_str("\"}");
     Ok((json, token))
 }
+#[cfg(test)]
 fn restore_selection(json: &str, overlay: Option<&str>) -> Result<Document, String> {
+    restore_autosave(json, overlay, None)
+}
+fn remember_base(doc: &Document) {
+    *EDIT_BASE.lock().unwrap() = Some((doc.model.clone(), doc.history.clone()));
+}
+fn restore_autosave(
+    json: &str,
+    overlay: Option<&str>,
+    edits: Option<&str>,
+) -> Result<Document, String> {
     let mut doc = Document::from_json(json)?;
     let token = source_token(json);
+    remember_base(&doc);
+    if let Some(json) = edits {
+        let saved: SavedEdits = serde_json::from_str(json)
+            .map_err(|error| format!("Cannot restore autosave edits: {error}"))?;
+        if saved.token == token {
+            doc = saved.checkpoint.restore(&doc.model, &doc.history)?;
+        }
+    }
     if let Some(selection) =
         overlay.and_then(|json| serde_json::from_str::<SavedSelection>(json).ok())
         && selection.token == token
@@ -48,6 +75,22 @@ fn restore_selection(json: &str, overlay: Option<&str>) -> Result<Document, Stri
     }
     *AUTOSAVE_TOKEN.lock().unwrap() = Some(token);
     Ok(doc)
+}
+fn edits_json(doc: &Document) -> Result<Option<String>, String> {
+    let Some(token) = AUTOSAVE_TOKEN.lock().unwrap().clone() else {
+        return Ok(None);
+    };
+    let base = EDIT_BASE.lock().unwrap();
+    let Some((model, history)) = base.as_ref() else {
+        return Ok(None);
+    };
+    let json = serde_json::to_string(&SavedEdits {
+        token,
+        checkpoint: doc.checkpoint(model, history),
+    })
+    .map_err(|error| error.to_string())?;
+    // Compact large or long-running edit sessions into a complete snapshot.
+    Ok((json.len() <= 2 * 1024 * 1024).then_some(json))
 }
 fn selection_json(doc: &Document) -> Result<Option<String>, String> {
     let Some(token) = AUTOSAVE_TOKEN.lock().unwrap().clone() else {
@@ -83,9 +126,12 @@ pub fn load() -> Result<Option<Document>, String> {
     *AUTOSAVE_TOKEN.lock().unwrap() = None;
     let file = path()?;
     match std::fs::read_to_string(file) {
-        Ok(json) => restore_selection(
+        Ok(json) => restore_autosave(
             &json,
             std::fs::read_to_string(data_dir()?.join("model-selection.json"))
+                .ok()
+                .as_deref(),
+            std::fs::read_to_string(data_dir()?.join("model-edits.json"))
                 .ok()
                 .as_deref(),
         )
@@ -110,8 +156,32 @@ pub fn save(doc: &Document) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     std::fs::rename(temporary, file).map_err(|e| e.to_string())?;
+    match std::fs::remove_file(data_dir()?.join("model-edits.json")) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
     *AUTOSAVE_TOKEN.lock().unwrap() = Some(token);
+    remember_base(doc);
     Ok(())
+}
+#[cfg(not(target_arch = "wasm32"))]
+pub fn save_edits(doc: &Document) -> Result<(), String> {
+    let Some(json) = edits_json(doc)? else {
+        return save(doc);
+    };
+    let file = data_dir()?.join("model-edits.json");
+    let temporary = file.with_extension("json.tmp");
+    {
+        use std::io::Write;
+        let mut output = std::fs::File::create(&temporary).map_err(|e| e.to_string())?;
+        output
+            .write_all(json.as_bytes())
+            .and_then(|_| output.sync_all())
+            .map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(temporary, file).map_err(|e| e.to_string())?;
+    save_selection(doc)
 }
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save_selection(doc: &Document) -> Result<(), String> {
@@ -147,10 +217,15 @@ pub fn load() -> Result<Option<Document>, String> {
         .get_item("ketchup.document.v1")
         .map_err(|_| tr!("storage.cannot_read_local_storage").to_string())?;
     json.map(|json| {
-        restore_selection(
+        restore_autosave(
             &json,
             storage
                 .get_item("ketchup.selection.v1")
+                .ok()
+                .flatten()
+                .as_deref(),
+            storage
+                .get_item("ketchup.edits.v1")
                 .ok()
                 .flatten()
                 .as_deref(),
@@ -165,8 +240,22 @@ pub fn save(doc: &Document) -> Result<(), String> {
     browser_storage()?
         .set_item("ketchup.document.v1", &json)
         .map_err(|_| tr!("storage.local_storage_is_blocked_or_full").to_string())?;
+    browser_storage()?
+        .remove_item("ketchup.edits.v1")
+        .map_err(|_| tr!("storage.local_storage_is_blocked_or_full").to_string())?;
     *AUTOSAVE_TOKEN.lock().unwrap() = Some(token);
+    remember_base(doc);
     Ok(())
+}
+#[cfg(target_arch = "wasm32")]
+pub fn save_edits(doc: &Document) -> Result<(), String> {
+    let Some(json) = edits_json(doc)? else {
+        return save(doc);
+    };
+    browser_storage()?
+        .set_item("ketchup.edits.v1", &json)
+        .map_err(|_| tr!("storage.local_storage_is_blocked_or_full").to_string())?;
+    save_selection(doc)
 }
 #[cfg(target_arch = "wasm32")]
 pub fn save_selection(doc: &Document) -> Result<(), String> {

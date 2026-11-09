@@ -747,25 +747,31 @@ impl KetchupApp {
         }
     }
     fn finish_edit(&mut self, label: &str, before: Model, ctx: &egui::Context) {
-        if before != self.doc.model && !self.shared_edit_allowed(ctx) {
+        let edited = before != self.doc.model;
+        if edited && !self.shared_edit_allowed(ctx) {
             self.doc.model = before;
             self.say(ctx, self.shared_edit_block_reason(ctx));
             return;
         }
-        if before != self.doc.model {
+        if edited {
             self.solid_first = None;
             self.last_move_copy = None;
             self.measurement = None;
             self.modeling = None;
             self.reset_axis_locks_after_action();
             let author = self.current_history_author();
-            self.doc.history.record_attributed(label, before, &self.doc.model, Some(author), Some(sharing::now_timestamp()));
+            self.doc.history.record_applied_attributed(
+                label,
+                before,
+                &self.doc.model,
+                Some(author),
+                Some(sharing::now_timestamp()),
+            );
             self.selected.retain(|id| {
                 self.doc.model.entity_in_context(*id) == Some(*id) && !self.doc.model.is_hidden(*id)
             });
             self.changed(ctx);
-            #[cfg(target_arch = "wasm32")]
-            self.persist();
+            self.persist_edit();
         }
     }
     fn undo(&mut self, ctx: &egui::Context, redo: bool) {
@@ -810,7 +816,12 @@ impl KetchupApp {
         self.length_input.clear();
         let path = self.doc.model.edit_path();
         let author = self.current_history_author();
-        let did = self.doc.history.seek_attributed(&mut self.doc.model, target, Some(author), Some(sharing::now_timestamp()));
+        let did = self.doc.history.seek_applied_attributed(
+            &mut self.doc.model,
+            target,
+            Some(author),
+            Some(sharing::now_timestamp()),
+        );
         if did {
             self.outliner_anchor = None;
             self.doc.model.edit_context = path.into_iter().rev().find(|id| {
@@ -821,8 +832,7 @@ impl KetchupApp {
             self.selected.clear();
             self.hover = None;
             self.changed(ctx);
-            #[cfg(target_arch = "wasm32")]
-            self.persist();
+            self.persist_edit();
         }
     }
     fn erase_selected(&mut self, ctx: &egui::Context) {
@@ -6287,6 +6297,21 @@ impl KetchupApp {
         changed
     }
 
+    fn persist_edit(&mut self) {
+        self.sync_selection();
+        self.sync_viewport_cameras();
+        match storage::save_edits(&self.doc) {
+            Ok(()) => {
+                self.dirty_since = None;
+                self.save_error = None;
+                self.storage_recovery = false;
+            }
+            Err(error) => {
+                self.save_error = Some(error);
+                self.dirty_since = None;
+            }
+        }
+    }
     fn persist(&mut self) {
         self.sync_selection();
         self.sync_viewport_cameras();
