@@ -9,3 +9,5 @@ Guides for using the desktop and browser editor.
 - [Projects, import, export, and recovery](projects.md): saving projects, SketchUp import, OBJ export, autosave, and undo history.
 
 For development setup, building, testing, and deployment, see the [developer README](../README.md).
+
+Contributing to Build with MIRA? See the [MIRA contributor documentation](mira/README.md): architecture, tool catalog, LLM protocol, security, testing, and recipes for extending the assistant.
