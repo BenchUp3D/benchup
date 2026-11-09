@@ -98,10 +98,8 @@ impl Model {
             let mut triangles = Vec::new();
             for t in indices.chunks_exact(3) {
                 let ring = vec![ids[t[0]], ids[t[1]], ids[t[2]]];
-                let area = (points[t[1]] - points[t[0]])
-                    .cross(points[t[2]] - points[t[0]])
-                    .length()
-                    * 0.5;
+                let [a, b, c] = [points[t[0]], points[t[1]], points[t[2]]];
+                let area = (b - a).cross(c - a).length() * 0.5;
                 if !area.is_finite() {
                     return Err(surface_error);
                 }
@@ -109,7 +107,19 @@ impl Model {
                 // nearly collinear vertices. Earcut emits sliver triangles
                 // between them that are too thin to carry a strict plane; the
                 // filled region loses nothing visible when they are skipped.
-                if area <= EPS * EPS || faces::plane(self, &ring).is_none() {
+                // The smallest altitude is measured against the longest edge
+                // so the decision depends on the triangle's shape alone, not
+                // on the vertex order earcut happens to emit.
+                let longest = (b - a).length().max((c - b).length()).max((a - c).length());
+                let altitude = if longest > 0. {
+                    2. * area / longest
+                } else {
+                    0.
+                };
+                if area <= EPS * EPS
+                    || altitude <= faces::TOL
+                    || faces::plane(self, &ring).is_none()
+                {
                     continue;
                 }
                 triangles.push(ring);
@@ -352,31 +362,50 @@ mod tests {
     #[test]
     fn split_boundary_with_collinear_slivers_imports_as_a_filled_surface() {
         // A 45 mm x 2.15 m board face whose long edge was split by adjacent
-        // parts. The split vertices sit 5-10 um off the plane, so the face
-        // is tessellated; earcut then emits slivers along the split edge.
+        // parts. The split vertices sit 7 um off the plane of the corners, so
+        // the face is tessellated; earcut then emits slivers between the
+        // collinear split vertices that are too thin for a strict plane.
         let mut model = imported_face(&[&[
             [1.320050, -0.000171, 0.190587],
             [1.365050, -0.000171, 0.190587],
             [1.365050, 2.150276, 0.190587],
             [1.320050, 2.150276, 0.190587],
-            [1.320050, 2.149696, 0.190577],
-            [1.320050, 2.106792, 0.190577],
-            [1.320050, 0.389616, 0.190579],
-            [1.320050, 0.346712, 0.190579],
-            [1.320050, 0.043007, 0.190582],
-            [1.320050, 0.000103, 0.190582],
+            [1.320050, 2.149696, 0.190580],
+            [1.320050, 2.106792, 0.190580],
+            [1.320050, 0.389616, 0.190580],
+            [1.320050, 0.346712, 0.190580],
+            [1.320050, 0.043007, 0.190580],
+            [1.320050, 0.000103, 0.190580],
         ]]);
         let vertices = model.vertices.clone();
+        let edges = model.edges.clone();
         assert!(model.validate().is_err());
         model.normalize_imported_faces().unwrap();
         model.validate().unwrap();
         assert_eq!(model.vertices, vertices);
+        // Ten boundary vertices tessellate into eight triangles; the slivers
+        // along the split edge are skipped rather than kept or rejected.
+        assert!(model.faces.len() < 8, "{} faces", model.faces.len());
         assert!(model.faces.values().all(|f| f.vertices.len() == 3));
+        for (id, edge) in &edges {
+            assert_eq!(model.edges[id], *edge);
+        }
         let area: f64 = model.faces.values().map(|f| model.face_area(f)).sum();
         assert!((area - 0.045 * 2.150447).abs() < 1e-6, "area {area}");
         let before = model.clone();
         model.normalize_imported_faces().unwrap();
         assert_eq!(model, before);
+    }
+
+    #[test]
+    fn surface_made_only_of_slivers_still_fails() {
+        // Not exactly collinear, so the Newell normal exists and earcut runs,
+        // but the single triangle is half a micrometre tall.
+        let mut model = imported_face(&[&[[0., 0., 0.], [1., 0., 0.], [2., 0.0000005, 0.]]]);
+        assert_eq!(
+            model.normalize_imported_faces(),
+            Err(tr!("core.document.invalid_face_surface"))
+        );
     }
 
     #[test]

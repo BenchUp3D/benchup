@@ -4,7 +4,7 @@ use crate::document::EPS;
 use crate::{DVec2, DVec3, Face, Model, Ray};
 use std::collections::{BTreeMap, BTreeSet};
 
-const TOL: f64 = 1e-6;
+pub(crate) const TOL: f64 = 1e-6;
 
 #[derive(Clone, Copy)]
 pub struct Plane {
