@@ -1,4 +1,4 @@
-//! Root drawings own their topology; drawing inside an object edits that object.
+//! Optional automatic groups isolate root drawings; drawing inside an object edits it.
 use ketchup_core::tr;
 use super::*;
 
@@ -25,7 +25,9 @@ impl KetchupApp {
                 && !self.doc.model.is_locked(*id)
                 && !self.doc.model.is_hidden(*id)
         });
-        let new_group = context.is_none() && continuing_group.is_none();
+        let new_group = self.general_settings.auto_group_new_shapes
+            && context.is_none()
+            && continuing_group.is_none();
         let mut drawing = if new_group {
             Model::default()
         } else {
@@ -53,16 +55,80 @@ impl KetchupApp {
 mod tests {
     use super::*;
 
-    fn app(tool: Tool) -> KetchupApp {
+    fn grouping_app(tool: Tool) -> KetchupApp {
         let mut app = KetchupApp::with_document(Document::default(), None, true);
+        app.general_settings.auto_group_new_shapes = true;
         app.set_tool(tool);
         app
     }
+
+    #[test]
+    fn root_drawing_tools_leave_new_shapes_ungrouped_by_default() {
+        let ctx = egui::Context::default();
+        let points = [
+            DVec3::ZERO,
+            DVec3::X,
+            DVec3::X + DVec3::Y,
+            DVec3::Y,
+            DVec3::ZERO,
+        ];
+        for tool in [
+            Tool::Line,
+            Tool::Rectangle,
+            Tool::Circle,
+            Tool::Polygon,
+            Tool::Freehand,
+        ] {
+            let mut app = KetchupApp::with_document(Document::default(), None, true);
+            app.set_tool(tool);
+            assert!(!app.general_settings.auto_group_new_shapes);
+            let (model, group, closed) = app.drawn_geometry(&points, None).unwrap();
+            assert!(closed);
+            assert!(group.is_none());
+            assert!(model.objects.is_empty());
+            assert_eq!(model.faces.len(), 1);
+            assert_eq!(model.edges.len(), 4);
+            assert!(
+                model
+                    .selectable_entities()
+                    .iter()
+                    .all(|id| model.parent(*id).is_none())
+            );
+            model.validate().unwrap();
+            app.doc.model = model;
+            app.prompt_drawn_group_name(&ctx, group);
+            assert!(app.object_rename.is_none());
+        }
+    }
+
+    #[test]
+    fn ungrouped_lines_connect_to_existing_root_geometry_and_close_a_face() {
+        let mut app = KetchupApp::with_document(Document::default(), None, true);
+        app.set_tool(Tool::Line);
+        app.doc.model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+        app.doc.model
+            .add_edge(DVec3::X, DVec3::X + DVec3::Y)
+            .unwrap();
+        for (index, pair) in [DVec3::X + DVec3::Y, DVec3::Y, DVec3::ZERO]
+            .windows(2)
+            .enumerate()
+        {
+            let (model, group, closed) = app.drawn_geometry(pair, None).unwrap();
+            assert!(group.is_none());
+            assert!(model.objects.is_empty());
+            assert_eq!(closed, index == 1);
+            app.doc.model = model;
+        }
+        assert_eq!(app.doc.model.edges.len(), 4);
+        assert_eq!(app.doc.model.faces.len(), 1);
+        app.doc.model.validate().unwrap();
+    }
+
     #[test]
     fn completed_automatic_groups_prompt_for_a_name_but_existing_contexts_do_not() {
         let ctx = egui::Context::default();
         for nested in [false, true] {
-            let mut app = app(Tool::Rectangle);
+            let mut app = grouping_app(Tool::Rectangle);
             if nested {
                 let edge = app.doc.model.add_edge(-DVec3::X, -DVec3::Y).unwrap();
                 let group = app.doc.model.make_object(&BTreeSet::from([edge]), false, "Existing").unwrap();
@@ -93,7 +159,7 @@ mod tests {
             Tool::Polygon,
             Tool::Freehand,
         ] {
-            let mut app = app(tool);
+            let mut app = grouping_app(tool);
             let existing = app.doc.model.add_edge(-DVec3::X, DVec3::X * 2.).unwrap();
             let before = app.doc.model.clone();
             let (model, group, closed) = app.drawn_geometry(&points, None).unwrap();
@@ -118,7 +184,7 @@ mod tests {
     }
     #[test]
     fn connected_line_segments_share_one_group_and_close_a_face() {
-        let mut app = app(Tool::Line);
+        let mut app = grouping_app(Tool::Line);
         let points = [
             DVec3::ZERO,
             DVec3::X,
@@ -143,7 +209,7 @@ mod tests {
     }
     #[test]
     fn drawing_in_an_existing_group_does_not_create_a_nested_group() {
-        let mut app = app(Tool::Rectangle);
+        let mut app = grouping_app(Tool::Rectangle);
         let edge = app.doc.model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
         let group = app
             .doc
@@ -167,7 +233,7 @@ mod tests {
     }
     #[test]
     fn grouped_drawing_undo_redo_restores_the_whole_shape() {
-        let mut app = app(Tool::Rectangle);
+        let mut app = grouping_app(Tool::Rectangle);
         let before = app.doc.model.clone();
         let points = [
             DVec3::ZERO,

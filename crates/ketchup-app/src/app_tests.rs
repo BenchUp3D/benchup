@@ -829,6 +829,8 @@ fn shape_tools_create_faces_and_undo_as_one_operation() {
         h.click(end);
         assert_eq!(h.app.doc.model.edges.len(), edges, "{tool:?}");
         assert_eq!(h.app.doc.model.faces.len(), 1, "{tool:?}");
+        assert!(h.app.doc.model.objects.is_empty(), "{tool:?}");
+        assert!(h.app.object_rename.is_none(), "{tool:?}");
         h.app.doc.model.validate().unwrap();
         h.app.undo(&h.ctx, false);
         assert!(h.app.doc.model.edges.is_empty());
@@ -1841,6 +1843,7 @@ fn gpu_test_state() -> eframe::egui_wgpu::RenderState {
 #[test]
 fn close_snapped_outline_then_select_and_delete_face_or_edge() {
     let mut h = Harness::new();
+    h.app.general_settings.auto_group_new_shapes = true;
     assert!(h.app.doc.snap_to_geometry);
     h.key(Key::L);
     for point in [

@@ -149,6 +149,7 @@ pub(super) struct GeneralSettings {
     pub reverse_zoom: bool,
     pub walk: walk::Settings,
     pub reset_axis_locks_on_action: bool,
+    pub auto_group_new_shapes: bool,
     pub show_fps: bool,
     pub default_units: ketchup_core::UnitSettings,
     pub tool_keys: Vec<String>,
@@ -166,6 +167,7 @@ impl Default for GeneralSettings {
             reverse_zoom: false,
             walk: walk::Settings::default(),
             reset_axis_locks_on_action: true,
+            auto_group_new_shapes: false,
             show_fps: false,
             default_units: Default::default(),
             stock: Default::default(),
@@ -401,6 +403,11 @@ impl KetchupApp {
                     tr!("settings.reset_axis_locks_on_each_action"),
                 )
                 .on_hover_text(tr!("settings.clear_both_axis_locks_after_completing_an_edit"));
+                ui.checkbox(
+                    &mut self.general_settings.auto_group_new_shapes,
+                    tr!("settings.automatically_group_new_shapes"),
+                )
+                .on_hover_text(tr!("settings.group_new_shapes_outside_existing_objects"));
             }
             Section::Rendering => {
                 ui.checkbox(&mut self.doc.display.shadow_antialiasing, tr!("settings.shadow_antialiasing"))

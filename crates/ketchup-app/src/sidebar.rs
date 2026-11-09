@@ -1994,6 +1994,42 @@ mod preference_tests {
     }
 
     #[test]
+    fn auto_group_preference_saves_without_model_edits_and_defaults_off() {
+        let ctx = egui::Context::default();
+        let mut storage = SavedPreferences::default();
+        let mut app = KetchupApp::with_document(Document::default(), None, true);
+        assert!(!app.general_settings.auto_group_new_shapes);
+        for enabled in [true, false] {
+            app.general_settings.auto_group_new_shapes = enabled;
+            app.general_settings.section = settings::Section::Tools;
+            storage.flushed = false;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            assert!(app.dirty_since.is_none());
+            let saved: InspectorPreferences = eframe::get_value(&storage, PREFERENCE_KEY).unwrap();
+            assert_eq!(saved.general.auto_group_new_shapes, enabled);
+            let mut restored = KetchupApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+            assert_eq!(restored.general_settings.auto_group_new_shapes, enabled);
+            assert_eq!(restored.general_settings.section, settings::Section::Tools);
+            restored.new_model(&ctx);
+            assert_eq!(restored.general_settings.auto_group_new_shapes, enabled);
+            restored.replace_project(Document::default(), None, &ctx);
+            assert_eq!(restored.general_settings.auto_group_new_shapes, enabled);
+            assert!(!restored.project.modified);
+        }
+        for json in [
+            "{}",
+            r#"{"general":{}}"#,
+            r#"{"general":{"reset_axis_locks_on_action":false}}"#,
+        ] {
+            let old: InspectorPreferences = serde_json::from_str(json).unwrap();
+            assert!(!old.general.auto_group_new_shapes);
+        }
+    }
+
+    #[test]
     fn cancelled_action_persists_cleared_locks_without_a_model_edit() {
         let ctx = egui::Context::default();
         let mut storage = SavedPreferences::default();
