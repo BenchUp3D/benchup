@@ -40,13 +40,16 @@ impl Server {
         let stopped = Arc::new(AtomicBool::new(false));
         let stop = Arc::clone(&stopped);
         let worker = std::thread::spawn(move || {
+            let assets = [&feed_name, &package_name].map(|name| {
+                serde_json::json!({
+                    "name": name,
+                    "browser_download_url": format!("{server_base}/Ketchup3D/app/releases/download/v0.6.6/{name}")
+                })
+            });
             let releases = serde_json::to_vec(&serde_json::json!([{
                 "name": "v0.6.6", "prerelease": false,
                 "published_at": "2026-11-08T00:00:00Z",
-                "assets": [&feed_name, &package_name].map(|name| serde_json::json!({
-                    "name": name,
-                    "browser_download_url": format!("{server_base}/Ketchup3D/app/releases/download/v0.6.6/{name}")
-                }))
+                "assets": assets
             }])).unwrap();
             while !stop.load(Ordering::Relaxed) {
                 let (mut stream, _) = match listener.accept() {
