@@ -7,7 +7,9 @@
 //! size are remembered in `Preferences::window`.
 use super::super::{sidebar, BenchUpApp};
 use super::panel::Host;
-use crate::{natural_text::TextUi as _, theme::Palette};
+use crate::natural_text::TextUi as _;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::theme::Palette;
 use benchup_core::tr;
 use eframe::egui;
 
