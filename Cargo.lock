@@ -420,6 +420,7 @@ name = "benchup-app"
 version = "0.6.6"
 dependencies = [
  "benchup-core",
+ "benchup-tools",
  "bytemuck",
  "cc",
  "directories",

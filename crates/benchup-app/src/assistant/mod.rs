@@ -14,8 +14,7 @@ pub(crate) mod client;
 pub(crate) mod credentials;
 #[path = "panel.rs"]
 pub(crate) mod panel;
-#[path = "scene.rs"]
-pub(crate) mod scene;
+pub(crate) use benchup_tools::scene;
 #[path = "tools.rs"]
 pub(crate) mod tools;
 #[path = "turn.rs"]

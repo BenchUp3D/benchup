@@ -3,7 +3,7 @@
 use super::*;
 use client::{ChatError, ToolCall, fake::FakeTransport};
 use serde_json::{Value, json};
-use tools::tests as tools_tests;
+use tools::test_support as tools_tests;
 use tools_tests::board;
 
 /// Run `test` in a child process whose data directory is a temp dir, because

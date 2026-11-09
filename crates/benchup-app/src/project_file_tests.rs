@@ -1,4 +1,6 @@
 use super::*;
+use flate2::read::MultiGzDecoder;
+use std::io::Read;
 use benchup_core::DVec3;
 
 #[test]

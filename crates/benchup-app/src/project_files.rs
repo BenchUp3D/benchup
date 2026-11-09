@@ -1,13 +1,8 @@
 //! Portable project files are separate from the local recovery/autosave document.
 use benchup_core::tr;
 use crate::cutting_plan::{CutReport, CuttingPlan};
-use flate2::{Compression, read::MultiGzDecoder, write::GzEncoder};
 use benchup_core::Document;
-use std::{
-    io::{Read, Write},
-    path::PathBuf,
-    sync::mpsc,
-};
+use std::{path::PathBuf, sync::mpsc};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "project_file_tests.rs"]
@@ -91,27 +86,11 @@ fn exchange_name(name: &str, extension: &str) -> String {
 
 /// Project files use gzip-compressed JSON; recovery and save snapshots stay JSON.
 pub(crate) fn encode(json: &str) -> Result<Vec<u8>, String> {
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder
-        .write_all(json.as_bytes())
-        .and_then(|_| encoder.finish())
-        .map_err(|error| tr!("project_files.could_not_compress_project", error = error))
+    benchup_tools::files::encode(json)
 }
 
 pub fn decode(bytes: &[u8]) -> Result<Document, String> {
-    // Detect the content rather than the extension so all project extensions
-    // accept compressed files and older, plain JSON files unchanged.
-    let mut decompressed = Vec::new();
-    let bytes: &[u8] = if bytes.starts_with(&[0x1f, 0x8b]) {
-        MultiGzDecoder::new(bytes)
-            .read_to_end(&mut decompressed)
-            .map_err(|error| tr!("project_files.could_not_decompress_project", error = error))?;
-        &decompressed
-    } else {
-        bytes
-    };
-    let json = std::str::from_utf8(bytes).map_err(|_| tr!("project_files.the_project_is_not_utf_8_text"))?;
-    Document::from_json(json)
+    benchup_tools::files::decode(bytes)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
