@@ -102,10 +102,20 @@ impl Model {
                     .cross(points[t[2]] - points[t[0]])
                     .length()
                     * 0.5;
-                if !area.is_finite() || area <= EPS * EPS || faces::plane(self, &ring).is_none() {
+                if !area.is_finite() {
                     return Err(surface_error);
                 }
+                // A boundary split by neighbouring geometry leaves runs of
+                // nearly collinear vertices. Earcut emits sliver triangles
+                // between them that are too thin to carry a strict plane; the
+                // filled region loses nothing visible when they are skipped.
+                if area <= EPS * EPS || faces::plane(self, &ring).is_none() {
+                    continue;
+                }
                 triangles.push(ring);
+            }
+            if triangles.is_empty() {
+                return Err(surface_error);
             }
             // Bound expansion as well as parsing. IDs in fresh imports start at 1.
             if self
@@ -337,6 +347,36 @@ mod tests {
         assert_eq!(model.edges, edges);
         assert_eq!(model.faces[&face_id], before);
         assert_eq!(model.face_area(&model.faces[&face_id]), 12.);
+    }
+
+    #[test]
+    fn split_boundary_with_collinear_slivers_imports_as_a_filled_surface() {
+        // A 45 mm x 2.15 m board face whose long edge was split by adjacent
+        // parts. The split vertices sit 5-10 um off the plane, so the face
+        // is tessellated; earcut then emits slivers along the split edge.
+        let mut model = imported_face(&[&[
+            [1.320050, -0.000171, 0.190587],
+            [1.365050, -0.000171, 0.190587],
+            [1.365050, 2.150276, 0.190587],
+            [1.320050, 2.150276, 0.190587],
+            [1.320050, 2.149696, 0.190577],
+            [1.320050, 2.106792, 0.190577],
+            [1.320050, 0.389616, 0.190579],
+            [1.320050, 0.346712, 0.190579],
+            [1.320050, 0.043007, 0.190582],
+            [1.320050, 0.000103, 0.190582],
+        ]]);
+        let vertices = model.vertices.clone();
+        assert!(model.validate().is_err());
+        model.normalize_imported_faces().unwrap();
+        model.validate().unwrap();
+        assert_eq!(model.vertices, vertices);
+        assert!(model.faces.values().all(|f| f.vertices.len() == 3));
+        let area: f64 = model.faces.values().map(|f| model.face_area(f)).sum();
+        assert!((area - 0.045 * 2.150447).abs() < 1e-6, "area {area}");
+        let before = model.clone();
+        model.normalize_imported_faces().unwrap();
+        assert_eq!(model, before);
     }
 
     #[test]
