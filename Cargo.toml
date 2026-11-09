@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/benchup-core", "crates/benchup-app"]
+members = ["crates/benchup-core", "crates/benchup-app", "crates/benchup-tools"]
 default-members = ["crates/benchup-app"]
 resolver = "2"
 
