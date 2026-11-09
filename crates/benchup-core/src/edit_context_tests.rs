@@ -470,8 +470,9 @@ fn group_erase_matches_transactional_edit_and_preserves_other_groups_and_undo() 
         for locked in [false, true] {
             let mut model = Model::default();
             rectangle(&mut model);
-            let inner = object(&mut model, false, "Panel");
+            object(&mut model, false, "Panel");
             let outer = object(&mut model, component_parent, "Assembly");
+            let inner = child_object(&model, outer);
             model.add_edge(DVec3::X * 5., DVec3::X * 7.).unwrap();
             if locked {
                 model.locked.insert(inner);
@@ -508,8 +509,9 @@ fn batched_drawing_matches_scoped_edge_transactions_and_preserves_other_objects(
     for component in [false, true] {
         let mut model = Model::default();
         rectangle(&mut model);
-        let inner = object(&mut model, false, "Inner");
+        object(&mut model, false, "Inner");
         let outer = object(&mut model, component, "Outer");
+        let inner = child_object(&model, outer);
         let outside = model
             .add_edge(DVec3::splat(20.), DVec3::splat(21.))
             .unwrap();
@@ -524,7 +526,7 @@ fn batched_drawing_matches_scoped_edge_transactions_and_preserves_other_objects(
         ];
         model.draw_polyline(&points, true).unwrap();
         for pair in points.windows(2) {
-            reference.draw_edge(pair[0], pair[1], true).unwrap();
+            reference.ensure_edge(pair[0], pair[1]).unwrap();
         }
         assert_eq!(model, reference);
         assert_eq!(model.parent(inner), Some(outer));
@@ -538,8 +540,9 @@ fn local_erasing_matches_the_group_transaction_for_edges_faces_and_objects() {
     for target in 0..3 {
         let mut model = Model::default();
         rectangle(&mut model);
-        let inner = object(&mut model, false, "Inner");
+        object(&mut model, false, "Inner");
         let outer = object(&mut model, false, "Outer");
+        let inner = child_object(&model, outer);
         let outside = model.add_edge(DVec3::X * 10., DVec3::X * 11.).unwrap();
         let face = first_face(&model, inner);
         let edge = *model.edges.keys().find(|id| **id != outside).unwrap();

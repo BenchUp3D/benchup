@@ -215,11 +215,16 @@ fn trim_defaults_roundtrip_and_cache_invalidate_without_baking_source() {
         .valid()
     );
     let (mut source, members) = crossing(DVec3::Z, 35.);
+    // Keep this cache regression above the minimum face area when rotated.
+    let settings = JointSettings {
+        clearance: 0.,
+        ..legacy
+    };
     let id = source
         .add_connection(Connection {
             members,
             entry_face: None,
-            operation: ConnectionOperation::Joinery(legacy.clone()),
+            operation: ConnectionOperation::Joinery(settings.clone()),
         })
         .unwrap();
     let mut cache = EvaluationCache::default();
@@ -234,7 +239,7 @@ fn trim_defaults_roundtrip_and_cache_invalidate_without_baking_source() {
                 trim,
                 keep_end,
                 trim_axis,
-                ..legacy.clone()
+                ..settings.clone()
             });
         let saved = source.clone();
         let evaluations = cache.evaluations;

@@ -181,7 +181,7 @@ fn new_face_push_pull_preserves_coplanar_starting_faces_and_holes() {
 fn new_face_push_pull_updates_component_instances_in_the_editing_context() {
     let mut model = Model::default();
     let face = rectangle(&mut model, DVec3::ZERO, DVec3::new(4., 3., 0.));
-    let face = model.push_pull_along(face, DVec3::Z * 2.).unwrap();
+    model.push_pull_along(face, DVec3::Z * 2.).unwrap();
     let component = model
         .make_object(&model.selectable_entities(), true, "Block")
         .unwrap();
@@ -193,6 +193,16 @@ fn new_face_push_pull_updates_component_instances_in_the_editing_context() {
     assert!(model.enter_object(component));
     let before = model.object_contents(component).unwrap();
     let peer_before = model.object_contents(peer).unwrap();
+    let face = before
+        .faces
+        .values()
+        .find(|face| {
+            face.vertices
+                .iter()
+                .all(|id| (before.vertices[id].position.z - 2.).abs() < 1e-7)
+        })
+        .unwrap()
+        .id;
 
     let cap = model
         .push_pull_along_with_new_faces(face, DVec3::Z)
