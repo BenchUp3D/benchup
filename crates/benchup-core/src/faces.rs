@@ -48,6 +48,18 @@ pub fn plane(model: &Model, ring: &[u64]) -> Option<Plane> {
         normal,
     })
 }
+/// Smallest altitude of a triangle: twice its area over its longest edge.
+/// A triangle whose altitude is at or below `TOL` is too thin to carry a
+/// plane whichever vertex comes first, unlike `plane` on a three-vertex
+/// ring, which only measures the third vertex against the first edge.
+pub(crate) fn min_altitude(a: DVec3, b: DVec3, c: DVec3) -> f64 {
+    let longest = (b - a).length().max((c - b).length()).max((a - c).length());
+    if longest > 0. {
+        (b - a).cross(c - a).length() / longest
+    } else {
+        0.
+    }
+}
 pub fn canonical_ring(ring: &[u64]) -> Vec<u64> {
     if ring.is_empty() {
         return vec![];

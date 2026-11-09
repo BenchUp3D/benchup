@@ -105,19 +105,15 @@ impl Model {
                 }
                 // A boundary split by neighbouring geometry leaves runs of
                 // nearly collinear vertices. Earcut emits sliver triangles
-                // between them that are too thin to carry a strict plane; the
-                // filled region loses nothing visible when they are skipped.
-                // The smallest altitude is measured against the longest edge
-                // so the decision depends on the triangle's shape alone, not
-                // on the vertex order earcut happens to emit.
-                let longest = (b - a).length().max((c - b).length()).max((a - c).length());
-                let altitude = if longest > 0. {
-                    2. * area / longest
-                } else {
-                    0.
-                };
+                // between them that are too thin to carry a strict plane.
+                // Skipping them drops at most TOL / 2 times the longest edge
+                // in area, around a square millimetre on a two-metre board,
+                // which is invisible next to the warp that caused it. The
+                // altitude decides independently of the vertex order earcut
+                // emits; the plane check is kept as a guard so every face
+                // written here satisfies validation.
                 if area <= EPS * EPS
-                    || altitude <= faces::TOL
+                    || faces::min_altitude(a, b, c) <= faces::TOL
                     || faces::plane(self, &ring).is_none()
                 {
                     continue;
@@ -359,42 +355,78 @@ mod tests {
         assert_eq!(model.face_area(&model.faces[&face_id]), 12.);
     }
 
-    #[test]
-    fn split_boundary_with_collinear_slivers_imports_as_a_filled_surface() {
-        // A 45 mm x 2.15 m board face whose long edge was split by adjacent
-        // parts. The split vertices sit 7 um off the plane of the corners, so
-        // the face is tessellated; earcut then emits slivers between the
-        // collinear split vertices that are too thin for a strict plane.
-        let mut model = imported_face(&[&[
-            [1.320050, -0.000171, 0.190587],
-            [1.365050, -0.000171, 0.190587],
-            [1.365050, 2.150276, 0.190587],
-            [1.320050, 2.150276, 0.190587],
-            [1.320050, 2.149696, 0.190580],
-            [1.320050, 2.106792, 0.190580],
-            [1.320050, 0.389616, 0.190580],
-            [1.320050, 0.346712, 0.190580],
-            [1.320050, 0.043007, 0.190580],
-            [1.320050, 0.000103, 0.190580],
-        ]]);
+    /// A 45 mm x 2.15 m board face whose long edge was split by adjacent
+    /// parts, so the ten boundary vertices tessellate into eight triangles.
+    /// `depths` places each pair of split vertices below the corner plane.
+    fn split_board(depths: [f64; 3]) -> Model {
+        let z = 0.190587;
+        imported_face(&[&[
+            [1.320050, -0.000171, z],
+            [1.365050, -0.000171, z],
+            [1.365050, 2.150276, z],
+            [1.320050, 2.150276, z],
+            [1.320050, 2.149696, z - depths[0]],
+            [1.320050, 2.106792, z - depths[0]],
+            [1.320050, 0.389616, z - depths[1]],
+            [1.320050, 0.346712, z - depths[1]],
+            [1.320050, 0.043007, z - depths[2]],
+            [1.320050, 0.000103, z - depths[2]],
+        ]])
+    }
+
+    fn check_split_board(mut model: Model) -> Model {
         let vertices = model.vertices.clone();
         let edges = model.edges.clone();
         assert!(model.validate().is_err());
         model.normalize_imported_faces().unwrap();
         model.validate().unwrap();
         assert_eq!(model.vertices, vertices);
-        // Ten boundary vertices tessellate into eight triangles; the slivers
-        // along the split edge are skipped rather than kept or rejected.
-        assert!(model.faces.len() < 8, "{} faces", model.faces.len());
-        assert!(model.faces.values().all(|f| f.vertices.len() == 3));
         for (id, edge) in &edges {
             assert_eq!(model.edges[id], *edge);
+        }
+        // The slivers along the split edge are skipped, not kept or rejected.
+        assert!(model.faces.len() < 8, "{} faces", model.faces.len());
+        for face in model.faces.values() {
+            assert_eq!(face.vertices.len(), 3);
+            let [a, b, c] = [0, 1, 2].map(|i| model.vertices[&face.vertices[i]].position);
+            assert!(faces::min_altitude(a, b, c) > faces::TOL);
         }
         let area: f64 = model.faces.values().map(|f| model.face_area(f)).sum();
         assert!((area - 0.045 * 2.150447).abs() < 1e-6, "area {area}");
         let before = model.clone();
         model.normalize_imported_faces().unwrap();
         assert_eq!(model, before);
+        model
+    }
+
+    #[test]
+    fn split_boundary_with_collinear_slivers_imports_as_a_filled_surface() {
+        // Every split vertex sits 7 um below the corners, so the slivers
+        // between them are exactly collinear and failed the strict plane
+        // check, which used to reject the whole import.
+        check_split_board(split_board([7e-6; 3]));
+    }
+
+    #[test]
+    fn thin_slivers_that_pass_the_plane_check_are_still_skipped() {
+        // The depths of the real deck model. Earcut lists two slivers with
+        // their short edge first, so the third vertex clears the plane
+        // tolerance even though the triangles are under a micrometre tall.
+        let model = check_split_board(split_board([10e-6, 8e-6, 5e-6]));
+        assert_eq!(model.faces.len(), 6);
+    }
+
+    #[test]
+    fn sliver_altitude_does_not_depend_on_vertex_order() {
+        // A 1 mm base with a 10 um apex over a 2 m span: the plane check
+        // accepts or rejects it depending on which vertex comes first.
+        let model = imported_face(&[&[[0., 0., 0.], [0.001, 0., 0.], [2., 0.00001, 0.]]]);
+        assert!(faces::plane(&model, &[1, 2, 3]).is_some());
+        assert!(faces::plane(&model, &[2, 3, 1]).is_none());
+        let p = |id: u64| model.vertices[&id].position;
+        for (a, b, c) in [(1, 2, 3), (2, 3, 1), (3, 1, 2)] {
+            assert!(faces::min_altitude(p(a), p(b), p(c)) <= faces::TOL);
+        }
     }
 
     #[test]
