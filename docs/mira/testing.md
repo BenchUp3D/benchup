@@ -293,14 +293,42 @@ Other test hooks: `Assistant::with_transport` is `pub(super)` and used from `sha
 
 ## 9. Local wasm32 check
 
-Build/test of the browser target is done by CI and, optionally, locally with a rustup toolchain. On this machine rustup was installed with `--no-modify-path`, so `PATH` is unchanged and the binaries are called by absolute path:
+CI checks the browser target. To run the same check locally you need a Rust toolchain that has the `wasm32-unknown-unknown` standard library.
+
+**If your Rust comes from rustup** (the setup the root `README.md` describes), add the target once and run the checks:
 
 ```sh
-~/.cargo/bin/rustup target add wasm32-unknown-unknown
-CARGO_TARGET_DIR=target/rustup-wasm ~/.cargo/bin/cargo check -p benchup-app --locked --target wasm32-unknown-unknown
+rustup target add wasm32-unknown-unknown
+cargo check -p benchup-app --locked --target wasm32-unknown-unknown
+cargo check -p benchup-app --locked --target wasm32-unknown-unknown --no-default-features
+cargo check -p benchup-tools --locked --target wasm32-unknown-unknown
 ```
 
-The separate `CARGO_TARGET_DIR` avoids mixing artefacts with a Homebrew or system `cargo`. As of commit `44a7cc9` ("Gate desktop-only Palette import in the assistant window") this check **passes with 0 warnings** on the development machine (reported by the author on 2026-11-09; I did not re-run it). The `44a7cc9` fix gates `use crate::theme::Palette` behind `cfg(not(target_arch = "wasm32"))` in `assistant/window.rs:10-11` because only the native-window code uses it. This only proves compilation: it does not run the code in a browser (see the manual checklist). Several items are wasm-only and untested: `fetch` wrapper and Content-Length check (`client.rs:316-357`), `localStorage` credentials (`credentials.rs:76-102`).
+**If your Rust comes from Homebrew** (or another package manager without wasm targets), install rustup next to it without touching `PATH`, so your normal `cargo` stays the Homebrew one, and call the rustup binaries by absolute path:
+
+```sh
+# Install (about 550 MB in ~/.rustup plus proxies in ~/.cargo/bin)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+~/.cargo/bin/rustup target add wasm32-unknown-unknown
+
+# Check (same three commands as above)
+CARGO_TARGET_DIR=target/rustup-wasm ~/.cargo/bin/cargo check -p benchup-app --locked --target wasm32-unknown-unknown
+CARGO_TARGET_DIR=target/rustup-wasm ~/.cargo/bin/cargo check -p benchup-app --locked --target wasm32-unknown-unknown --no-default-features
+CARGO_TARGET_DIR=target/rustup-wasm ~/.cargo/bin/cargo check -p benchup-tools --locked --target wasm32-unknown-unknown
+```
+
+The separate `CARGO_TARGET_DIR` keeps these artefacts apart from the Homebrew `cargo` build, so the two toolchains do not invalidate each other's cache.
+
+**Removing it again.** Do **not** run `rustup self uninstall`: it deletes all of `~/.cargo`, including the download cache (`~/.cargo/registry`) that Homebrew's `cargo` also uses. Remove only what rustup added:
+
+```sh
+rm -rf ~/.rustup
+cd ~/.cargo/bin && rm -f cargo cargo-clippy cargo-fmt cargo-miri clippy-driver rls rust-analyzer rust-gdb rust-gdbgui rust-lldb rustc rustdoc rustfmt rustup
+```
+
+If you installed other tools with `cargo install` (for example `trunk`), they also live in `~/.cargo/bin`; the command above leaves them alone.
+
+**Disk space.** A full debug build plus tests of the workspace uses roughly 10-20 GB under `target/`, and the wasm check adds about 1 GB under `target/rustup-wasm`. `cargo clean` removes both; everything is rebuilt on the next build. As of commit `44a7cc9` ("Gate desktop-only Palette import in the assistant window") this check **passes with 0 warnings** on the development machine (reported by the author on 2026-11-09; I did not re-run it). The `44a7cc9` fix gates `use crate::theme::Palette` behind `cfg(not(target_arch = "wasm32"))` in `assistant/window.rs:10-11` because only the native-window code uses it. This only proves compilation: it does not run the code in a browser (see the manual checklist). Several items are wasm-only and untested: `fetch` wrapper and Content-Length check (`client.rs:316-357`), `localStorage` credentials (`credentials.rs:76-102`).
 
 ## 10. CI
 

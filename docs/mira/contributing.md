@@ -159,7 +159,7 @@ The prompt is the constant `SYSTEM_PROMPT` in `assistant/turn.rs:27-34`, sent as
 - [ ] Branch is rebased; the diff only contains intended files; no stray formatting changes.
 - [ ] `cargo test -p benchup-app assistant`, `cargo test -p benchup-app mira` and `cargo test -p benchup-core` pass locally (CI runs the same two substring filters; keep `assistant` or `mira` in new test names or paths).
 - [ ] Failing-set diff against a clean `main` worktree is identical (31 known failures), or every new failure is explained.
-- [ ] Local wasm check passes with no warnings: `CARGO_TARGET_DIR=target/rustup-wasm ~/.cargo/bin/cargo check -p benchup-app --locked --target wasm32-unknown-unknown` ([testing.md](testing.md#9-local-wasm32-check)).
+- [ ] Local wasm checks pass with no warnings: `benchup-app` with default features and with `--no-default-features`, and `benchup-tools` ([testing.md](testing.md#9-local-wasm32-check) has the commands for rustup and for Homebrew Rust).
 - [ ] New or changed tool: schema, args struct, `run` arm, `TOOLS` flag, `target_ids`/`CREATING`, validation before mutation, tests in `benchup-tools`, wire fixture and count in `assistant/tools.rs`, [tools.md](tools.md) updated.
 - [ ] `cargo test -p benchup-tools --locked`, `cargo test -p benchup-mcp --locked` and `cargo check -p benchup-app --locked --no-default-features` pass (CI runs them; see [testing.md](testing.md#13-tools-mcp-and-agent-link-tests)).
 - [ ] New persisted field: default, sanitiser, old-data test, "no model edit" test, stable key, docs.
@@ -177,4 +177,4 @@ The prompt is the constant `SYSTEM_PROMPT` in `assistant/turn.rs:27-34`, sent as
 * There is no `CONTRIBUTING.md`, PR template, issue template, `rustfmt.toml` or clippy config in the repository at `44a7cc9`; the style and PR expectations above are inferred from the branch history and AGENTS.md, not from an upstream policy.
 * Which remote is called `origin` differs between the maintainer's checkout and a fresh clone (section 1).
 * Whether upstream wants squash merges, signed commits or a CLA is unknown.
-* The wasm check command assumes rustup is installed at `~/.cargo/bin` without PATH changes, as on the author's machine.
+* Homebrew's Rust has no wasm32 target. [testing.md](testing.md#9-local-wasm32-check) shows how to add rustup next to it for the browser check, and how to remove it without deleting the shared `~/.cargo` cache.
