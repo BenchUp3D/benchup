@@ -491,8 +491,10 @@ mod release_notes;
 mod rendering;
 #[path = "text_tools_tests.rs"]
 mod text_tools;
+#[cfg(feature = "assistant")]
 #[path = "assistant/ui_tests.rs"]
 mod assistant_ui;
+#[cfg(feature = "agent-link")]
 #[path = "agent_link/ui_tests.rs"]
 mod agent_link_ui;
 

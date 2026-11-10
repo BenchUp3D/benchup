@@ -33,38 +33,10 @@ const HISTORY_MESSAGES: usize = 20;
 const HISTORY_CHARS: usize = 2000;
 const DEFAULT_MODEL_HINT: &str = "qwen";
 
-/// Where the panel lives. Position is the outer window corner and size the
-/// inner size, both in points; they are only meaningful while `detached`.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-pub(super) struct WindowPreferences {
-    pub detached: bool,
-    pub position: Option<[f32; 2]>,
-    pub size: Option<[f32; 2]>,
-}
+pub(super) use addons::AssistantPreferences as Preferences;
+#[cfg(test)]
+use addons::WindowPreferences;
 
-/// Remembered across restarts. The API key is deliberately not here.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-pub(super) struct Preferences {
-    pub base_url: String,
-    pub model: String,
-    pub include_selection: bool,
-    /// The one-line "what is sent" notice was dismissed for good.
-    pub privacy_dismissed: bool,
-    pub window: WindowPreferences,
-}
-impl Default for Preferences {
-    fn default() -> Self {
-        Self {
-            base_url: client::DEFAULT_BASE_URL.into(),
-            model: String::new(),
-            include_selection: true,
-            privacy_dismissed: false,
-            window: WindowPreferences::default(),
-        }
-    }
-}
 impl Preferences {
     fn sanitized(mut self) -> Self {
         let finite = |pair: [f32; 2]| pair.iter().all(|v| v.is_finite());
@@ -99,19 +71,7 @@ pub(super) enum EntryRole {
     /// A change made by an external agent (see `agent_link`).
     Agent,
 }
-/// What a finished turn changed, for the change card.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(super) struct Changes {
-    pub created: Vec<u64>,
-    pub modified: Vec<u64>,
-    pub erased: Vec<u64>,
-    pub joints: Vec<u64>,
-    pub stopped: bool,
-    /// History position right after this turn's step; `None` if nothing was recorded.
-    pub position: Option<usize>,
-    /// Names of erased entities, which no longer exist to be looked up.
-    pub erased_names: BTreeMap<u64, String>,
-}
+pub(super) use agent_host::Changes;
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Entry {
     pub role: EntryRole,
@@ -450,6 +410,12 @@ impl Assistant {
 impl BenchUpApp {
     /// Called once per frame from `ui`.
     pub(super) fn poll_assistant(&mut self, ctx: &egui::Context) {
+        if !self.assistant_available() {
+            // Turned off: stop a running turn (keeping what it applied, like
+            // Stop) and do nothing else, so no request is made or polled.
+            self.assistant_stop(ctx);
+            return;
+        }
         if !self.assistant.busy() {
             // Still advances connection checks.
             self.assistant.poll(ctx, &mut self.doc.model, &Gate::default());

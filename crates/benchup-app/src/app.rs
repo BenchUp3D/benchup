@@ -87,9 +87,19 @@ mod web_viewport_benchmark;
 
 #[path = "agent_host.rs"]
 mod agent_host;
+#[path = "addons.rs"]
+mod addons;
+#[cfg(feature = "agent-link")]
 #[path = "agent_link/mod.rs"]
 mod agent_link;
+#[cfg(not(feature = "agent-link"))]
+#[path = "agent_link/stub.rs"]
+mod agent_link;
+#[cfg(feature = "assistant")]
 #[path = "assistant/mod.rs"]
+mod assistant;
+#[cfg(not(feature = "assistant"))]
+#[path = "assistant/stub.rs"]
 mod assistant;
 #[path = "credentials.rs"]
 mod credentials;
@@ -326,6 +336,7 @@ pub struct BenchUpApp {
     viewport_benchmark: Option<viewport_benchmark::Benchmark>,
     account: crate::account::Account,
     assistant: assistant::Assistant,
+    #[cfg_attr(not(feature = "agent-link"), allow(dead_code))]
     agent_link: agent_link::AgentLink,
     joinery_geometry: joinery::GeometryCache,
     joinery: joinery::Preferences,

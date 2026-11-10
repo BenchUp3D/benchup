@@ -50,7 +50,7 @@ impl BenchUpApp {
             self.snap = None;
         }
         match action {
-            AskAssistant if !self.selected.is_empty() => {
+            AskAssistant if !self.selected.is_empty() && self.assistant_available() => {
                 let ids: Vec<u64> = self.selected.iter().copied().collect();
                 self.assistant_add_chips(ids);
                 self.assistant_reveal(ctx);
@@ -413,7 +413,9 @@ impl BenchUpApp {
             item(ui, tr!("context_menu.lock"), selected, ContextAction::Lock);
         }
         ui.separator();
-        item(ui, tr!("assistant.ask_about_this"), selected, ContextAction::AskAssistant);
+        if self.assistant_available() {
+            item(ui, tr!("assistant.ask_about_this"), selected, ContextAction::AskAssistant);
+        }
         extra(self, ui);
         if let Some(action) = action {
             self.context_action(ui.ctx(), action);

@@ -1110,3 +1110,36 @@ fn bring_to_front_raises_the_embedded_window_layer() {
     assert_eq!(top(&ctx), Some(window::embedded_layer()));
     assert!(app.assistant.ui.focus_prompt, "and the prompt is focused");
 }
+
+// ------------------------------------------------------ add-on toggle
+
+#[test]
+fn turning_mira_off_stops_the_running_turn_as_one_undo_step_and_goes_quiet() {
+    in_temp_data_dir("turning_mira_off_stops_the_running_turn_as_one_undo_step_and_goes_quiet", || {
+        let fake = FakeTransport::default();
+        let ctx = egui::Context::default();
+        let mut app = connected_app(&fake);
+        fake.push_tool_calls(vec![new_board("b1", "Leg", [0., 0., 0.], [40., 40., 700.])]);
+        ask(&mut app, &ctx, "build a leg");
+        app.poll_assistant(&ctx);
+        assert!(app.assistant.busy(), "the turn waits for its next reply");
+        assert_eq!(app.doc.model.objects.len(), 1);
+        let requests = fake.requests.lock().unwrap().len();
+
+        app.general_settings.assistant_enabled = false;
+        app.poll_assistant(&ctx);
+        assert!(!app.assistant.busy(), "the turn stopped");
+        assert_eq!(app.doc.model.objects.len(), 1, "what it applied is kept");
+        assert_eq!(app.doc.history.labels().collect::<Vec<_>>(), vec!["MIRA (stopped)"], "one undo step");
+        // Nothing more is sent or polled while it is off, and it cannot start.
+        for _ in 0..3 {
+            app.poll_assistant(&ctx);
+        }
+        assert_eq!(fake.requests.lock().unwrap().len(), requests);
+        assert!(!app.assistant_available());
+        // Turning it back on restores the add-on with its transcript.
+        app.general_settings.assistant_enabled = true;
+        assert!(app.assistant_available());
+        assert!(!app.assistant.transcript.is_empty());
+    });
+}

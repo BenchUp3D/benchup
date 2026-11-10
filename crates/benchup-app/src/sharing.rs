@@ -755,6 +755,7 @@ impl BenchUpApp {
     }
     /// Test hook: make this a shared project whose edit lease is `ids`.
     #[cfg(test)]
+    #[cfg_attr(not(any(feature = "assistant", feature = "agent-link")), allow(dead_code))]
     pub(super) fn test_share_with_lease(&mut self, ctx: &egui::Context, ids: &BTreeSet<u64>) {
         self.account.server = "https://sharing.example".into();
         self.account.server_reachable = true;
@@ -775,6 +776,7 @@ impl BenchUpApp {
     }
     /// Test hook: the server connection went quiet, so edits are blocked.
     #[cfg(test)]
+    #[cfg_attr(not(any(feature = "assistant", feature = "agent-link")), allow(dead_code))]
     pub(super) fn test_expire_lease(&mut self) {
         self.sharing.last_ack = f64::NEG_INFINITY;
     }
@@ -1197,6 +1199,7 @@ mod tests {
             actor: None,
         }
     }
+    #[cfg(feature = "assistant")]
     #[test]
     fn a_remote_replacement_discards_the_running_mira_turn() {
         use super::super::assistant::{

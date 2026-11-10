@@ -20,7 +20,6 @@ mod ui;
 #[path = "tests.rs"]
 mod tests;
 
-pub(super) const DEFAULT_PORT: u16 = 47615;
 const BACKOFF_START: f64 = 1.;
 const BACKOFF_MAX: f64 = 10.;
 /// The bridge must answer `authenticate` with `ready` within this long.
@@ -34,19 +33,8 @@ const MAX_CLIENT_CHARS: usize = 64;
 const TOKEN_FILE: &str = "agent-link.token";
 const TOKEN_STORAGE: &str = "benchup.agent_link.token";
 
-/// Remembered across restarts (in `GeneralSettings`). The pairing token is
-/// deliberately not here.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-pub(super) struct Preferences {
-    pub enabled: bool,
-    pub port: u16,
-}
-impl Default for Preferences {
-    fn default() -> Self {
-        Self { enabled: false, port: DEFAULT_PORT }
-    }
-}
+pub(super) use addons::{AgentPreferences as Preferences, DEFAULT_PORT};
+
 impl Preferences {
     pub(super) fn normalize(&mut self) {
         if self.port == 0 {

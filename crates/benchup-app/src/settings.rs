@@ -163,6 +163,9 @@ pub(super) struct GeneralSettings {
     pub stock: stock_settings::Settings,
     /// Agent connection add-on: on/off and port. The pairing token is not here.
     pub agent_link: agent_link::Preferences,
+    /// "Build with MIRA" is on (default). Off hides the panel, menu items and
+    /// shortcut and stops any running turn.
+    pub assistant_enabled: bool,
 }
 
 impl Default for GeneralSettings {
@@ -183,6 +186,7 @@ impl Default for GeneralSettings {
             tool_keys: TOOLS.iter().map(|(_, key)| key.to_string()).collect(),
             assistant_key: "M".into(),
             agent_link: Default::default(),
+            assistant_enabled: true,
         }
     }
 }
@@ -422,7 +426,19 @@ impl BenchUpApp {
 
     fn settings_contents(&mut self, ui: &mut egui::Ui) {
         match self.general_settings.section {
-            Section::AddOns => self.agent_link_settings(ui),
+            Section::AddOns => {
+                if cfg!(feature = "assistant") {
+                    ui.text_strong(tr!("assistant.name"));
+                    ui.text_weak(tr!("settings.add_on_mira_help"));
+                    ui.checkbox(&mut self.general_settings.assistant_enabled, tr!("settings.add_on_mira_toggle"))
+                        .on_hover_text(tr!("settings.add_on_mira_toggle_help"));
+                    ui.add_space(8.);
+                }
+                self.agent_link_settings(ui);
+                if !cfg!(feature = "assistant") && !cfg!(feature = "agent-link") {
+                    ui.text_weak(tr!("settings.no_add_ons"));
+                }
+            }
             Section::Tools => {
                 ui.checkbox(
                     &mut self.general_settings.reset_axis_locks_on_action,
@@ -563,7 +579,7 @@ impl BenchUpApp {
                     });
                 }
                 let assistant_label = tr!("assistant.name");
-                if assistant_label.to_lowercase().contains(&query) {
+                if self.assistant_available() && assistant_label.to_lowercase().contains(&query) {
                     matches += 1;
                     table.row(ui, "settings_assistant_key", |column, ui| {
                         let rejected_id = egui::Id::NULL.with("settings_assistant_key_rejected");

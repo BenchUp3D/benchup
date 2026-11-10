@@ -165,13 +165,17 @@ impl BenchUpApp {
     pub(crate) fn assistant_toggle_shortcut(&mut self, ctx: &egui::Context) -> bool {
         let shortcut = self.assistant_shortcut();
         let fired = ctx.input_mut(|i| i.consume_shortcut(&shortcut));
-        if fired {
+        // Off: the key combination stays reserved but does nothing.
+        if fired && self.assistant_available() {
             self.assistant_toggle(ctx);
         }
         fired
     }
 
     pub(crate) fn assistant_view_menu_item(&mut self, ui: &mut egui::Ui) {
+        if !self.assistant_available() {
+            return;
+        }
         let shortcut = ui.ctx().format_shortcut(&self.assistant_shortcut());
         let button = Self::menu_item_button(ui, tr!("assistant.name"), Some("assistant"))
             .shortcut_text(shortcut);
@@ -183,6 +187,9 @@ impl BenchUpApp {
 
     /// Called once per frame. Owns the detached window and the panel's dialogs.
     pub(crate) fn assistant_window(&mut self, ctx: &egui::Context) {
+        if !self.assistant_available() {
+            return;
+        }
         if !self.assistant.settings.window.detached {
             self.assistant.ui.geometry = Geometry::default();
             self.assistant_dialogs(ctx);

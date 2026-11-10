@@ -3,6 +3,7 @@
 //! network except the loopback one (127.0.0.1, port 0), and every test that
 //! commits an edit (which autosaves) runs with a temp data directory.
 use super::*;
+#[cfg(feature = "assistant")]
 use crate::app::assistant::{EntryRole, Prompt, client::fake::FakeTransport};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
@@ -270,6 +271,7 @@ fn bridge_errors_timeouts_and_setting_changes_reconnect() {
     assert_eq!(bridge.0.lock().unwrap().connects.last().unwrap().1, "22222222-2222-4333-8444-555555555555");
 }
 
+#[cfg(feature = "assistant")]
 #[test]
 fn disabling_answers_waiting_calls_and_a_lost_link_drops_them() {
     let (bridge, ctx) = (FakeBridge::default(), egui::Context::default());
@@ -322,6 +324,7 @@ fn calls_that_wait_longer_than_the_bridge_does_are_refused() {
     assert_eq!(bridge.result("slow")["result"]["error"], "BenchUp is busy with a MIRA turn, retry");
 }
 
+#[cfg(feature = "assistant")]
 #[test]
 fn a_full_queue_refuses_more_calls() {
     let (bridge, ctx) = (FakeBridge::default(), egui::Context::default());
@@ -359,15 +362,18 @@ fn an_external_call_is_one_undo_step_with_an_agent_activity_card() {
         app.poll_agent_link(&ctx);
         assert_eq!(bridge.result("2")["ok"], true);
         assert_eq!(labels(&app).len(), 1);
-        assert_eq!(app.assistant.transcript.len(), 1);
-        // The change card names the client and can be undone while newest.
-        let entry = &app.assistant.transcript[0];
-        assert_eq!(entry.role, EntryRole::Agent);
-        assert_eq!(entry.text, "Claude Code: create_board");
-        let changes = entry.changes.as_ref().unwrap();
-        assert_eq!(changes.created, vec![id]);
-        assert_eq!(changes.position, Some(app.doc.history.position()));
-        assert!(crate::app::assistant::panel::turn_undoable(changes, app.doc.history.position(), labels(&app).len()));
+        #[cfg(feature = "assistant")]
+        {
+            assert_eq!(app.assistant.transcript.len(), 1);
+            // The change card names the client and can be undone while newest.
+            let entry = &app.assistant.transcript[0];
+            assert_eq!(entry.role, EntryRole::Agent);
+            assert_eq!(entry.text, "Claude Code: create_board");
+            let changes = entry.changes.as_ref().unwrap();
+            assert_eq!(changes.created, vec![id]);
+            assert_eq!(changes.position, Some(app.doc.history.position()));
+            assert!(crate::app::assistant::panel::turn_undoable(changes, app.doc.history.position(), labels(&app).len()));
+        }
         // A failed call changes nothing.
         bridge.call("3", "move", json!({"ids": [9999], "delta_mm": [1, 0, 0]}));
         app.poll_agent_link(&ctx);
@@ -379,6 +385,7 @@ fn an_external_call_is_one_undo_step_with_an_agent_activity_card() {
     });
 }
 
+#[cfg(feature = "assistant")]
 #[test]
 fn agent_calls_wait_for_a_running_mira_turn_and_then_run_in_order() {
     in_temp_data_dir("agent_calls_wait_for_a_running_mira_turn_and_then_run_in_order", || {
@@ -472,7 +479,9 @@ fn a_shared_project_without_edit_access_refuses_agent_edits_but_allows_reads() {
         assert_eq!(refused["ok"], false);
         assert_eq!(refused["result"]["error"], "read-only");
         assert_eq!(bridge.result("r")["ok"], true);
-        assert!(labels(&app).is_empty() && app.assistant.transcript.is_empty());
+        assert!(labels(&app).is_empty());
+        #[cfg(feature = "assistant")]
+        assert!(app.assistant.transcript.is_empty());
     });
 }
 
@@ -638,4 +647,23 @@ fn the_real_socket_talks_plain_websocket_to_loopback() {
     assert_eq!((reply["type"].clone(), reply["id"].clone(), reply["ok"].clone()), (json!("result"), json!("x1"), json!(true)));
     assert!(reply["result"].is_object());
     assert!(saw_client);
+}
+
+/// With MIRA turned off the agent link keeps working, and its activity is not
+/// recorded anywhere (there is no transcript to show it in).
+#[cfg(feature = "assistant")]
+#[test]
+fn the_agent_link_works_with_mira_off_and_records_no_transcript() {
+    in_temp_data_dir("the_agent_link_works_with_mira_off_and_records_no_transcript", || {
+        let (bridge, ctx) = (FakeBridge::default(), egui::Context::default());
+        let mut app = connected(&bridge, &ctx);
+        app.general_settings.assistant_enabled = false;
+        bridge.push(create_board("1", "Leg", 0.));
+        app.poll_agent_link(&ctx);
+        assert_eq!(bridge.result("1")["ok"], true);
+        assert_eq!(labels(&app).len(), 1);
+        assert!(app.assistant.transcript.is_empty());
+        app.undo(&ctx, false);
+        assert!(app.doc.model.objects.is_empty());
+    });
 }

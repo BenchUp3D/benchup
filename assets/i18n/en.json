@@ -2051,5 +2051,9 @@
   "agent_link.error.disabled": "Agent control was turned off",
   "agent_link.error.disconnected": "The connection was lost before the call ran",
   "agent_link.error.connect_timeout": "The bridge did not answer",
-  "agent_link.error.bridge": "The bridge refused the connection: {message}"
+  "agent_link.error.bridge": "The bridge refused the connection: {message}",
+  "settings.add_on_mira_help": "The in-app design assistant. It sends nothing until you connect a server.",
+  "settings.add_on_mira_toggle": "Build with MIRA",
+  "settings.add_on_mira_toggle_help": "Show the MIRA panel, menu items and shortcut. Turning it off stops a running request and keeps what it already changed.",
+  "settings.no_add_ons": "No add-ons are included in this build."
 }

@@ -301,3 +301,75 @@ fn change_cards_count_every_row_they_do_not_show() {
     let output = h.frame(vec![], egui::Modifiers::NONE);
     text_position(&output, "+3 more");
 }
+
+fn all_text(output: &egui::FullOutput) -> Vec<String> {
+    fn collect(shape: &egui::Shape, text: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(value) => text.push(value.galley.job.text.clone()),
+            egui::Shape::Vec(values) => values.iter().for_each(|value| collect(value, text)),
+            _ => {}
+        }
+    }
+    let mut text = Vec::new();
+    output.shapes.iter().for_each(|shape| collect(&shape.shape, &mut text));
+    text
+}
+
+#[test]
+fn mira_off_hides_the_section_and_view_item_and_keeps_the_saved_layout_order() {
+    let mut h = Harness::new();
+    open_panel(&mut h);
+    h.app.inspector = true;
+    let shown = all_text(&h.frame(vec![], egui::Modifiers::NONE));
+    assert!(shown.iter().any(|t| t == "Include selection"), "the panel is there while on");
+    let order = h.app.inspector_order;
+    h.app.general_settings.assistant_enabled = false;
+    h.frame(vec![], egui::Modifiers::NONE);
+    let shown = all_text(&h.frame(vec![], egui::Modifiers::NONE));
+    assert!(!shown.iter().any(|t| t == "Include selection" || t == "MIRA"), "the section is hidden");
+    assert!(h.app.section_hidden(sidebar::InspectorSection::Assistant));
+    assert_eq!(h.app.inspector_order, order, "hiding never reorders the saved layout");
+    h.app.general_settings.assistant_enabled = true;
+    h.frame(vec![], egui::Modifiers::NONE);
+    assert!(all_text(&h.frame(vec![], egui::Modifiers::NONE)).iter().any(|t| t == "Include selection"));
+}
+
+#[test]
+fn mira_off_removes_ask_mira_from_the_context_menu_and_the_shortcut_does_nothing() {
+    let mut h = Harness::new();
+    let beam = object(&mut h, "Beam", DVec3::ZERO);
+    h.app.selected = BTreeSet::from([beam]);
+    h.app.general_settings.assistant_enabled = false;
+    h.frame(vec![], egui::Modifiers::NONE);
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    let row = text_position(&output, "Beam");
+    let menu = open_context_menu(&mut h, row);
+    assert!(all_text(&menu).iter().any(|t| t == "Delete"), "the menu is open");
+    assert!(!all_text(&menu).iter().any(|t| t == "Ask MIRA about this"));
+    // The action itself is inert too.
+    h.app.context_action(&h.ctx, context_menu::ContextAction::AskAssistant);
+    assert!(h.app.assistant.ui.chips.is_empty());
+    // The chord is consumed but does not open the panel.
+    let chord = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    h.app.inspector = true;
+    sidebar::set_section_open(&h.ctx, "assistant", false);
+    h.frame(
+        vec![egui::Event::Key { key: Key::M, physical_key: None, pressed: true, repeat: false, modifiers: chord }],
+        chord,
+    );
+    assert!(!sidebar::section_open(&h.ctx, "assistant", false));
+}
+
+#[test]
+fn both_add_ons_off_leave_no_add_on_ui_in_the_workspace() {
+    let mut h = Harness::new();
+    open_panel(&mut h);
+    h.app.general_settings.assistant_enabled = false;
+    h.app.general_settings.agent_link.enabled = false;
+    h.frame(vec![], egui::Modifiers::NONE);
+    let shown = all_text(&h.frame(vec![], egui::Modifiers::NONE));
+    for text in ["MIRA", "Include selection", "Agent connected", "Agent activity"] {
+        assert!(!shown.iter().any(|t| t == text), "{text} is still shown");
+    }
+    assert!(h.app.agent_status_text().is_none());
+}

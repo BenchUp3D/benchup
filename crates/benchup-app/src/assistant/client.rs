@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::sync::mpsc::{self, Receiver};
 
-pub(crate) const DEFAULT_BASE_URL: &str = "https://api.endlesstokens.ai/v1";
+pub(crate) use super::addons::DEFAULT_BASE_URL;
 pub(crate) const KEY_PORTAL_URL: &str = "https://portal.endlesstokens.ai/key";
 #[cfg(any(not(target_arch = "wasm32"), test))]
 const TIMEOUT_SECS: u64 = 120;

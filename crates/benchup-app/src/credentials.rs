@@ -2,6 +2,8 @@
 //! pairing token. A private (0600) file in the data directory natively,
 //! `localStorage` on the web. They never enter eframe storage, preferences, or
 //! project files. Callers name the slot with a file name and a storage key.
+// Each add-on uses a different subset (the assistant also forgets keys).
+#![cfg_attr(not(all(feature = "assistant", feature = "agent-link")), allow(dead_code))]
 #[cfg(target_arch = "wasm32")]
 use benchup_core::tr;
 

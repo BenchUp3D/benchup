@@ -3,9 +3,26 @@
 //! `agent_link`. It builds the tool environment from the app's state and
 //! commits one external call as one undo step, so both add-ons obey the same
 //! catalog, read-only, lease and edit-scope rules.
+// Without both add-ons some helpers have no caller.
+#![cfg_attr(not(all(feature = "assistant", feature = "agent-link")), allow(dead_code))]
 use super::*;
 use benchup_tools::{Call, ToolEnv};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
+
+/// What a finished turn or agent call changed, for the change card.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Changes {
+    pub created: Vec<u64>,
+    pub modified: Vec<u64>,
+    pub erased: Vec<u64>,
+    pub joints: Vec<u64>,
+    pub stopped: bool,
+    /// History position right after this turn's step; `None` if nothing was recorded.
+    pub position: Option<usize>,
+    /// Names of erased entities, which no longer exist to be looked up.
+    pub erased_names: BTreeMap<u64, String>,
+}
 
 /// Put the user back in the editing scope they had before an agent acted, or
 /// at the top level if that object is gone.
@@ -14,6 +31,16 @@ pub(super) fn restore_scope(model: &mut Model, scope: Option<u64>) {
 }
 
 impl BenchUpApp {
+    /// Whether "Build with MIRA" is compiled in and turned on.
+    pub(super) fn assistant_available(&self) -> bool {
+        cfg!(feature = "assistant") && self.general_settings.assistant_enabled
+    }
+    /// Sections that are hidden (not removed) while their add-on is off, so
+    /// saved layouts keep their order.
+    pub(super) fn section_hidden(&self, section: sidebar::InspectorSection) -> bool {
+        section == sidebar::InspectorSection::Assistant && !self.assistant_available()
+    }
+
     /// The tool environment for the current document: purchasing catalog,
     /// read-only and lease rules for shared projects, and the selection.
     pub(super) fn tool_env(&self, ctx: &egui::Context) -> ToolEnv {
@@ -81,7 +108,8 @@ impl BenchUpApp {
         let modified: Vec<u64> = exists(&outcome.modified).into_iter().filter(|id| !created.contains(id)).collect();
         let erased: Vec<u64> = outcome.erased.iter().copied().filter(|id| !outcome.created.contains(id)).collect();
         let joints = exists(&outcome.joints);
-        let erased_names = assistant::panel::erased_names(&before, &erased);
+        let record = self.assistant_available();
+        let erased_names = if record { assistant::panel::erased_names(&before, &erased) } else { BTreeMap::new() };
         let summary = if created.is_empty() && modified.is_empty() {
             call.name.clone()
         } else {
@@ -112,7 +140,9 @@ impl BenchUpApp {
             position: recorded.then(|| self.doc.history.position()),
             erased_names,
         };
-        self.assistant.record_agent(client, &call.name, changes);
+        if record {
+            self.assistant.record_agent(client, &call.name, changes);
+        }
         ctx.request_repaint();
         (outcome.ok, outcome.result)
     }

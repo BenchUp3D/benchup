@@ -574,6 +574,9 @@ impl BenchUpApp {
         let colors = Palette::for_ui(ui);
         let mut top = 0.;
         for &section in sections {
+            if self.section_hidden(section) {
+                continue;
+            }
             let index = section.index();
             let id = egui::Id::unique(("inspector_section", section.id()));
             let target = origin + egui::vec2(0., top);
