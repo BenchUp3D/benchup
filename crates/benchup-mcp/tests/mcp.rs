@@ -1,6 +1,6 @@
 use benchup_core::Document;
 use benchup_mcp::{Backend, file_mode::FileBackend, live::{Bridge, LiveConfig}, serve};
-use benchup_tools::files;
+use benchup_tools::{files, pairing};
 use serde_json::{Value, json};
 use std::io::Cursor;
 use std::net::TcpStream;
@@ -143,6 +143,25 @@ fn file_mode_save_failure_rolls_back_and_errors() {
 }
 
 #[test]
+fn file_mode_refuses_to_overwrite_a_file_changed_on_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_project(dir.path(), &Document::default());
+    let mut backend = FileBackend::open(&path, false).unwrap();
+    let out = run(&mut backend, &[call(1, "create_board", board_args())]);
+    assert_eq!(out[0]["result"]["isError"], false);
+    // Someone else (BenchUp) saves a different project over the file.
+    let mut other = Document::default();
+    other.name = "Edited elsewhere".into();
+    let theirs = files::encode_document(&other).unwrap();
+    std::fs::write(&path, &theirs).unwrap();
+    let out = run(&mut backend, &[call(2, "create_board", board_args())]);
+    assert_eq!(out[0]["result"]["isError"], true);
+    assert!(out[0]["result"]["structuredContent"]["error"].as_str().unwrap().contains("changed on disk"));
+    assert_eq!(std::fs::read(&path).unwrap(), theirs, "their file must not be overwritten");
+    assert_eq!(backend.document().model.objects.len(), 1, "second board rolled back in memory");
+}
+
+#[test]
 fn file_mode_refuses_shared_projects_without_flag() {
     let dir = tempfile::tempdir().unwrap();
     let mut value = serde_json::to_value(Document::default()).unwrap();
@@ -178,9 +197,23 @@ fn recv(ws: &mut Ws) -> Value {
         }
     }
 }
+const APP_NONCE: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+/// Run the v2 handshake; returns the bridge's `ready` (verified) or its error frame.
 fn auth(ws: &mut Ws, token: &str) -> Value {
-    ws.send(Message::text(json!({"type": "authenticate", "ticket": token, "connection": "test"}).to_string())).unwrap();
-    recv(ws)
+    ws.send(Message::text(json!({"type": "authenticate", "ticket": "", "connection": "test"}).to_string())).unwrap();
+    let challenge = recv(ws);
+    assert_eq!(challenge["type"], "challenge");
+    assert_eq!(challenge["protocol"], 2);
+    let nonce = challenge["nonce"].as_str().unwrap().to_owned();
+    assert!(pairing::valid_nonce(&nonce));
+    let proof = pairing::app_proof(token, &nonce, APP_NONCE);
+    ws.send(Message::text(json!({"type": "prove", "nonce": APP_NONCE, "proof": proof}).to_string())).unwrap();
+    let reply = recv(ws);
+    if reply["type"] == "ready" {
+        assert_eq!(reply["proof"], pairing::bridge_proof(token, &nonce, APP_NONCE));
+        assert!(!reply.to_string().contains(token), "the raw token is never sent");
+    }
+    reply
 }
 fn bridge(timeout_ms: u64) -> Bridge {
     let mut config = LiveConfig::new(TOKEN);
@@ -284,4 +317,137 @@ fn live_newer_connection_replaces_older_and_disconnect_fails_call() {
     let out = handle.join().unwrap();
     assert_eq!(out[0]["result"]["isError"], true);
     assert!(out[0]["result"]["structuredContent"]["error"].as_str().unwrap().contains("disconnected"));
+}
+
+#[test]
+fn live_timeout_sends_cancel_and_ignores_the_late_result() {
+    let mut b = bridge(300);
+    let mut app = connect(b.port(), None).unwrap();
+    assert_eq!(auth(&mut app, TOKEN)["type"], "ready");
+    let handle = std::thread::spawn(move || {
+        let out = run(&mut b, &[call(1, "get_scene", json!({}))]);
+        (out, b)
+    });
+    let frame = recv(&mut app);
+    assert_eq!(frame["type"], "call");
+    let deadline = frame["deadline_ms"].as_u64().unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    assert!(deadline > now.saturating_sub(5_000) && deadline < now + 5_000, "{deadline} vs {now}");
+    let cancel = recv(&mut app);
+    assert_eq!(cancel, json!({"type": "cancel", "id": frame["id"]}));
+    let (out, mut b) = handle.join().unwrap();
+    let result = &out[0]["result"];
+    assert_eq!(result["isError"], true);
+    assert_eq!(result["structuredContent"]["error"], "BenchUp did not answer in time");
+    assert!(result["structuredContent"]["hint"].as_str().unwrap().contains("get_scene"));
+    // The late answer is dropped; the next call is not confused by it.
+    app.send(Message::text(json!({"type": "result", "id": frame["id"], "ok": true, "result": {"late": true}}).to_string())).unwrap();
+    let next = std::thread::spawn(move || run(&mut b, &[call(2, "get_scene", json!({}))]));
+    let second = recv(&mut app);
+    assert_ne!(second["id"], frame["id"]);
+    app.send(Message::text(json!({"type": "result", "id": second["id"], "ok": true, "result": {"ok": true, "fresh": true}}).to_string())).unwrap();
+    let out = next.join().unwrap();
+    assert_eq!(out[0]["result"]["structuredContent"]["fresh"], true);
+}
+
+#[test]
+fn live_pairing_rejects_bad_proofs_nonces_and_extra_frames() {
+    let b = bridge(1000);
+    // Wrong proof.
+    let mut ws = connect(b.port(), None).unwrap();
+    assert_eq!(auth(&mut ws, "another-token-another-token")["message"], "pairing token does not match");
+    // Malformed app nonce.
+    let mut ws = connect(b.port(), None).unwrap();
+    ws.send(Message::text(json!({"type": "authenticate", "ticket": "", "connection": "t"}).to_string())).unwrap();
+    let challenge = recv(&mut ws);
+    let proof = pairing::app_proof(TOKEN, challenge["nonce"].as_str().unwrap(), "short");
+    ws.send(Message::text(json!({"type": "prove", "nonce": "short", "proof": proof}).to_string())).unwrap();
+    assert_eq!(recv(&mut ws)["type"], "error");
+    // A ping after the hello is a protocol error; the old v1 flow (token as ticket, no prove) never gets ready.
+    let mut ws = connect(b.port(), None).unwrap();
+    ws.send(Message::text(json!({"type": "authenticate", "ticket": TOKEN, "connection": "t"}).to_string())).unwrap();
+    assert_eq!(recv(&mut ws)["type"], "challenge");
+    ws.send(Message::Ping(vec![1].into())).unwrap();
+    assert_eq!(recv(&mut ws)["type"], "error");
+    // A non-hello first frame is rejected.
+    let mut ws = connect(b.port(), None).unwrap();
+    ws.send(Message::text(json!({"type": "prove", "nonce": APP_NONCE, "proof": "x"}).to_string())).unwrap();
+    assert_eq!(recv(&mut ws)["type"], "error");
+}
+
+#[test]
+fn live_oversize_pre_auth_frames_are_dropped_but_authenticated_apps_may_send_large_results() {
+    let b = bridge(1000);
+    for size in [100 * 1024, 2 * 1024 * 1024] {
+        let mut ws = connect(b.port(), None).unwrap();
+        let _ = ws.send(Message::text("x".repeat(size)));
+        let _ = ws.flush();
+        loop {
+            match ws.read() {
+                Ok(Message::Text(t)) => panic!("unexpected reply {t}"),
+                Ok(_) => {}
+                Err(_) => break, // closed
+            }
+        }
+    }
+    // After authentication a multi-megabyte frame is fine and keeps the link alive.
+    let mut ws = connect(b.port(), None).unwrap();
+    assert_eq!(auth(&mut ws, TOKEN)["type"], "ready");
+    ws.send(Message::text(json!({"type": "status", "message": "y".repeat(3 * 1024 * 1024)}).to_string())).unwrap();
+    ws.send(Message::text(json!({"type": "status", "message": "after"}).to_string())).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    ws.send(Message::Ping(vec![].into())).unwrap();
+    loop {
+        if matches!(ws.read().unwrap(), Message::Pong(_)) {
+            break;
+        }
+    }
+}
+
+#[test]
+fn live_caps_unauthenticated_connections() {
+    let b = bridge(1000);
+    let idle: Vec<TcpStream> = (0..benchup_mcp::live::MAX_UNAUTHENTICATED)
+        .map(|_| TcpStream::connect(("127.0.0.1", b.port())).unwrap())
+        .collect();
+    std::thread::sleep(Duration::from_millis(300));
+    // The ninth is closed straight away: the handshake cannot complete.
+    let ninth = connect_result(b.port());
+    assert!(ninth.is_err(), "excess connection must be refused");
+    drop(idle);
+    std::thread::sleep(Duration::from_millis(500));
+    let mut ws = connect(b.port(), None).unwrap();
+    assert_eq!(auth(&mut ws, TOKEN)["type"], "ready");
+}
+
+fn connect_result(port: u16) -> Result<(), String> {
+    let request = format!("ws://127.0.0.1:{port}").into_client_request().unwrap();
+    let stream = TcpStream::connect(("127.0.0.1", port)).map_err(|e| e.to_string())?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    tungstenite::client(request, stream).map(|_| ()).map_err(|e| e.to_string())
+}
+
+#[test]
+fn live_authentication_window_is_not_extended_by_traffic() {
+    let b = bridge(1000);
+    let mut ws = connect(b.port(), None).unwrap();
+    let start = std::time::Instant::now();
+    // Keep pinging before any hello; the connection must still end after ~5 s.
+    loop {
+        if start.elapsed() > Duration::from_secs(9) {
+            panic!("pre-auth pings extended the auth window");
+        }
+        if ws.send(Message::Ping(vec![].into())).is_err() {
+            break;
+        }
+        ws.flush().ok();
+        std::thread::sleep(Duration::from_millis(200));
+        ws.get_ref().set_read_timeout(Some(Duration::from_millis(1))).ok();
+        match ws.read() {
+            Err(tungstenite::Error::Io(e)) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    assert!(start.elapsed() < Duration::from_secs(8));
 }

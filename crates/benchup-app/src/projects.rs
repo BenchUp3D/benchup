@@ -183,6 +183,7 @@ impl BenchUpApp {
         egui::DragAndDrop::clear_payload(ctx);
         storage::invalidate_selection_source();
         self.doc = doc;
+        self.doc_epoch += 1;
         self.viewports
             .reframe_project(&self.doc.camera, &self.doc.viewport_cameras);
         self.selected = Self::restore_document_selection(&mut self.doc);

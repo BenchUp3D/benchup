@@ -67,7 +67,7 @@ impl BenchUpApp {
         ui.text_strong(tr!("agent_link.setup"));
         if let Some(token) = self.agent_link.token.clone() {
             ui.horizontal_wrapped(|ui| {
-                if ui.button(tr!("agent_link.copy_command")).clicked() {
+                if ui.button(tr!("agent_link.copy_command")).on_hover_text(tr!("agent_link.command_help")).clicked() {
                     ui.ctx().copy_text(claude_command(&token, port));
                 }
                 if ui.button(tr!("agent_link.copy_json")).clicked() {

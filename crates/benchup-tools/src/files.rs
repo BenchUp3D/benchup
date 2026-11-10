@@ -35,11 +35,15 @@ pub fn decode(bytes: &[u8]) -> Result<Document, String> {
     Document::from_json(json)
 }
 
-/// Write `bytes` to `path` through a temporary file in the same directory and
-/// a rename, so a crash never leaves a half-written project.
+/// Write `bytes` to `path` through a temporary file next to the real file and
+/// a rename, so a crash never leaves a half-written project. A symlink is
+/// followed (the link stays, its target is replaced) and an existing file's
+/// permissions are kept.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
-    let parent = path
+    let existed = path.exists();
+    let real = if existed { path.canonicalize().map_err(|e| e.to_string())? } else { path.to_path_buf() };
+    let parent = real
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(std::path::Path::new("."));
@@ -48,7 +52,22 @@ pub fn save_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
         .write_all(bytes)
         .and_then(|_| temporary.as_file().sync_all())
         .map_err(|e| e.to_string())?;
-    temporary.persist(path).map_err(|e| e.to_string())?;
+    if existed {
+        let permissions = std::fs::metadata(&real).map_err(|e| e.to_string())?.permissions();
+        std::fs::set_permissions(temporary.path(), permissions).map_err(|e| e.to_string())?;
+    } else {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o644))
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    temporary.persist(&real).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    if let Ok(dir) = std::fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
     Ok(())
 }
 
@@ -82,5 +101,25 @@ mod tests {
         save_atomic(&path, b"two").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"two");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_atomic_follows_symlinks_and_keeps_mode() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real.bup");
+        std::fs::write(&real, b"old").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let link = dir.path().join("link.bup");
+        symlink(&real, &link).unwrap();
+        save_atomic(&link, b"new").unwrap();
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read(&real).unwrap(), b"new");
+        assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o640);
+        let fresh = dir.path().join("fresh.bup");
+        save_atomic(&fresh, b"x").unwrap();
+        assert_eq!(std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777, 0o644);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
     }
 }

@@ -2056,5 +2056,11 @@
   "settings.add_on_mira_toggle": "Build with MIRA",
   "settings.add_on_mira_toggle_help": "Show the MIRA panel, menu items and shortcut. Turning it off stops a running request and keeps what it already changed.",
   "settings.no_add_ons": "No add-ons are included in this build.",
+  "agent_link.error.protocol": "The agent bridge uses an incompatible protocol. Update benchup-mcp to the version that matches this BenchUp.",
+  "agent_link.error.unproven": "The program on this port did not prove the pairing token",
+  "agent_link.error.handshake": "The agent bridge broke the pairing protocol",
+  "agent_link.error.document_changed": "The open project changed before this call ran",
+  "agent_link.error.document_changed_hint": "Call get_scene to see the project that is open now.",
+  "agent_link.command_help": "The command hands the token to the bridge through its environment, not its command line.",
   "agent_link.error.no_randomness": "This device could not provide secure random numbers, so no pairing token was created"
 }

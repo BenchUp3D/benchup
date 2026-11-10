@@ -517,3 +517,58 @@ fn text_arguments_behave_like_the_app_did() {
     assert!(bad.result["error"].as_str().unwrap().starts_with("invalid arguments: "));
     assert!(bad.result["hint"].is_string());
 }
+
+#[test]
+fn lease_blocks_entering_and_creating_inside_foreign_groups() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let mine = board(&mut model, &mut env, "Mine", [0., 0., 0.], [100., 100., 100.]);
+    let theirs = board(&mut model, &mut env, "Theirs", [500., 0., 0.], [100., 100., 100.]);
+    let theirs_group = ok(&mut model, &mut env, "group", json!({"ids": [theirs], "name": "TG", "component": false})).created[0];
+    let my_group = ok(&mut model, &mut env, "group", json!({"ids": [mine], "name": "MG", "component": false})).created[0];
+    env.created.clear();
+    env.lease = Some(BTreeSet::from([my_group]));
+
+    assert_eq!(err(&mut model, &mut env, "enter_object", json!({"id": theirs_group})), "not-leased");
+    assert_eq!(model.edit_context, None);
+
+    // Scoped inside a group someone else holds: nothing may be created.
+    model.edit_context = Some(theirs_group);
+    for (name, args) in [
+        ("create_board", json!({"name": "X", "origin_mm": [0, 0, 0], "size_mm": [10, 10, 10]})),
+        ("draw_polyline", json!({"points_mm": [[0, 0, 0], [10, 0, 0]]})),
+        ("add_text", json!({"text": "hi", "position_mm": [0, 0, 0]})),
+    ] {
+        assert_eq!(err(&mut model, &mut env, name, args), "not-leased", "{name}");
+    }
+    model.edit_context = None;
+
+    // The leased group can be entered and created in.
+    ok(&mut model, &mut env, "enter_object", json!({"id": my_group}));
+    ok(&mut model, &mut env, "create_board", json!({"name": "In", "origin_mm": [0, 0, 0], "size_mm": [10, 10, 10]}));
+    ok(&mut model, &mut env, "exit_to_root", json!({}));
+    // Root creation still works.
+    board(&mut model, &mut env, "Fresh", [900., 0., 0.], [50., 50., 50.]);
+}
+
+#[test]
+fn lease_rolls_back_calls_that_alter_foreign_loose_geometry() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    ok(&mut model, &mut env, "draw_polyline", json!({"points_mm": [[0, 0, 0], [1000, 0, 0]]}));
+    let mine = board(&mut model, &mut env, "Mine", [0., 500., 0.], [100., 100., 100.]);
+    env.created.clear();
+    let edges_before = model.edges.len();
+
+    // Without a lease the crossing line splits the loose edge.
+    let mut free = model.clone();
+    ok(&mut free, &mut ToolEnv::default(), "draw_polyline", json!({"points_mm": [[500, 0, 0], [500, 300, 0]]}));
+    assert!(free.edges.len() > edges_before + 1, "crossing should split the loose edge");
+
+    env.lease = Some(BTreeSet::from([mine]));
+    assert_eq!(
+        err(&mut model, &mut env, "draw_polyline", json!({"points_mm": [[500, 0, 0], [500, 300, 0]]})),
+        "not-leased"
+    );
+    assert_eq!(model.edges.len(), edges_before);
+    // Geometry that touches nothing existing is fine.
+    ok(&mut model, &mut env, "draw_polyline", json!({"points_mm": [[0, 5000, 0], [100, 5000, 0]]}));
+}

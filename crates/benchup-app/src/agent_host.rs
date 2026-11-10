@@ -46,6 +46,8 @@ impl BenchUpApp {
     pub(super) fn tool_env(&self, ctx: &egui::Context) -> ToolEnv {
         ToolEnv {
             read_only: !self.shared_edit_allowed(ctx),
+            // Deliberate: external agents see the current selection (it lets
+            // a user say "change this" and the agent find what "this" is).
             selection: self.selected.clone(),
             hide_selection: false,
             catalog: self

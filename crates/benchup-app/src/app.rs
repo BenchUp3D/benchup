@@ -347,6 +347,11 @@ pub struct BenchUpApp {
     #[cfg(not(target_arch = "wasm32"))]
     updates: crate::updates::Updater,
     doc: Document,
+    /// Bumped whenever the open document is replaced or changes identity
+    /// (new, open, close, recovery, shared update), so queued agent calls
+    /// can tell the project changed under them.
+    #[cfg_attr(not(feature = "agent-link"), allow(dead_code))]
+    doc_epoch: u64,
     project: projects::Project,
     screenshot: screenshot_dialog::ScreenshotDialog,
     screenshot_gpu: Option<(eframe::wgpu::Device, eframe::wgpu::Queue)>,
@@ -520,6 +525,7 @@ impl BenchUpApp {
             account: Default::default(),
             assistant: Default::default(),
             agent_link: Default::default(),
+            doc_epoch: 0,
             joinery_geometry: Default::default(),
             joinery: Default::default(),
             joinery_dialog: Default::default(),

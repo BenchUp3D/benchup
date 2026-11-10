@@ -5,6 +5,7 @@
 use super::*;
 #[cfg(feature = "assistant")]
 use crate::app::assistant::{EntryRole, Prompt, client::fake::FakeTransport};
+use benchup_tools::pairing;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
@@ -66,8 +67,19 @@ impl FakeBridge {
     fn call(&self, id: &str, name: &str, arguments: Value) {
         self.push(json!({"type": "call", "id": id, "name": name, "arguments": arguments, "client": "Claude Code"}));
     }
+    /// The whole bridge side of the handshake, for a token the bridge knows.
+    fn handshake_with(&self, token: &str) {
+        self.push(json!({"type": "challenge", "nonce": BRIDGE_NONCE, "server": "benchup-mcp", "version": "1", "protocol": 2}));
+        self.push(json!({
+            "type": "ready", "server": "benchup-mcp", "version": "1", "protocol": 2,
+            "proof": pairing::bridge_proof(token, BRIDGE_NONCE, APP_NONCE),
+        }));
+    }
     fn ready(&self) {
-        self.push(json!({"type": "ready", "server": "benchup-mcp", "version": "1"}));
+        self.handshake_with(TOKEN);
+    }
+    fn sent(&self) -> Vec<Value> {
+        self.0.lock().unwrap().sent.clone()
     }
     fn results(&self) -> Vec<Value> {
         self.0.lock().unwrap().sent.iter().filter(|m| m["type"] == "result").cloned().collect()
@@ -81,6 +93,8 @@ impl FakeBridge {
 }
 
 const TOKEN: &str = "11111111-2222-4333-8444-555555555555";
+const BRIDGE_NONCE: &str = "abababababababababababababababababababababababababababababababab";
+const APP_NONCE: &str = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
 
 fn app_with(bridge: &FakeBridge) -> BenchUpApp {
     let mut app = BenchUpApp::with_document(benchup_core::Document::default(), None, true);
@@ -88,6 +102,7 @@ fn app_with(bridge: &FakeBridge) -> BenchUpApp {
     // Skip the credentials file: tests must not write to a data directory.
     app.agent_link.token = Some(TOKEN.into());
     app.agent_link.token_checked = true;
+    app.agent_link.nonce_source = || Ok(APP_NONCE.into());
     app.general_settings.agent_link = Preferences { enabled: true, port: 50123 };
     app
 }
@@ -110,7 +125,19 @@ fn labels(app: &BenchUpApp) -> Vec<String> {
 
 #[test]
 fn frames_are_parsed_strictly() {
-    assert_eq!(parse_frame(&json!({"type": "ready", "server": "benchup-mcp"})), Frame::Ready);
+    assert_eq!(
+        parse_frame(&json!({"type": "ready", "server": "benchup-mcp", "proof": "p", "protocol": 2})),
+        Frame::Ready { proof: Some("p".into()), protocol: Some(2) }
+    );
+    assert_eq!(parse_frame(&json!({"type": "ready"})), Frame::Ready { proof: None, protocol: None });
+    assert_eq!(
+        parse_frame(&json!({"type": "challenge", "nonce": "n", "protocol": 2})),
+        Frame::Challenge { nonce: "n".into(), protocol: Some(2) }
+    );
+    assert_eq!(parse_frame(&json!({"type": "cancel", "id": "7"})), Frame::Cancel { id: "7".into() });
+    assert_eq!(parse_frame(&json!({"type": "cancel"})), Frame::Ignored);
+    let Frame::Call { deadline_ms, .. } = parse_frame(&json!({"type": "call", "id": "1", "name": "n", "deadline_ms": 1700000000123u64})) else { panic!() };
+    assert_eq!(deadline_ms, Some(1_700_000_000_123));
     assert_eq!(parse_frame(&json!({"type": "error", "message": "bad token"})), Frame::Error("bad token".into()));
     // Unknown types, non-objects and missing fields are ignored.
     for ignored in [
@@ -126,7 +153,7 @@ fn frames_are_parsed_strictly() {
     ] {
         assert_eq!(parse_frame(&ignored), Frame::Ignored, "{ignored}");
     }
-    let Frame::Call { id, client, call } =
+    let Frame::Call { id, client, call, .. } =
         parse_frame(&json!({"type": "call", "id": "7", "name": "get_scene", "client": "  Cl\u{7}aude\n Code  "}))
     else {
         panic!("a call")
@@ -316,6 +343,8 @@ fn calls_that_wait_longer_than_the_bridge_does_are_refused() {
         call: benchup_tools::Call::new("slow", "get_scene", json!({})),
         queued_at: 0.,
         notified: false,
+        deadline_ms: u64::MAX,
+        epoch: 0,
     });
     app.agent_link.expire(QUEUE_TIMEOUT - 1.);
     assert_eq!(app.agent_link.queued(), 1);
@@ -355,6 +384,7 @@ fn an_external_call_is_one_undo_step_with_an_agent_activity_card() {
         let result = bridge.result("1");
         assert_eq!(result["ok"], true, "{result}");
         let id = result["result"]["created"][0].as_u64().unwrap();
+        assert_eq!(result["result"]["document"], json!({"name": app.doc.name, "epoch": app.doc_epoch}));
         assert_eq!(labels(&app), vec!["Agent: create_board (1 new, 0 changed)".to_owned()]);
         assert_eq!(app.selected, BTreeSet::from([id]), "what the agent made is selected");
         // A read adds no step and no card.
@@ -573,8 +603,10 @@ fn tokens_are_version_4_uuids_and_snippets_carry_the_token_and_port() {
         assert!(token.chars().all(|c| c == '-' || c.is_ascii_hexdigit()));
         assert!(parts[2].starts_with('4') && "89ab".contains(&parts[3][..1]));
     }
-    assert_eq!(claude_command("T", 47615), "claude mcp add benchup -- benchup-mcp live --token T");
-    assert_eq!(claude_command("T", 5000), "claude mcp add benchup -- benchup-mcp live --port 5000 --token T");
+    // The token travels in the environment, never in argv.
+    assert_eq!(claude_command("T", 47615), "claude mcp add benchup -e BENCHUP_AGENT_TOKEN=T -- benchup-mcp live");
+    assert_eq!(claude_command("T", 5000), "claude mcp add benchup -e BENCHUP_AGENT_TOKEN=T -- benchup-mcp live --port 5000");
+    assert!(!claude_command("T", 5000).contains("--token"));
     let value: Value = serde_json::from_str(&mcp_json("T", 47615)).unwrap();
     assert_eq!(
         value,
@@ -608,24 +640,46 @@ fn the_token_is_saved_privately_once_and_regenerated_on_request() {
 
 // ------------------------------------------------------------ real socket
 
-/// `realtime::Socket` speaks plain `ws://` to 127.0.0.1: authenticates first,
-/// receives a call and returns its result.
+/// `realtime::Socket` speaks plain `ws://` to 127.0.0.1 and the app completes
+/// the protocol 2 handshake: an empty ticket, a challenge, a proof in each
+/// direction, then a call and its result. The raw token never travels.
 #[test]
-fn the_real_socket_talks_plain_websocket_to_loopback() {
+fn the_real_socket_completes_the_v2_handshake_with_a_loopback_bridge() {
     use tungstenite::Message;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         let mut socket = tungstenite::accept(stream).unwrap();
-        let Message::Text(first) = socket.read().unwrap() else { panic!("text") };
-        let first: Value = serde_json::from_str(&first).unwrap();
-        socket.send(Message::Text(json!({"type": "ready", "server": "benchup-mcp", "version": "t"}).to_string().into())).unwrap();
+        let mut received = Vec::new();
+        let mut read = |socket: &mut tungstenite::WebSocket<std::net::TcpStream>| {
+            let Message::Text(text) = socket.read().unwrap() else { panic!("text") };
+            received.push(text.to_string());
+            serde_json::from_str::<Value>(&text).unwrap()
+        };
+        let first = read(&mut socket);
+        socket
+            .send(Message::Text(
+                json!({"type": "challenge", "nonce": BRIDGE_NONCE, "server": "benchup-mcp", "version": "t", "protocol": 2}).to_string().into(),
+            ))
+            .unwrap();
+        let prove = read(&mut socket);
+        let app_nonce = prove["nonce"].as_str().unwrap().to_owned();
+        assert!(pairing::valid_nonce(&app_nonce));
+        assert!(pairing::proofs_match(prove["proof"].as_str().unwrap(), &pairing::app_proof(TOKEN, BRIDGE_NONCE, &app_nonce)));
+        socket
+            .send(Message::Text(
+                json!({"type": "ready", "server": "benchup-mcp", "version": "t", "protocol": 2,
+                    "proof": pairing::bridge_proof(TOKEN, BRIDGE_NONCE, &app_nonce)})
+                .to_string()
+                .into(),
+            ))
+            .unwrap();
         socket
             .send(Message::Text(json!({"type": "call", "id": "x1", "name": "get_scene", "arguments": {}, "client": "Test"}).to_string().into()))
             .unwrap();
-        let Message::Text(reply) = socket.read().unwrap() else { panic!("text") };
-        (first, serde_json::from_str::<Value>(&reply).unwrap())
+        let reply = read(&mut socket);
+        (first, reply, received)
     });
     let ctx = egui::Context::default();
     let mut app = BenchUpApp::with_document(benchup_core::Document::default(), None, true);
@@ -641,11 +695,12 @@ fn the_real_socket_talks_plain_websocket_to_loopback() {
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    let (first, reply) = server.join().unwrap();
-    assert_eq!((first["type"].clone(), first["ticket"].clone()), (json!("authenticate"), json!(TOKEN)));
+    let (first, reply, received) = server.join().unwrap();
+    assert_eq!((first["type"].clone(), first["ticket"].clone()), (json!("authenticate"), json!("")));
     assert!(first["connection"].as_str().unwrap().starts_with("benchup-app"));
     assert_eq!((reply["type"].clone(), reply["id"].clone(), reply["ok"].clone()), (json!("result"), json!("x1"), json!(true)));
-    assert!(reply["result"].is_object());
+    assert!(reply["result"].is_object() && reply["result"]["document"]["name"].is_string());
+    assert!(received.iter().all(|frame| !frame.contains(TOKEN)), "the raw token was sent: {received:?}");
     assert!(saw_client);
 }
 
@@ -684,4 +739,193 @@ fn no_secure_randomness_means_no_token_no_connection_and_a_clear_error() {
     app.agent_link.regenerate();
     assert_eq!(app.agent_link.token.as_deref(), Some(TOKEN));
     assert_eq!(app.agent_link.token_error.as_deref(), Some("no randomness"));
+}
+
+// ------------------------------------------------------------ protocol 2
+
+fn waiting_app(bridge: &FakeBridge) -> (BenchUpApp, egui::Context) {
+    let ctx = egui::Context::default();
+    let mut app = app_with(bridge);
+    app.poll_agent_link(&ctx);
+    assert_eq!(app.agent_link.status, Status::Connecting);
+    (app, ctx)
+}
+
+#[test]
+fn the_handshake_proves_both_sides_and_never_sends_the_raw_token() {
+    let (bridge, ctx) = (FakeBridge::default(), egui::Context::default());
+    let mut app = app_with(&bridge);
+    bridge.ready();
+    bridge.call("1", "get_scene", json!({}));
+    app.poll_agent_link(&ctx);
+    assert!(app.agent_link.connected());
+    let sent = bridge.sent();
+    let prove = sent.iter().find(|m| m["type"] == "prove").expect("a prove frame");
+    assert_eq!(prove["nonce"], APP_NONCE);
+    assert_eq!(prove["proof"], pairing::app_proof(TOKEN, BRIDGE_NONCE, APP_NONCE));
+    assert_eq!(bridge.result("1")["ok"], true);
+    for frame in &sent {
+        assert!(!frame.to_string().contains(TOKEN), "token in {frame}");
+    }
+}
+
+#[test]
+fn a_bad_bridge_proof_is_an_error_and_no_call_runs() {
+    let (bridge, ctx) = (FakeBridge::default(), egui::Context::default());
+    let mut app = app_with(&bridge);
+    bridge.handshake_with("a-different-token");
+    bridge.push(create_board("1", "A", 0.));
+    app.poll_agent_link(&ctx);
+    assert_eq!(app.agent_link.status, Status::Error("The program on this port did not prove the pairing token".into()));
+    assert!(bridge.results().is_empty() && labels(&app).is_empty() && app.doc.model.objects.is_empty());
+    // A ready with no proof at all is no better.
+    let bridge = FakeBridge::default();
+    let mut app = app_with(&bridge);
+    bridge.push(json!({"type": "challenge", "nonce": BRIDGE_NONCE, "protocol": 2}));
+    bridge.push(json!({"type": "ready", "protocol": 2}));
+    app.poll_agent_link(&ctx);
+    assert!(matches!(&app.agent_link.status, Status::Error(m) if m.contains("did not prove")));
+    assert!(app.agent_link.active.is_none());
+}
+
+#[test]
+fn calls_before_a_verified_ready_are_ignored() {
+    let (bridge, ctx) = (FakeBridge::default(), egui::Context::default());
+    let (mut app, ctx2) = waiting_app(&bridge);
+    let _ = ctx;
+    bridge.push(create_board("a", "A", 0.));
+    app.poll_agent_link(&ctx2);
+    bridge.push(json!({"type": "challenge", "nonce": BRIDGE_NONCE, "protocol": 2}));
+    bridge.push(create_board("b", "B", 0.));
+    app.poll_agent_link(&ctx2);
+    assert!(!app.agent_link.connected());
+    assert!(bridge.results().is_empty() && app.agent_link.queued() == 0 && app.doc.model.objects.is_empty());
+}
+
+#[test]
+fn a_repeated_or_late_challenge_or_an_unchallenged_ready_disconnects() {
+    let ctx = egui::Context::default();
+    // Twice.
+    let bridge = FakeBridge::default();
+    let mut app = app_with(&bridge);
+    for _ in 0..2 {
+        bridge.push(json!({"type": "challenge", "nonce": BRIDGE_NONCE, "protocol": 2}));
+    }
+    app.poll_agent_link(&ctx);
+    assert!(matches!(app.agent_link.status, Status::Error(_)) && app.agent_link.active.is_none());
+    // After ready.
+    let bridge = FakeBridge::default();
+    let mut app = connected(&bridge, &ctx);
+    bridge.push(json!({"type": "challenge", "nonce": BRIDGE_NONCE, "protocol": 2}));
+    app.poll_agent_link(&ctx);
+    assert!(matches!(app.agent_link.status, Status::Error(_)) && app.agent_link.active.is_none());
+    // A bridge that never challenges speaks the old protocol.
+    let bridge = FakeBridge::default();
+    let mut app = app_with(&bridge);
+    bridge.push(json!({"type": "ready", "server": "benchup-mcp", "version": "1"}));
+    app.poll_agent_link(&ctx);
+    assert!(matches!(&app.agent_link.status, Status::Error(m) if m.contains("Update benchup-mcp")));
+    // A malformed nonce.
+    let bridge = FakeBridge::default();
+    let mut app = app_with(&bridge);
+    bridge.push(json!({"type": "challenge", "nonce": "short", "protocol": 2}));
+    app.poll_agent_link(&ctx);
+    assert!(matches!(app.agent_link.status, Status::Error(_)));
+    assert!(bridge.sent().iter().all(|m| m["type"] != "prove"));
+}
+
+#[test]
+fn a_protocol_mismatch_tells_the_user_to_update_the_bridge() {
+    let (bridge, ctx) = (FakeBridge::default(), egui::Context::default());
+    let mut app = app_with(&bridge);
+    bridge.push(json!({"type": "challenge", "nonce": BRIDGE_NONCE, "protocol": 3}));
+    app.poll_agent_link(&ctx);
+    let Status::Error(message) = &app.agent_link.status else { panic!("{:?}", app.agent_link.status) };
+    assert!(message.contains("incompatible protocol") && message.contains("Update benchup-mcp"), "{message}");
+    assert!(bridge.sent().iter().all(|m| m["type"] != "prove"));
+}
+
+#[test]
+fn no_randomness_for_the_app_nonce_is_an_error() {
+    let (bridge, ctx) = (FakeBridge::default(), egui::Context::default());
+    let mut app = app_with(&bridge);
+    app.agent_link.nonce_source = || Err("no randomness".into());
+    bridge.ready();
+    app.poll_agent_link(&ctx);
+    assert_eq!(app.agent_link.status, Status::Error("no randomness".into()));
+    assert!(app.agent_link.active.is_none());
+    assert!(new_nonce().is_ok_and(|n| pairing::valid_nonce(&n)));
+}
+
+#[test]
+fn a_call_past_its_deadline_is_dropped_silently_and_a_missing_deadline_still_runs() {
+    in_temp_data_dir("a_call_past_its_deadline_is_dropped_silently_and_a_missing_deadline_still_runs", || {
+        let (bridge, ctx) = (FakeBridge::default(), egui::Context::default());
+        let mut app = connected(&bridge, &ctx);
+        let now = now_ms();
+        let with_deadline = |id: &str, deadline: u64| {
+            let mut call = create_board(id, id, 0.);
+            call["deadline_ms"] = json!(deadline);
+            call
+        };
+        bridge.push(with_deadline("expired", now.saturating_sub(5)));
+        bridge.push(with_deadline("almost", now + 500));
+        bridge.push(with_deadline("fine", now + 60_000));
+        bridge.call("none", "get_scene", json!({}));
+        app.poll_agent_link(&ctx);
+        let ids: Vec<_> = bridge.results().iter().map(|r| r["id"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(ids, vec!["fine", "none"], "expired calls get no answer");
+        assert_eq!(app.doc.model.objects.len(), 1);
+    });
+}
+
+#[test]
+fn cancel_removes_a_queued_call_before_it_runs() {
+    let (bridge, ctx) = (FakeBridge::default(), egui::Context::default());
+    let mut app = connected(&bridge, &ctx);
+    bridge.push(create_board("a", "A", 0.));
+    bridge.push(json!({"type": "cancel", "id": "a"}));
+    bridge.push(json!({"type": "cancel", "id": "unknown"}));
+    app.poll_agent_link(&ctx);
+    assert!(bridge.results().is_empty());
+    assert!(app.doc.model.objects.is_empty());
+}
+
+#[test]
+fn a_call_queued_for_another_project_is_refused_and_results_name_the_document() {
+    in_temp_data_dir("a_call_queued_for_another_project_is_refused_and_results_name_the_document", || {
+        let (bridge, ctx) = (FakeBridge::default(), egui::Context::default());
+        let mut app = connected(&bridge, &ctx);
+        app.agent_link.queue.push_back(Queued {
+            id: "old".into(),
+            client: String::new(),
+            call: benchup_tools::Call::new("old", "create_board", json!({"name": "A", "origin_mm": [0, 0, 0], "size_mm": [1, 1, 1]})),
+            queued_at: 0.,
+            notified: false,
+            deadline_ms: u64::MAX,
+            epoch: app.doc_epoch,
+        });
+        let epoch = app.doc_epoch;
+        app.replace_project(benchup_core::Document::default(), None, &ctx);
+        assert!(app.doc_epoch > epoch, "replacing the project bumps the epoch");
+        app.poll_agent_link(&ctx);
+        let refused = bridge.result("old");
+        assert_eq!(refused["ok"], false);
+        assert_eq!(refused["result"]["error"], "The open project changed before this call ran");
+        assert_eq!(refused["result"]["hint"], "Call get_scene to see the project that is open now.");
+        assert_eq!(refused["result"]["document"]["epoch"], app.doc_epoch);
+        assert!(app.doc.model.objects.is_empty());
+        // Refusals made before queueing carry it too.
+        bridge.call("bad", "get_scene", json!([1]));
+        app.poll_agent_link(&ctx);
+        assert_eq!(bridge.result("bad")["result"]["document"]["name"], json!(app.doc.name));
+    });
+}
+
+#[test]
+fn client_names_drop_invisible_and_bidi_characters() {
+    assert_eq!(clean_client("  Cl\u{202E}au\u{200B}de\u{2066} Co\u{FEFF}de\u{7}  "), "Claude Code");
+    assert_eq!(clean_client("\u{200F}\u{2069}"), "");
+    assert_eq!(clean_client("é日本 ok"), "é日本 ok");
+    assert_eq!(clean_client(&"y".repeat(100)).chars().count(), MAX_CLIENT_CHARS);
 }

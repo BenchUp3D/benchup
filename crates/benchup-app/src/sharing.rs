@@ -378,6 +378,7 @@ impl BenchUpApp {
         let edit_context = self.doc.model.edit_context;
         self.doc.project_author = doc.project_author;
         self.doc.model = doc.model;
+        self.doc_epoch += 1;
         self.doc.model.edit_context =
             edit_context.filter(|id| self.doc.model.objects.contains_key(id));
         self.doc.name = doc.name;

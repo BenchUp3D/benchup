@@ -13,6 +13,7 @@
 //! The crate has no network or UI dependencies and builds for `wasm32`.
 pub mod files;
 pub mod ops;
+pub mod pairing;
 pub mod scene;
 
 pub use ops::{

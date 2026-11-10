@@ -972,6 +972,11 @@ fn run(model: &mut Model, env: &mut ToolEnv, name: &str, arguments: &str) -> Res
         }
         "enter_object" => {
             let a: IdArg = parse(arguments)?;
+            // Shared project: entering a group the designer does not hold would
+            // let later creating tools place geometry inside it.
+            if model.contains_entity(&a.id) && !leased(model, env, a.id) {
+                return Err(fail("not-leased", "select it first so you hold the edit lease"));
+            }
             if !model.enter_object(a.id) {
                 return Err(fail(
                     format!("cannot open {}", a.id),
@@ -1035,6 +1040,74 @@ fn leased(model: &Model, env: &ToolEnv, id: u64) -> bool {
     false
 }
 
+/// Safety net for shared projects: after a mutating call, every entity that
+/// existed before and was changed or removed must have been leased (or created
+/// this turn). Ownership is read from the pre-call model. Loose root geometry
+/// has no owner, so it is never covered.
+fn lease_respected(before: &Model, after: &Model, env: &ToolEnv) -> bool {
+    let Some(lease) = &env.lease else { return true };
+    let mut parent: BTreeMap<u64, u64> = BTreeMap::new();
+    for object in before.objects.values() {
+        for child in &object.entities {
+            parent.insert(*child, object.id);
+        }
+    }
+    let covered = |id: u64| -> bool {
+        let mut current = Some(id);
+        for _ in 0..256 {
+            let Some(c) = current else { break };
+            if lease.contains(&c) || env.created.contains(&c) {
+                return true;
+            }
+            current = parent.get(&c).copied();
+        }
+        false
+    };
+    fn changed<T: PartialEq>(old: &BTreeMap<u64, T>, new: &BTreeMap<u64, T>) -> Vec<u64> {
+        old.iter().filter(|(id, value)| new.get(id) != Some(*value)).map(|(id, _)| *id).collect()
+    }
+    let entity_ids = changed(&before.objects, &after.objects)
+        .into_iter()
+        .chain(changed(&before.faces, &after.faces))
+        .chain(changed(&before.edges, &after.edges))
+        .chain(changed(&before.dimensions, &after.dimensions))
+        .chain(changed(&before.texts, &after.texts))
+        .chain(changed(&before.guides, &after.guides))
+        .chain(changed(&before.face_colors, &after.face_colors))
+        .chain(changed(&before.entity_tags, &after.entity_tags));
+    if !entity_ids.into_iter().all(&covered) {
+        return false;
+    }
+    // Hidden / locked flags on existing entities.
+    let flags = before.hidden.symmetric_difference(&after.hidden).chain(before.locked.symmetric_difference(&after.locked));
+    if !flags.filter(|id| before.contains_entity(id)).all(|id| covered(*id)) {
+        return false;
+    }
+    // A vertex is covered only when everything that uses it is.
+    let moved: BTreeSet<u64> = changed(&before.vertices, &after.vertices).into_iter().collect();
+    if !moved.is_empty() {
+        let mut users: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+        for edge in before.edges.values() {
+            users.entry(edge.a).or_default().push(edge.id);
+            users.entry(edge.b).or_default().push(edge.id);
+        }
+        for face in before.faces.values() {
+            for v in face.vertices.iter().chain(face.holes.iter().flatten()) {
+                users.entry(*v).or_default().push(face.id);
+            }
+        }
+        for v in moved {
+            match users.get(&v) {
+                Some(list) if list.iter().all(|u| covered(*u)) => {}
+                _ => return false,
+            }
+        }
+    }
+    changed(&before.connections, &after.connections)
+        .into_iter()
+        .all(|id| before.connections[&id].members.iter().all(|m| covered(*m)))
+}
+
 fn out_of_range(model: &Model, done: &Done) -> bool {
     let touched: BTreeSet<u64> = done.created.iter().chain(&done.modified).copied().filter(|id| model.contains_entity(id)).collect();
     model
@@ -1064,6 +1137,14 @@ pub fn execute(model: &mut Model, call: &Call, env: &mut ToolEnv) -> ToolOutcome
     {
         return error_outcome("not-leased".into(), Some("select it first so you hold the edit lease".into()));
     }
+    // Creating tools write into the open group; it must be one the designer holds.
+    if mutating
+        && env.lease.is_some()
+        && CREATING.contains(&name)
+        && model.edit_context.is_some_and(|context| !leased(model, env, context))
+    {
+        return error_outcome("not-leased".into(), Some("select it first so you hold the edit lease".into()));
+    }
     let backup = mutating.then(|| model.clone());
     // `catch_unwind` cannot help on wasm32, where a panic aborts. Every tool
     // therefore validates its arguments (counts, ranges, lengths) before it
@@ -1079,6 +1160,10 @@ pub fn execute(model: &mut Model, call: &Call, env: &mut ToolEnv) -> ToolOutcome
                 *model = backup;
             }
             error_outcome(failure.error, failure.hint)
+        }
+        Ok(_) if backup.as_ref().is_some_and(|b| env.lease.is_some() && !lease_respected(b, model, env)) => {
+            *model = backup.unwrap_or_default();
+            error_outcome("not-leased".into(), Some("select it first so you hold the edit lease".into()))
         }
         Ok(done) if backup.is_some() && out_of_range(model, &done) => {
             *model = backup.unwrap_or_default();
