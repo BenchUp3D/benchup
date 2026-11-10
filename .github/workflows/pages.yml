@@ -2,7 +2,7 @@ name: Deploy GitHub Pages
 
 on:
   workflow_run:
-    workflows: ['Build desktop']
+    workflows: ['Build releases']
     types: [completed]
   workflow_dispatch:
 
@@ -24,10 +24,13 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
         with:
-          # workflow_run defaults to the default branch; use the desktop release commit.
+          # workflow_run defaults to the default branch; use the release commit.
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
 
@@ -35,17 +38,33 @@ jobs:
         id: pages
         uses: actions/configure-pages@v5
 
+      - name: Download browser app from the completed release run
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@v8
+        with:
+          name: benchup-wasm
+          path: dist/release-wasm
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Extract released browser app
+        if: github.event_name == 'workflow_run'
+        run: python3 -m zipfile -e dist/release-wasm/benchup-v*-wasm.zip dist/site/play
+
       - name: Install Rust and WebAssembly target
+        if: github.event_name == 'workflow_dispatch'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
       - name: Cache Rust dependencies
+        if: github.event_name == 'workflow_dispatch'
         uses: Swatinem/rust-cache@v2
         with:
           key: github-pages-wasm
 
       - name: Install pinned prebuilt Trunk
+        if: github.event_name == 'workflow_dispatch'
         run: |
           archive="$RUNNER_TEMP/trunk.tar.gz"
           curl --fail --location --retry 3 --output "$archive" \
@@ -57,6 +76,7 @@ jobs:
           "$RUNNER_TEMP/benchup-trunk/trunk" --version
 
       - name: Build browser app
+        if: github.event_name == 'workflow_dispatch'
         run: trunk build --release --locked --dist dist/site/play --public-url ./
 
       - name: Stage landing page and discovery files

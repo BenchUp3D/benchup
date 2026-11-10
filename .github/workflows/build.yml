@@ -1,4 +1,4 @@
-name: Build desktop
+name: Build releases
 
 on:
   push:
@@ -16,6 +16,8 @@ env:
   BENCHUP_UPDATE_REPOSITORY: ${{ github.repository }}
   CARGO_TERM_COLOR: always
   VPK_VERSION: '1.2.161'
+  TRUNK_VERSION: '0.22.0'
+  TRUNK_SHA256: 'f78c1989240c56592d8cfc4df5cc27399a3ff66a3f9cc819e16f1e3d809ce7c2'
 
 jobs:
   validate:
@@ -162,9 +164,73 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+  wasm:
+    name: Build WebAssembly
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TAG_NAME: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust and WebAssembly target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-wasm
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install pinned prebuilt Trunk
+        run: |
+          archive="$RUNNER_TEMP/trunk.tar.gz"
+          curl --fail --location --retry 3 --output "$archive" \
+            "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz"
+          printf '%s  %s\n' "$TRUNK_SHA256" "$archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/benchup-trunk"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/benchup-trunk" trunk
+          echo "$RUNNER_TEMP/benchup-trunk" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/benchup-trunk/trunk" --version
+
+      - name: Build browser app
+        run: trunk build --release --locked --dist dist/wasm --public-url ./
+
+      - name: Package browser app and assets
+        run: |
+          test -s dist/wasm/index.html
+          test -n "$(find dist/wasm -name '*.wasm' -size +0c -print -quit)"
+          test -n "$(find dist/wasm -name '*.js' -size +0c -print -quit)"
+          cp LICENSE README.md dist/wasm/
+          mkdir -p dist/wasm/licenses/skp
+          cp crates/benchup-app/vendor/skp/LICENSE* dist/wasm/licenses/skp/
+          cp crates/benchup-app/vendor/skp/native/miniz/LICENSE dist/wasm/licenses/skp/LICENSE-miniz
+          python3 - <<'PY'
+          import os
+          import shutil
+          shutil.make_archive(f"dist/benchup-{os.environ['TAG_NAME']}-wasm", "zip", "dist/wasm")
+          PY
+
+      - name: Upload WebAssembly artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchup-wasm
+          path: dist/benchup-*-wasm.zip
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
   release:
     name: Publish GitHub Release
-    needs: build
+    needs: [build, wasm]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -179,7 +245,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Download desktop packages
+      - name: Download desktop and WebAssembly packages
         uses: actions/download-artifact@v8
         with:
           pattern: benchup-*
@@ -189,9 +255,11 @@ jobs:
       - name: Validate all platforms, remove packaging metadata, and checksum release files
         env:
           TAG_NAME: ${{ github.ref_name }}
-        run: python scripts/desktop_release.py validate --tag "$TAG_NAME"
+        run: |
+          test -s "dist/benchup-${TAG_NAME}-wasm.zip"
+          python scripts/desktop_release.py validate --tag "$TAG_NAME"
 
-      - name: Publish release with desktop packages
+      - name: Publish release with desktop and WebAssembly packages
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

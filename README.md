@@ -104,23 +104,24 @@ cargo build -p benchup-app --release --locked
 
 The executable is `target/release/benchup-app` (`benchup-app.exe` on Windows). These commands produce executables, not installers or signed application bundles. Native builds should run on the corresponding OS; this project does not configure cross-linkers or signing identities.
 
-### Automated desktop builds
+### Automated release builds
 
-[Build desktop](.github/workflows/build.yml) runs when a `v*` tag is pushed
+[Build releases](.github/workflows/build.yml) runs when a `v*` tag is pushed
 (for example, `git push origin v0.1.0`). The tag must be a stable `vX.Y.Z`
 version matching `[workspace.package].version` in `Cargo.toml`. It builds with
 stable Rust and the committed `Cargo.lock`, runs update regression tests, then
-packages the app with Velopack:
+packages the desktop app with Velopack and the browser app with Trunk:
 
 | Artifact | Platform | Install / run |
 |---|---|---|
 | `benchup-windows-x64` | Windows x64 (MSVC) | `*-win-x64-Setup.exe` (per-user installer) |
 | `benchup-macos-arm64` | macOS Apple Silicon | `*-osx-arm64-Setup.pkg` or the portable `.app` zip |
 | `benchup-linux-x64` | Linux x64 (built on Ubuntu 22.04) | `*-linux-x64.AppImage` |
+| `benchup-wasm` | Desktop browsers (WebAssembly) | Extract `benchup-vX.Y.Z-wasm.zip` and serve it with a static web server |
 
-After all three builds succeed, the workflow creates a GitHub Release for the
+After all desktop and WebAssembly builds succeed, the workflow creates a GitHub Release for the
 pushed tag with the prepared release notes, installers, portable packages, full
-`.nupkg` updates, one `releases.<platform>.json` feed per OS/architecture, and
+`.nupkg` updates, one `releases.<platform>.json` feed per OS/architecture, the browser app ZIP, and
 `SHA256SUMS`. It validates the packages against their feed hashes and publishes
 only after every platform succeeds and all assets have uploaded. Reruns can
 replace assets on an unfinished draft; a published version cannot be overwritten.
@@ -195,6 +196,15 @@ dialogs still need this platform smoke test.
 
 ### Browser distribution
 
+Tagged GitHub Releases include `benchup-vX.Y.Z-wasm.zip`, containing the browser
+entry point, JavaScript loader, WebAssembly module, branding, translations, and
+license files. Extract the ZIP into a static web server's document directory;
+open its URL rather than opening `index.html` directly from disk. The archive
+is also available as the `benchup-wasm` workflow artifact and is covered by the
+release's `SHA256SUMS`.
+
+To compile the browser distribution yourself:
+
 ```sh
 trunk build --release --locked
 ```
@@ -204,10 +214,14 @@ Serve the resulting `dist/` directory with a static web server. Use HTTPS for We
 ### GitHub Pages website
 
 The presentation page lives in [`site/`](site/index.html). The
-[Deploy GitHub Pages](.github/workflows/pages.yml) workflow builds the browser
-editor into `dist/site/play/`, adds the landing page and existing branding and
-screenshot assets to `dist/site/`, and deploys them together. The main browser
-entry point (`index.html`) and `trunk serve` continue to open the editor directly.
+[Deploy GitHub Pages](.github/workflows/pages.yml) workflow downloads the
+`benchup-wasm` artifact from the successful release run and extracts it into
+`dist/site/play/`. Each tagged release compiles the browser app once; GitHub
+Releases and Pages use the same bundle. Manual Pages runs build the browser app
+from the selected ref instead. The workflow adds the landing page and existing
+branding and screenshot assets to `dist/site/`, and deploys them together. The
+main browser entry point (`index.html`) and `trunk serve` continue to open the
+editor directly.
 
 To enable publishing for `BenchUp3D/editor`:
 
@@ -216,9 +230,9 @@ To enable publishing for `BenchUp3D/editor`:
    [GitHub Pages setup guide](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site#publishing-with-a-custom-github-actions-workflow).
 2. Push a `v*` tag (for example, `git push origin v0.1.0`), or run
    **Deploy GitHub Pages** from the Actions tab with `main` selected. Version
-   tag pushes start the desktop release workflow. Pages builds and deploys the
+   tag pushes start the release workflow. Pages packages and deploys the
    same commit only after that workflow succeeds, including publishing the
-   desktop release. The updated Pages workflow must be on the default branch
+   desktop and WebAssembly release. The updated Pages workflow must be on the default branch
    for this automatic trigger to work. Ordinary branch pushes do not trigger
    either workflow.
 3. After the deployment succeeds, the landing page is at
