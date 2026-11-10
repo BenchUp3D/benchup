@@ -21,6 +21,7 @@ pub(super) struct Target {
     pub depth: wgpu::TextureView,
 }
 impl Map {
+    #[cfg(any(test, target_arch = "wasm32"))]
     pub fn for_scene(
         cache: &mut Option<Arc<Self>>,
         scene: &SceneKey,
