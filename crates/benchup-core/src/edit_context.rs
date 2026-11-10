@@ -511,6 +511,11 @@ impl Model {
                             *vertex = vertex_remap.get(vertex).copied().unwrap_or(*vertex);
                         }
                     }
+                    if let Some(image) = self.reference_images.get_mut(id) {
+                        for vertex in &mut image.vertices {
+                            *vertex = vertex_remap.get(vertex).copied().unwrap_or(*vertex);
+                        }
+                    }
                     if let Some(dimension) = self.dimensions.get_mut(id) {
                         for anchor in [&mut dimension.start, &mut dimension.end] {
                             for (vertex, _) in &mut anchor.weights {

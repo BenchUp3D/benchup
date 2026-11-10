@@ -34,10 +34,20 @@ struct Pending {
     context: Option<u64>,
     project: String,
 }
+struct Adjustment {
+    id: u64,
+    source: ReferenceImage,
+    settings: ImageSettings,
+    context: Option<u64>,
+    control: egui::Id,
+    rect: egui::Rect,
+    dragging: bool,
+}
 #[derive(Default)]
 pub(super) struct State {
     pub preferences: Preferences,
     pending: Option<Pending>,
+    adjustment: Option<Adjustment>,
     pub gpu: crate::reference_image_gpu::Cache,
 }
 
@@ -101,7 +111,137 @@ impl BenchUpApp {
     }
     pub(super) fn reset_image_project(&mut self) {
         self.images.pending = None;
+        self.images.adjustment = None;
         self.images.gpu = Default::default();
+    }
+    /// Appearance is a shader-only preview until the drag or text edit ends.
+    /// In particular, do not clone the scene, rebuild geometry, record history,
+    /// or synchronously save the document for every slider movement.
+    pub(super) fn image_appearance_preview(&self) -> Option<(u64, &ImageSettings)> {
+        self.images
+            .adjustment
+            .as_ref()
+            .map(|edit| (edit.id, &edit.settings))
+    }
+
+    pub(super) fn finish_image_adjustment(&mut self, ctx: &egui::Context) {
+        self.settle_image_adjustment(ctx, true);
+    }
+
+    pub(super) fn prepare_image_adjustment(&mut self, ctx: &egui::Context) {
+        self.settle_image_adjustment(ctx, false);
+    }
+
+    fn settle_image_adjustment(&mut self, ctx: &egui::Context, finish_inactive: bool) {
+        let Some(edit) = self.images.adjustment.as_ref() else {
+            return;
+        };
+        if self.doc.model.edit_context != edit.context
+            || self.doc.model.reference_images.get(&edit.id) != Some(&edit.source)
+            || self.doc.model.is_locked(edit.id)
+        {
+            self.images.adjustment = None;
+            return;
+        }
+        let focused = ctx.memory(|m| m.has_focus(edit.control));
+        let ready = ctx.input(|i| {
+            !i.focused
+                || (finish_inactive && !i.pointer.primary_down() && (edit.dragging || !focused))
+                || (i.pointer.any_pressed()
+                    && i.pointer
+                        .interact_pos()
+                        .is_some_and(|p| !edit.rect.contains(p)))
+                || i.key_pressed(egui::Key::Escape)
+                || (i.modifiers.command
+                    && i.events
+                        .iter()
+                        .any(|event| matches!(event, egui::Event::Key { pressed: true, .. })))
+        });
+        if ready {
+            self.commit_image_adjustment(ctx);
+        }
+    }
+
+    fn commit_image_adjustment(&mut self, ctx: &egui::Context) {
+        let Some(edit) = self.images.adjustment.take() else {
+            return;
+        };
+        // A replacement, history navigation, scope change or remote edit must
+        // never have its image state overwritten by an obsolete preview.
+        if self.doc.model.edit_context != edit.context
+            || self.doc.model.reference_images.get(&edit.id) != Some(&edit.source)
+            || self.doc.model.is_locked(edit.id)
+            || edit.settings == edit.source.settings
+            || !edit.settings.valid()
+        {
+            return;
+        }
+        if !self.shared_edit_allowed(ctx) {
+            self.say(ctx, self.shared_edit_block_reason(ctx));
+            return;
+        }
+        let linked = self.doc.model.edit_path().iter().any(|id| {
+            matches!(
+                self.doc.model.objects[id].kind,
+                benchup_core::ObjectKind::Component { .. }
+            )
+        });
+        if !linked {
+            self.doc
+                .model
+                .reference_images
+                .get_mut(&edit.id)
+                .unwrap()
+                .settings = edit.settings.clone();
+            let author = self.current_history_author();
+            self.doc.history.record_image_settings_applied(
+                edit.id,
+                edit.source,
+                edit.settings,
+                Some(author),
+                Some(sharing::now_timestamp()),
+            );
+            self.finish_recorded_edit(ctx, false);
+            return;
+        }
+        let before = self.doc.model.clone();
+        self.doc
+            .model
+            .reference_images
+            .get_mut(&edit.id)
+            .unwrap()
+            .settings = edit.settings;
+        self.finish_context_state_edit("Edit reference image", before, ctx);
+    }
+
+    fn adjust_image_appearance(
+        &mut self,
+        id: u64,
+        settings: ImageSettings,
+        active: Option<(egui::Id, egui::Rect, bool)>,
+        ctx: &egui::Context,
+    ) {
+        if !self.shared_edit_allowed(ctx) {
+            self.images.adjustment = None;
+            self.say(ctx, self.shared_edit_block_reason(ctx));
+            return;
+        }
+        let source = self.doc.model.reference_images[&id].clone();
+        let (control, rect, dragging) =
+            active.unwrap_or((egui::Id::NULL, egui::Rect::NOTHING, false));
+        self.images.adjustment = Some(Adjustment {
+            id,
+            source,
+            settings,
+            context: self.doc.model.edit_context,
+            control,
+            rect,
+            dragging,
+        });
+        if active.is_none() {
+            self.commit_image_adjustment(ctx);
+        }
+        ctx.request_repaint();
     }
     pub(super) fn choose_reference_image(
         &mut self,
@@ -258,6 +398,15 @@ impl BenchUpApp {
         if let Some(id) = self.selected_reference_image() {
             let source = self.doc.model.reference_images[&id].clone();
             let mut edited = source.clone();
+            if let Some(edit) = &self.images.adjustment
+                && edit.id == id
+                && edit.source == source
+                && edit.context == self.doc.model.edit_context
+            {
+                edited.settings = edit.settings.clone();
+            }
+            let previous = edited.settings.clone();
+            let mut active = None;
             let locked = self.doc.model.is_locked(id);
             ui.heading("Reference image");
             Self::property_row(ui, "File", &source.name);
@@ -265,16 +414,14 @@ impl BenchUpApp {
             Self::property_row(ui, "Resolution", &format!("{} × {}", pixels[0], pixels[1]));
             ui.add_enabled_ui(!locked, |ui| {
                 sidebar::inspector_section(ui, "Image", "reference_image_appearance", true, |ui| {
-                    appearance_fields(ui, &mut edited.settings);
+                    active = appearance_fields(ui, &mut edited.settings);
                 });
             });
             if locked {
                 ui.label("Unlock the image to edit its properties.");
             }
-            if edited != source {
-                let before = self.doc.model.clone();
-                self.doc.model.reference_images.insert(id, edited);
-                self.finish_context_state_edit("Edit reference image", before, ui.ctx());
+            if edited.settings != previous {
+                self.adjust_image_appearance(id, edited.settings, active, ui.ctx());
             }
             true
         } else if self.tool == Tool::Image {
@@ -295,35 +442,55 @@ impl BenchUpApp {
         }
     }
 }
-fn field(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egui::Ui) -> egui::Response) {
-    crate::inspector_table::inspector_field(ui, ("reference_image", label), label, content);
+fn field(
+    ui: &mut egui::Ui,
+    label: &str,
+    content: impl FnOnce(&mut egui::Ui) -> egui::Response,
+) -> Option<(egui::Id, egui::Rect, bool)> {
+    let mut active = None;
+    crate::inspector_table::inspector_field(ui, ("reference_image", label), label, |ui| {
+        let response = content(ui);
+        if response.changed() && (response.dragged() || response.has_focus()) {
+            active = Some((response.id, response.rect, response.dragged()));
+        }
+        response
+    });
+    active
 }
-fn appearance_fields(ui: &mut egui::Ui, settings: &mut ImageSettings) {
-    field(ui, "Zoom", |ui| {
-        ui.add(
-            egui::DragValue::new(&mut settings.zoom)
-                .speed(0.01)
-                .range(0.01..=100.)
-                .suffix("×"),
-        )
-    });
-    field(ui, "Rotation", |ui| {
-        ui.add(
-            egui::DragValue::new(&mut settings.rotation)
-                .speed(1.)
-                .range(-360. ..=360.)
-                .suffix("°"),
-        )
-    });
-    field(ui, "Opacity", |ui| {
-        ui.add(egui::Slider::new(&mut settings.opacity, 0. ..=1.))
-    });
-    field(ui, "Brightness", |ui| {
-        ui.add(egui::Slider::new(&mut settings.brightness, 0. ..=2.))
-    });
-    field(ui, "Contrast", |ui| {
-        ui.add(egui::Slider::new(&mut settings.contrast, 0. ..=2.))
-    });
+fn appearance_fields(
+    ui: &mut egui::Ui,
+    settings: &mut ImageSettings,
+) -> Option<(egui::Id, egui::Rect, bool)> {
+    let mut active = None;
+    for response in [
+        field(ui, "Zoom", |ui| {
+            ui.add(
+                egui::DragValue::new(&mut settings.zoom)
+                    .speed(0.01)
+                    .range(0.01..=100.)
+                    .suffix("×"),
+            )
+        }),
+        field(ui, "Rotation", |ui| {
+            ui.add(
+                egui::DragValue::new(&mut settings.rotation)
+                    .speed(1.)
+                    .range(-360. ..=360.)
+                    .suffix("°"),
+            )
+        }),
+        field(ui, "Opacity", |ui| {
+            ui.add(egui::Slider::new(&mut settings.opacity, 0. ..=1.))
+        }),
+        field(ui, "Brightness", |ui| {
+            ui.add(egui::Slider::new(&mut settings.brightness, 0. ..=2.))
+        }),
+        field(ui, "Contrast", |ui| {
+            ui.add(egui::Slider::new(&mut settings.contrast, 0. ..=2.))
+        }),
+    ] {
+        active = active.or(response);
+    }
     for (label, value) in [
         ("Flip horizontal", &mut settings.flip_horizontal),
         ("Flip vertical", &mut settings.flip_vertical),
@@ -331,6 +498,7 @@ fn appearance_fields(ui: &mut egui::Ui, settings: &mut ImageSettings) {
     ] {
         field(ui, label, |ui| ui.checkbox(value, ""));
     }
+    active
 }
 
 #[cfg(test)]
@@ -369,6 +537,275 @@ mod tests {
             context: app.doc.model.edit_context,
             project: app.doc.name.clone(),
         });
+    }
+    fn image_app() -> (BenchUpApp, u64) {
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        let imported = decode_image("Plan.png".into(), &png(), &Preferences::default()).unwrap();
+        app.doc
+            .model
+            .add_reference_image(
+                [DVec3::ZERO, DVec3::X * 2., DVec3::new(2., 1., 0.), DVec3::Y],
+                imported.image,
+                imported.asset,
+            )
+            .unwrap();
+        let id = *app.doc.model.reference_images.keys().next().unwrap();
+        (app, id)
+    }
+
+    #[test]
+    fn image_adjustments_preview_without_scene_changes_and_commit_one_undo_step() {
+        let ctx = egui::Context::default();
+        let (mut app, id) = image_app();
+        // Unrelated geometry makes accidental per-update scene cloning and
+        // invalidation visible through the shared snapshot and revision.
+        for n in 0..2048 {
+            app.doc
+                .model
+                .add_edge(DVec3::new(n as f64, 10., 0.), DVec3::new(n as f64, 11., 0.))
+                .unwrap();
+        }
+        let before = app.doc.model.clone();
+        let revision = app.refresh_document_snapshot(None);
+        let snapshot = app.document_model.shared();
+        let control = Some((egui::Id::unique("image-test"), egui::Rect::EVERYTHING, true));
+        for n in 1..=120 {
+            let mut settings = before.reference_images[&id].settings.clone();
+            settings.brightness = 1. + n as f64 / 120.;
+            app.adjust_image_appearance(id, settings.clone(), control, &ctx);
+            assert_eq!(app.image_appearance_preview(), Some((id, &settings)));
+            assert!(!app.document_model_dirty);
+            assert_eq!(app.document_model.revision(), revision);
+            assert!(Arc::ptr_eq(&snapshot, &app.document_model.shared()));
+            assert!(app.doc.history.is_empty());
+            assert!(!app.project.modified);
+            assert!(app.dirty_since.is_none());
+        }
+        assert_eq!(app.doc.model, before);
+        // No pointer is down: releasing the slider commits once, even if the
+        // slider itself kept keyboard focus.
+        ctx.memory_mut(|m| m.request_focus(control.unwrap().0));
+        app.finish_image_adjustment(&ctx);
+        assert!(app.image_appearance_preview().is_none());
+        assert_eq!(app.doc.history.position(), 1);
+        assert_eq!(app.doc.model.reference_images[&id].settings.brightness, 2.);
+        assert!(app.project.modified);
+        assert!(!app.document_model_dirty);
+        assert_eq!(app.refresh_document_snapshot(None), revision);
+        assert!(Arc::ptr_eq(&snapshot, &app.document_model.shared()));
+        assert!(app.doc.history.undo(&mut app.doc.model));
+        assert_eq!(app.doc.model, before);
+        assert!(app.doc.history.redo(&mut app.doc.model));
+        assert_eq!(app.doc.model.reference_images[&id].settings.brightness, 2.);
+    }
+
+    #[test]
+    fn obsolete_image_previews_cannot_overwrite_model_changes() {
+        let ctx = egui::Context::default();
+        for change in 0..4 {
+            let (mut app, id) = image_app();
+            let mut settings = app.doc.model.reference_images[&id].settings.clone();
+            settings.opacity = 0.25;
+            app.adjust_image_appearance(
+                id,
+                settings,
+                Some((egui::Id::NULL, egui::Rect::EVERYTHING, true)),
+                &ctx,
+            );
+            match change {
+                0 => {
+                    app.doc.model.reference_images.remove(&id);
+                }
+                1 => {
+                    app.doc
+                        .model
+                        .reference_images
+                        .get_mut(&id)
+                        .unwrap()
+                        .settings
+                        .opacity = 0.75;
+                }
+                2 => {
+                    app.doc.model.locked.insert(id);
+                }
+                _ => {
+                    app.doc.model.edit_context = app.doc.model.parent(id);
+                }
+            }
+            let changed = app.doc.model.clone();
+            app.finish_image_adjustment(&ctx);
+            assert!(app.image_appearance_preview().is_none());
+            assert_eq!(app.doc.model, changed);
+            assert!(app.doc.history.is_empty());
+        }
+    }
+
+    #[test]
+    fn image_toggles_commit_immediately_without_invalidating_scene_geometry() {
+        let ctx = egui::Context::default();
+        let (mut app, id) = image_app();
+        let initial = app.doc.model.clone();
+        let revision = app.refresh_document_snapshot(None);
+        let snapshot = app.document_model.shared();
+        for action in 0..3 {
+            let mut settings = app.doc.model.reference_images[&id].settings.clone();
+            match action {
+                0 => settings.flip_horizontal = true,
+                1 => settings.flip_vertical = true,
+                _ => settings.grayscale = true,
+            }
+            app.adjust_image_appearance(id, settings.clone(), None, &ctx);
+            assert_eq!(app.doc.model.reference_images[&id].settings, settings);
+            assert!(app.images.adjustment.is_none());
+            assert_eq!(app.doc.history.position(), action + 1);
+            assert!(app.project.modified);
+            assert!(
+                app.dirty_since.is_none(),
+                "Each toggle must save immediately"
+            );
+            assert!(!app.document_model_dirty);
+            assert_eq!(app.refresh_document_snapshot(None), revision);
+            assert!(Arc::ptr_eq(&snapshot, &app.document_model.shared()));
+        }
+        assert!(!initial.same_scene(&app.doc.model));
+        assert!(initial.same_scene_geometry(&app.doc.model));
+        for _ in 0..3 {
+            assert!(app.doc.history.undo(&mut app.doc.model));
+        }
+        assert_eq!(app.doc.model, initial);
+        // Frame edits must still invalidate the geometry snapshot.
+        let vertex = app.doc.model.reference_images[&id].vertices[0];
+        app.doc.model.vertices.get_mut(&vertex).unwrap().position.x += 0.1;
+        assert_ne!(app.refresh_document_snapshot(None), revision);
+    }
+
+    #[test]
+    fn image_toggles_inside_linked_components_still_synchronize_their_peers() {
+        let ctx = egui::Context::default();
+        let (mut app, id) = image_app();
+        let group = app.doc.model.parent(id).unwrap();
+        let component = app
+            .doc
+            .model
+            .make_object(&BTreeSet::from([group]), true, "Plan component")
+            .unwrap();
+        let id = *app.doc.model.reference_images.keys().next().unwrap();
+        let copy = app.doc.model.copy_entities(&BTreeSet::from([component]));
+        app.doc.model.paste_entities(&copy, DVec3::X * 3.);
+        assert_eq!(app.doc.model.reference_images.len(), 2);
+        app.doc.model.edit_context = app.doc.model.parent(id);
+        let before = app.doc.model.clone();
+        let mut settings = app.doc.model.reference_images[&id].settings.clone();
+        settings.grayscale = true;
+        app.adjust_image_appearance(id, settings, None, &ctx);
+        assert!(
+            app.doc
+                .model
+                .reference_images
+                .values()
+                .all(|image| image.settings.grayscale)
+        );
+        assert_eq!(app.doc.history.position(), 1);
+        app.doc.model.validate().unwrap();
+        assert!(app.doc.history.undo(&mut app.doc.model));
+        assert_eq!(app.doc.model, before);
+    }
+
+    #[test]
+    fn slider_release_includes_the_final_pointer_position_in_one_commit() {
+        use crate::test_ui::ContextExt as _;
+        let ctx = egui::Context::default();
+        let (mut app, id) = image_app();
+        let mut frame = |events| {
+            let mut rect = egui::Rect::NOTHING;
+            ctx.run_test_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600., 200.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    app.prepare_image_adjustment(&ctx);
+                    let mut settings = app.image_appearance_preview().map_or_else(
+                        || app.doc.model.reference_images[&id].settings.clone(),
+                        |(_, settings)| settings.clone(),
+                    );
+                    let previous = settings.clone();
+                    let active = field(ui, "Brightness", |ui| {
+                        let response =
+                            ui.add(egui::Slider::new(&mut settings.brightness, 0. ..=2.));
+                        rect = response.rect;
+                        response
+                    });
+                    if settings != previous {
+                        app.adjust_image_appearance(id, settings, active, &ctx);
+                    }
+                    app.finish_image_adjustment(&ctx);
+                },
+            );
+            (
+                rect,
+                app.doc.history.position(),
+                app.doc.model.reference_images[&id].settings.brightness,
+            )
+        };
+        let (rect, _, original) = frame(vec![]);
+        let start = egui::pos2(rect.left() + 20., rect.center().y);
+        let pointer = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![egui::Event::PointerMoved(start), pointer(start, true)]);
+        let (_, history, committed) =
+            frame(vec![egui::Event::PointerMoved(start + egui::vec2(30., 0.))]);
+        assert_eq!(history, 0);
+        assert_eq!(committed, original);
+        // The release itself supplies a different final position, without a
+        // preceding PointerMoved event (as on some browser backends).
+        let (_, history, committed) = frame(vec![pointer(start + egui::vec2(60., 0.), false)]);
+        assert_eq!(history, 1);
+        assert_ne!(committed, original);
+        assert!(app.images.adjustment.is_none());
+    }
+
+    #[test]
+    fn text_adjustments_finish_on_blur_and_project_reset_discards_previews() {
+        let ctx = egui::Context::default();
+        ctx.input_mut(|i| i.focused = true);
+        let (mut app, id) = image_app();
+        let control = egui::Id::unique("image-text");
+        ctx.memory_mut(|m| m.request_focus(control));
+        let mut settings = app.doc.model.reference_images[&id].settings.clone();
+        settings.rotation = 45.;
+        app.adjust_image_appearance(
+            id,
+            settings,
+            Some((control, egui::Rect::EVERYTHING, false)),
+            &ctx,
+        );
+        app.finish_image_adjustment(&ctx);
+        assert!(app.image_appearance_preview().is_some());
+        assert!(app.doc.history.is_empty());
+        ctx.memory_mut(|m| m.surrender_focus(control));
+        app.finish_image_adjustment(&ctx);
+        assert_eq!(app.doc.history.position(), 1);
+        assert_eq!(app.doc.model.reference_images[&id].settings.rotation, 45.);
+        let mut settings = app.doc.model.reference_images[&id].settings.clone();
+        settings.rotation = 90.;
+        app.adjust_image_appearance(
+            id,
+            settings,
+            Some((control, egui::Rect::EVERYTHING, true)),
+            &ctx,
+        );
+        app.reset_image_project();
+        assert!(app.image_appearance_preview().is_none());
+        assert_eq!(app.doc.model.reference_images[&id].settings.rotation, 45.);
     }
     #[test]
     fn cancel_and_failure_leave_document_and_history_untouched() {

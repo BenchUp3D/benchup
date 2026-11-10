@@ -374,6 +374,15 @@ impl History {
             return;
         }
         self.validated = false;
+        self.push_change(label, change, author, timestamp);
+    }
+    fn push_change(
+        &mut self,
+        label: impl Into<String>,
+        change: ModelChange,
+        author: Option<HistoryAuthor>,
+        timestamp: Option<u64>,
+    ) {
         self.undo.push(Entry {
             id: Some(uuid::Uuid::new_v4()),
             author,
@@ -387,6 +396,32 @@ impl History {
         if self.undo.len() > LIMIT {
             self.undo.remove(0);
         }
+    }
+    /// Record a settings-only edit already applied to an existing image.
+    /// Unchanged geometry and embedded image bytes need neither cloning nor
+    /// diffing. Callers must synchronize linked component edits separately.
+    pub fn record_image_settings_applied(
+        &mut self,
+        id: u64,
+        before: crate::ReferenceImage,
+        settings: crate::ImageSettings,
+        author: Option<HistoryAuthor>,
+        timestamp: Option<u64>,
+    ) {
+        if before.settings == settings || !settings.valid() {
+            return;
+        }
+        let mut after = before.clone();
+        after.settings = settings;
+        self.push_change(
+            "Edit reference image",
+            ModelChange {
+                reference_images: vec![(id, Some(before), Some(after))],
+                ..Default::default()
+            },
+            author,
+            timestamp,
+        );
     }
     /// Record an operation applied by a modeling client that maintains valid
     /// geometry. Loaded histories establish the same guarantee in restore().

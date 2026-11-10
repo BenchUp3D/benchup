@@ -110,7 +110,9 @@ impl EdgeSurface {
     }
 }
 
-// Compare document data because callers can edit Model collections directly.
+// Compare geometry-affecting document data because callers can edit Model
+// collections directly. Image uniforms are read from the live document and
+// do not belong to these shared geometry/measurement snapshots.
 // Share one snapshot across panes and sidebar summaries, rather than cloning a
 // large document separately for each camera.
 #[derive(Default)]
@@ -155,7 +157,7 @@ impl ModelSnapshot {
         if self
             .model
             .as_deref()
-            .is_none_or(|previous| !previous.same_scene(model))
+            .is_none_or(|previous| !previous.same_scene_geometry(model))
         {
             self.model = Some(Arc::new(model.clone()));
             self.revision = self.revision.wrapping_add(1);

@@ -263,6 +263,74 @@ mod tests {
             },
         )
     }
+
+    #[test]
+    fn image_settings_history_is_a_small_attributed_delta_with_undo_redo_and_branches() {
+        let (image, asset) = fixture();
+        let mut doc = crate::Document::default();
+        doc.model
+            .add_reference_image(rectangle(), image, asset)
+            .unwrap();
+        let id = *doc.model.reference_images.keys().next().unwrap();
+        let initial = doc.model.clone();
+        let author = crate::HistoryAuthor {
+            id: "image-editor".into(),
+            name: "Image editor".into(),
+            kind: "local".into(),
+            verified: false,
+        };
+        for action in 0..3 {
+            let before = doc.model.reference_images[&id].clone();
+            let mut settings = before.settings.clone();
+            match action {
+                0 => settings.flip_horizontal = true,
+                1 => settings.flip_vertical = true,
+                _ => settings.grayscale = true,
+            }
+            doc.model.reference_images.get_mut(&id).unwrap().settings = settings.clone();
+            doc.history.record_image_settings_applied(
+                id,
+                before,
+                settings,
+                Some(author.clone()),
+                Some(123),
+            );
+        }
+        let edited = doc.model.clone();
+        let json = serde_json::to_value(&doc.history).unwrap();
+        for entry in json["undo"].as_array().unwrap() {
+            assert_eq!(entry["author"]["id"], "image-editor");
+            assert_eq!(entry["timestamp"], 123);
+            let change = entry["change"].as_object().unwrap();
+            assert_eq!(change.len(), 1);
+            assert!(change.contains_key("reference_images"));
+        }
+        let base = crate::Document {
+            model: initial.clone(),
+            ..Default::default()
+        };
+        let restored = doc
+            .checkpoint(&base.model, &base.history)
+            .restore(&base.model, &base.history)
+            .unwrap();
+        assert_eq!(restored, doc);
+        for _ in 0..3 {
+            assert!(doc.history.undo(&mut doc.model));
+        }
+        assert_eq!(doc.model, initial);
+        for _ in 0..3 {
+            assert!(doc.history.redo(&mut doc.model));
+        }
+        assert_eq!(doc.model, edited);
+        assert!(doc.history.undo(&mut doc.model));
+        let before = doc.model.reference_images[&id].clone();
+        let mut settings = before.settings.clone();
+        settings.opacity = 0.5;
+        doc.model.reference_images.get_mut(&id).unwrap().settings = settings.clone();
+        doc.history
+            .record_image_settings_applied(id, before, settings, None, None);
+        assert!(!doc.history.redo(&mut doc.model));
+    }
     fn rectangle() -> [DVec3; 4] {
         [
             DVec3::ZERO,

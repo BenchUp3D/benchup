@@ -642,7 +642,7 @@ impl BenchUpApp {
         ctx.request_repaint_after(Duration::from_millis(550));
     }
     /// Share one validated source snapshot between the inspector and panes.
-    /// UI edits invalidate it through changed(); direct rendering callers
+    /// Geometry edits invalidate it through changed(); direct rendering callers
     /// still validate the actual model once per frame.
     fn refresh_document_snapshot(&mut self, frame: Option<u64>) -> u64 {
         self.document_model.update_scene(&self.doc.model);
@@ -656,8 +656,9 @@ impl BenchUpApp {
     }
     fn document_revision(&mut self, ctx: &egui::Context) -> u64 {
         let frame = ctx.cumulative_frame_nr();
-        // Production owns Document privately: every committed model edit calls
-        // changed(). Hover, selection and editing scope do not mutate geometry.
+        // Production owns Document privately: committed geometry edits call
+        // changed(). Camera and image uniforms, selection and editing scope
+        // do not mutate retained scene geometry.
         // Direct render/test callers retain collection-by-collection validation.
         #[cfg(not(test))]
         if self.ui_frame == Some(frame) && !self.document_model_dirty {
@@ -670,6 +671,11 @@ impl BenchUpApp {
         self.document_model.revision()
     }
     fn camera_changed(&mut self, ctx: &egui::Context) {
+        self.changed_without_geometry(ctx);
+    }
+    /// Cameras and image shader settings do not invalidate retained scene
+    /// geometry. The document remains authoritative for their current values.
+    fn changed_without_geometry(&mut self, ctx: &egui::Context) {
         let validated_frame = self.document_model_frame;
         let dirty = self.document_model_dirty;
         self.changed(ctx);
@@ -768,11 +774,6 @@ impl BenchUpApp {
             return;
         }
         if edited {
-            self.solid_first = None;
-            self.last_move_copy = None;
-            self.measurement = None;
-            self.modeling = None;
-            self.reset_axis_locks_after_action();
             let author = self.current_history_author();
             self.doc.history.record_applied_attributed(
                 label,
@@ -781,12 +782,24 @@ impl BenchUpApp {
                 Some(author),
                 Some(sharing::now_timestamp()),
             );
-            self.selected.retain(|id| {
-                self.doc.model.entity_in_context(*id) == Some(*id) && !self.doc.model.is_hidden(*id)
-            });
-            self.changed(ctx);
-            self.persist_edit();
+            self.finish_recorded_edit(ctx, true);
         }
+    }
+    fn finish_recorded_edit(&mut self, ctx: &egui::Context, geometry_changed: bool) {
+        self.solid_first = None;
+        self.last_move_copy = None;
+        self.measurement = None;
+        self.modeling = None;
+        self.reset_axis_locks_after_action();
+        self.selected.retain(|id| {
+            self.doc.model.entity_in_context(*id) == Some(*id) && !self.doc.model.is_hidden(*id)
+        });
+        if geometry_changed {
+            self.changed(ctx);
+        } else {
+            self.changed_without_geometry(ctx);
+        }
+        self.persist_edit();
     }
     fn undo(&mut self, ctx: &egui::Context, redo: bool) {
         let current = self.doc.history.position();
@@ -5657,7 +5670,8 @@ impl BenchUpApp {
         #[cfg(target_arch = "wasm32")]
         web_viewport_benchmark::record_view(camera, ui.ctx(), resident_active,selected.len(),model.edit_context);
         crate::reference_image_gpu::paint(&p, rect, model, entities,
-            self.scene_cache.image_projection(), display, &self.images.gpu);
+            self.scene_cache.image_projection(), display, &self.images.gpu,
+            self.image_appearance_preview());
         self.paint_fasteners(&p,rect,model);
         self.paint_joinery(&p, rect);
         let screen = |point: DVec3| view.project(point).map(|v| rect.min + pv(v));
@@ -6568,6 +6582,7 @@ impl eframe::App for BenchUpApp {
         self.poll_reference_image(&ctx);
         self.poll_sharing(&ctx);
         self.sharing_before_frame(&ctx);
+        self.prepare_image_adjustment(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.updates.poll(&ctx);
@@ -6589,6 +6604,7 @@ impl eframe::App for BenchUpApp {
         self.tool_rail(ui);
         let inspector_order_before = self.inspector_order;
         self.inspector_panel(ui);
+        self.finish_image_adjustment(&ctx);
         self.viewport_panel(ui);
         if theme_before != ctx.options(|options| options.theme_preference)
             && let Some(storage) = frame.storage_mut()

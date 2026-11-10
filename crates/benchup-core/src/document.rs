@@ -115,13 +115,27 @@ pub struct Model {
 impl Model {
     /// Editing scope changes interaction, not document geometry or appearance.
     pub fn same_scene(&self, other: &Self) -> bool {
+        self.reference_images == other.reference_images && self.same_scene_geometry(other)
+    }
+    /// Retained scene geometry excludes image appearance uniforms. Image
+    /// rendering reads current settings directly from the document, while
+    /// geometry/measurement snapshots may retain earlier settings.
+    pub fn same_scene_geometry(&self, other: &Self) -> bool {
         self.guides == other.guides
             && self.connections == other.connections
             && self.vertices == other.vertices
             && self.edges == other.edges
             && self.faces == other.faces
             && self.image_assets == other.image_assets
-            && self.reference_images == other.reference_images
+            && self.reference_images.len() == other.reference_images.len()
+            && self.reference_images.iter().all(|(id, image)| {
+                other.reference_images.get(id).is_some_and(|other| {
+                    image.asset == other.asset
+                        && image.vertices == other.vertices
+                        && image.name == other.name
+                        && image.placement_offset == other.placement_offset
+                })
+            })
             && self.face_colors == other.face_colors
             && self.dimensions == other.dimensions
             && self.texts == other.texts

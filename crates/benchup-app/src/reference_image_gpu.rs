@@ -1,7 +1,7 @@
 //! Retained GPU image textures/quads; camera projection, UV transforms and
 //! clipping stay on the GPU on both WebGPU and the WebGL fallback.
 use crate::renderer::EntityCache;
-use benchup_core::{DVec3, DisplaySettings, Model};
+use benchup_core::{DVec3, DisplaySettings, ImageSettings, Model};
 use eframe::{egui, egui_wgpu, wgpu};
 use std::{
     collections::BTreeMap,
@@ -116,6 +116,7 @@ pub(crate) fn paint(
     projection: (glam::DMat4, [f32; 4]),
     display: &DisplaySettings,
     cache: &Cache,
+    preview: Option<(u64, &ImageSettings)>,
 ) {
     let (matrix, depth) = projection;
     let Ok(mut entries) = cache.0.lock() else {
@@ -182,7 +183,9 @@ pub(crate) fn paint(
                 }),
         );
         let frame = [relative[1].length(), relative[3].length()];
-        let s = &image.settings;
+        let s = preview
+            .filter(|(preview_id, _)| *preview_id == id)
+            .map_or(&image.settings, |(_, settings)| settings);
         let size = s.fitted_size(frame, asset.pixels);
         let rotation = s.rotation.to_radians();
         let uniform = Uniform {
@@ -234,7 +237,7 @@ pub(crate) fn paint(
                 quad: Arc::clone(&quad),
                 uniform,
                 smoothing: s.smoothing,
-                gpu: OnceLock::new(),
+                gpu: Default::default(),
             })
         });
         if draw.uniform != uniform
@@ -242,12 +245,22 @@ pub(crate) fn paint(
             || !Arc::ptr_eq(&draw.texture, &texture)
             || !Arc::ptr_eq(&draw.quad, &quad)
         {
+            // Camera and appearance changes only upload a small uniform. Keep
+            // the buffer and bind group unless their bound resources changed.
+            let gpu = if draw.smoothing == s.smoothing
+                && Arc::ptr_eq(&draw.texture, &texture)
+                && Arc::ptr_eq(&draw.quad, &quad)
+            {
+                Arc::clone(&draw.gpu)
+            } else {
+                Default::default()
+            };
             *draw = Arc::new(Draw {
                 texture,
                 quad,
                 uniform,
                 smoothing: s.smoothing,
-                gpu: OnceLock::new(),
+                gpu,
             });
         }
         pictures.push((clip.z / clip.w, Arc::clone(draw)));
@@ -263,14 +276,15 @@ pub(crate) fn paint(
 }
 struct Prepared {
     bind: wgpu::BindGroup,
-    _uniform: wgpu::Buffer,
+    uniform: wgpu::Buffer,
+    uploaded: Mutex<Uniform>,
 }
 struct Draw {
     texture: Arc<Texture>,
     quad: Arc<Quad>,
     uniform: Uniform,
     smoothing: bool,
-    gpu: OnceLock<Prepared>,
+    gpu: Arc<OnceLock<Prepared>>,
 }
 struct SharedDraw(Arc<Draw>);
 impl egui_wgpu::CallbackTrait for SharedDraw {
@@ -359,13 +373,13 @@ impl egui_wgpu::CallbackTrait for Draw {
                 usage: wgpu::BufferUsages::VERTEX,
             })
         });
-        self.gpu.get_or_init(|| {
-            let mut uniform = self.uniform;
-            uniform.flags[1] = u32::from(resources.srgb) as f32;
+        let mut uniform = self.uniform;
+        uniform.flags[1] = u32::from(resources.srgb) as f32;
+        let prepared = self.gpu.get_or_init(|| {
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Reference image settings"),
                 contents: bytemuck::bytes_of(&uniform),
-                usage: wgpu::BufferUsages::UNIFORM,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Reference image"),
@@ -391,9 +405,16 @@ impl egui_wgpu::CallbackTrait for Draw {
             });
             Prepared {
                 bind,
-                _uniform: buffer,
+                uniform: buffer,
+                uploaded: Mutex::new(uniform),
             }
         });
+        if let Ok(mut uploaded) = prepared.uploaded.lock()
+            && *uploaded != uniform
+        {
+            queue.write_buffer(&prepared.uniform, 0, bytemuck::bytes_of(&uniform));
+            *uploaded = uniform;
+        }
         vec![]
     }
     fn paint(
@@ -431,8 +452,7 @@ mod tests {
         .unwrap();
         assert_eq!(std::mem::size_of::<Uniform>(), 176);
     }
-    #[test]
-    fn drawing_again_reuses_quad_texture_and_settings_across_frames() {
+    fn image_model() -> Model {
         use benchup_core::{ImageAsset, ImageSettings, ReferenceImage};
         let mut model = Model::default();
         let mut out = std::io::Cursor::new(Vec::new());
@@ -456,6 +476,11 @@ mod tests {
                 },
             )
             .unwrap();
+        model
+    }
+    #[test]
+    fn drawing_again_reuses_quad_texture_and_settings_across_frames() {
+        let mut model = image_model();
         let mut entities = EntityCache::default();
         entities.update(&model);
         let ctx = egui::Context::default();
@@ -471,6 +496,7 @@ mod tests {
             (matrix, [0.; 4]),
             &DisplaySettings::default(),
             &cache,
+            None,
         );
         let first = Arc::clone(cache.0.lock().unwrap().draws.values().next().unwrap());
         paint(
@@ -481,6 +507,7 @@ mod tests {
             (matrix, [0.; 4]),
             &DisplaySettings::default(),
             &cache,
+            None,
         );
         let second = Arc::clone(cache.0.lock().unwrap().draws.values().next().unwrap());
         assert!(Arc::ptr_eq(&first, &second));
@@ -499,10 +526,130 @@ mod tests {
             (matrix, [0.; 4]),
             &DisplaySettings::default(),
             &cache,
+            None,
         );
         let changed = Arc::clone(cache.0.lock().unwrap().draws.values().next().unwrap());
         assert!(!Arc::ptr_eq(&first, &changed));
         assert!(Arc::ptr_eq(&first.quad, &changed.quad));
         assert!(Arc::ptr_eq(&first.texture, &changed.texture));
+        assert!(Arc::ptr_eq(&first.gpu, &changed.gpu));
+        let id = *model.reference_images.keys().next().unwrap();
+        let source = model.reference_images[&id].settings.clone();
+        let mut preview = source.clone();
+        preview.opacity = 0.25;
+        paint(
+            &painter,
+            rect,
+            &model,
+            &entities,
+            (matrix, [0.; 4]),
+            &DisplaySettings::default(),
+            &cache,
+            Some((id, &preview)),
+        );
+        let previewed = Arc::clone(cache.0.lock().unwrap().draws.values().next().unwrap());
+        assert_eq!(previewed.uniform.appearance[0], 0.25);
+        assert_eq!(model.reference_images[&id].settings, source);
+        assert!(Arc::ptr_eq(&changed.gpu, &previewed.gpu));
+        // Independent panes cannot overwrite one another's camera uniforms.
+        let other_rect = rect.translate(egui::vec2(800., 0.));
+        paint(
+            &painter,
+            other_rect,
+            &model,
+            &entities,
+            (matrix, [0.; 4]),
+            &DisplaySettings::default(),
+            &cache,
+            Some((id, &preview)),
+        );
+        let entries = cache.0.lock().unwrap();
+        assert_eq!(entries.draws.len(), 2);
+        assert!(
+            entries
+                .draws
+                .values()
+                .any(|other| !Arc::ptr_eq(&other.gpu, &previewed.gpu))
+        );
+        drop(entries);
+        model
+            .reference_images
+            .get_mut(&id)
+            .unwrap()
+            .settings
+            .smoothing = false;
+        paint(
+            &painter,
+            rect,
+            &model,
+            &entities,
+            (matrix, [0.; 4]),
+            &DisplaySettings::default(),
+            &cache,
+            None,
+        );
+        let replaced = Arc::clone(cache.0.lock().unwrap().draws.values().next().unwrap());
+        assert!(!Arc::ptr_eq(&changed.gpu, &replaced.gpu));
+    }
+
+    #[test]
+    #[ignore = "Requires a hardware GPU adapter; validates retained image uniform uploads"]
+    fn image_adjustments_update_existing_gpu_bindings() {
+        use egui_wgpu::CallbackTrait as _;
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let info = adapter.get_info();
+        eprintln!("Image adjustment adapter: {info:?}");
+        assert_ne!(info.device_type, wgpu::DeviceType::Cpu);
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let errors = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut renderer =
+            egui_wgpu::Renderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, Default::default());
+        install(&device, wgpu::TextureFormat::Rgba8Unorm, &mut renderer);
+        let model = image_model();
+        let id = *model.reference_images.keys().next().unwrap();
+        let mut entities = EntityCache::default();
+        entities.update(&model);
+        let ctx = egui::Context::default();
+        let painter = ctx.layer_painter(egui::LayerId::background());
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800., 600.));
+        let matrix = benchup_core::Camera::default().matrix(benchup_core::DVec2::new(800., 600.));
+        let cache = Cache::default();
+        let screen = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [800, 600],
+            pixels_per_point: 1.,
+        };
+        let mut settings = model.reference_images[&id].settings.clone();
+        let mut retained = None;
+        for n in 0..120 {
+            settings.brightness = n as f64 / 60.;
+            paint(
+                &painter,
+                rect,
+                &model,
+                &entities,
+                (matrix, [0.; 4]),
+                &DisplaySettings::default(),
+                &cache,
+                Some((id, &settings)),
+            );
+            let draw = Arc::clone(cache.0.lock().unwrap().draws.values().next().unwrap());
+            let mut encoder = device.create_command_encoder(&Default::default());
+            draw.prepare(
+                &device,
+                &queue,
+                &screen,
+                &mut encoder,
+                &mut renderer.callback_resources,
+            );
+            queue.submit([encoder.finish()]);
+            if let Some(previous) = &retained {
+                assert!(Arc::ptr_eq(previous, &draw.gpu));
+            }
+            retained = Some(Arc::clone(&draw.gpu));
+        }
+        assert!(pollster::block_on(errors.pop()).is_none());
     }
 }
