@@ -223,6 +223,12 @@ struct Modeling {
     pointer: Pos2,
     center: DVec3,
     scale_constraint: Option<AxisConstraint>,
+    scale_grip: Option<scale_tool::Grip>,
+    scale_bounds: Option<(DVec3, DVec3)>,
+    scale_preview: Option<benchup_core::modeling::ScalePreview>,
+    preview_scale: Option<(DVec3, f64, Option<AxisConstraint>)>,
+    scale_input: Option<scale_tool::Input>,
+    gpu_scale: Option<DVec3>,
     rotation: Option<rotate_tool::Rotation>,
     direction: DVec3,
     // Keep Push/Pull's original normal when switching or clearing axis locks.
@@ -318,6 +324,7 @@ struct ObjectCreation {
 }
 
 pub struct BenchUpApp {
+    scale_cage: scale_tool::Cage,
     #[cfg(not(target_arch = "wasm32"))]
     viewport_benchmark: Option<viewport_benchmark::Benchmark>,
     account: crate::account::Account,
@@ -614,6 +621,7 @@ impl BenchUpApp {
             picking_cache: crate::picking::PickingCache::default(),
             render_face_cache: renderer::FaceCache::default(),
             group_marker_cache: Default::default(),
+            scale_cage: Default::default(),
             render_entity_cache: renderer::EntityCache::default(),
             render_picking_cache: crate::picking::PickingCache::default(),
             #[cfg(test)]
@@ -1545,6 +1553,7 @@ impl BenchUpApp {
             return;
         }
         let mut face_id = None;
+        let grip = (self.tool == Tool::Scale).then(|| self.scale_grip_at(pos, ctx)).flatten();
         let (anchor, direction) = if matches!(self.tool, Tool::PushPull | Tool::Offset) {
             let selected_face = self.selected_modeling_face();
             let Some((id, snap)) = self.face_anchor_snap(pos) else {
@@ -1602,6 +1611,15 @@ impl BenchUpApp {
             if self.selected.is_empty() {
                 if let Some(id) = self.pick_at(pixel, size, true) {
                     self.selected.insert(id);
+                    if self.tool == Tool::Scale {
+                        // The first click chooses the target. Its handles are
+                        // available on the next click to choose origin/axes.
+                        self.snap = None;
+                        self.hover = None;
+                        self.refresh_scale_cage(ctx);
+                        ctx.request_repaint();
+                        return;
+                    }
                 }
             }
             if self.selected.is_empty() {
@@ -1612,17 +1630,21 @@ impl BenchUpApp {
                 self.say(ctx, tr!("app.unlock_the_selection_before_editing_it"));
                 return;
             }
-            let Some(snap) = self.selection_anchor_snap(pos) else {
+            let Some(snap) = grip.map(|grip| Snap { point: grip.point, kind: Inference::Endpoint })
+                .or_else(|| self.selection_anchor_snap(pos)) else {
                 return;
             };
             (snap.point, DVec3::ZERO)
         };
-        let center = self
+        let center = grip.map(|grip| grip.origin).unwrap_or_else(|| self
             .doc
             .model
             .selection_center(&self.selected)
-            .unwrap_or(anchor);
+            .unwrap_or(anchor));
         let snap_excluded = self.modeling_snap_exclusions(face_id);
+        if self.tool == Tool::Scale {
+            self.refresh_scale_cage(ctx);
+        }
         let rotation = (self.tool == Tool::Rotate).then(|| self.rotation_at(anchor, ray));
         self.modeling = Some(Modeling {
             base: self.doc.model.clone(),
@@ -1632,7 +1654,14 @@ impl BenchUpApp {
             pixel: pos,
             pointer: pos,
             center,
-            scale_constraint: self.axis_constraint(),
+            scale_constraint: self.axis_constraint().or(grip.and_then(|grip| grip.constraint)),
+            scale_grip: grip,
+            scale_bounds: (self.tool == Tool::Scale).then(|| self.scale_cage.bounds()).flatten(),
+            scale_preview: (self.tool == Tool::Scale).then(||
+                benchup_core::modeling::ScalePreview::new(&self.doc.model, &self.selected).ok()).flatten(),
+            preview_scale: None,
+            scale_input: None,
+            gpu_scale: None,
             rotation,
             direction: if self.tool == Tool::PushPull {
                 self.pull_direction(direction)
@@ -1760,7 +1789,18 @@ impl BenchUpApp {
         #[cfg(not(target_arch = "wasm32"))]
         let _profile = viewport_benchmark::scope("modeling_preview");
         // Recompute when a lock is set, switched, or cleared during a pull.
-        let constraint = self.axis_constraint();
+        let constraint = self.axis_constraint().or_else(|| self.modeling.as_ref()
+            .filter(|_| self.tool == Tool::Scale)
+            .and_then(|edit| edit.scale_grip.and_then(|grip| grip.constraint)));
+        if self.tool == Tool::Scale {
+            let input = scale_tool::Input::capture(self, pos, constraint);
+            if let Some(edit) = self.modeling.as_mut() {
+                if edit.scale_input.as_ref() == Some(&input) {
+                    return;
+                }
+                edit.scale_input = Some(input);
+            }
+        }
         let pull_direction = self.modeling.as_ref()
             .map(|edit| self.pull_direction(edit.unlocked_direction));
         if self.tool == Tool::PushPull
@@ -1946,6 +1986,38 @@ impl BenchUpApp {
                 return;
             }
         }
+        if self.tool == Tool::Scale {
+            let parameters = (edit.center, value, edit.scale_constraint);
+            let display = display_scene::effective_display(&self.doc.display, &edit.base, false);
+            let gpu_factors = edit.scale_preview.as_ref().filter(|_| self.gpu_ready
+                && renderer::scale_preview_supported(&self.doc.camera, &display, &edit.base, &self.face_cache))
+                .and_then(|plan| plan.gpu_factors(edit.center, value, edit.scale_constraint));
+            if edit.preview_scale == Some(parameters) && edit.gpu_scale == gpu_factors {
+                return;
+            }
+            edit.gpu_scale = gpu_factors;
+            if gpu_factors.is_some() {
+                edit.preview = None;
+                edit.error = None;
+                edit.preview_scale = Some(parameters);
+                return;
+            }
+            if let Some(plan) = &edit.scale_preview {
+                let mut preview = edit.preview.take().unwrap_or_else(|| edit.base.clone());
+                match plan.update(&mut preview, edit.center, value, edit.scale_constraint) {
+                    Ok(()) => {
+                        edit.preview = Some(preview);
+                        edit.error = None;
+                    }
+                    Err(error) => {
+                        edit.preview = None;
+                        edit.error = Some(error);
+                    }
+                }
+                edit.preview_scale = Some(parameters);
+                return;
+            }
+        }
         match Self::modeling_result(self.tool, edit, value) {
             Ok(model) => {
                 edit.preview = Some(model);
@@ -1955,6 +2027,9 @@ impl BenchUpApp {
                 edit.preview = None;
                 edit.error = Some(error);
             }
+        }
+        if self.tool == Tool::Scale {
+            edit.preview_scale = Some((edit.center, value, edit.scale_constraint));
         }
     }
 
@@ -4121,6 +4196,13 @@ impl BenchUpApp {
         }
         let local = dv(pos - self.viewport.min);
         let size = dv(self.viewport.size());
+        if self.tool == Tool::Scale && self.paste_preview.is_none()
+            && let Some(grip) = self.scale_grip_in_view(pos, self.viewport)
+        {
+            self.hover = None;
+            self.snap = Some(Snap { point: grip.point, kind: Inference::Endpoint });
+            return;
+        }
         if self.tool == Tool::GrainDirection && self.paste_preview.is_none() {
             self.update_grain_pointer(pos);
             return;
@@ -5031,6 +5113,10 @@ impl BenchUpApp {
     fn paint_evaluated_scene(&mut self, ui: &egui::Ui, rect: Rect, background: bool) {
         #[cfg(not(target_arch = "wasm32"))]
         let _profile = viewport_benchmark::scope("scene");
+        self.refresh_scale_cage(ui.ctx());
+        self.scene_cache.scale_transform = self.modeling.as_ref()
+            .filter(|_| self.tool == Tool::Scale && self.history_preview.is_none())
+            .and_then(|edit| edit.gpu_scale.map(|factors| renderer::ScaleTransform { pivot: edit.center, factors }));
         let colors = Palette::for_ui(ui);
         let faces = FacePalette::for_ui(ui);
         let source_revision = (self.history_preview.is_none()
@@ -5117,12 +5203,13 @@ impl BenchUpApp {
             crate::environment::paint(&p, rect, camera, display, ui.visuals().dark_mode, self.doc.display.shadows);
         }
         // Drawing previews are tiny additions to the retained GPU scene.
+        // Scaling retains the GPU scene and replaces only changed primitives.
         // Other transient previews and annotation layout use the normal path.
         // Plain model redraws retain the complete CPU/GPU mesh until an input
         // affecting its appearance changes. Screen overlays below stay live.
         let cache_static = self.drawing.is_none() && self.line_start.is_none()
             && self.measurement.is_none();
-        let key = (self.modeling.is_none()
+        let key = ((self.modeling.is_none() || self.tool == Tool::Scale)
             && self.grain_anchor.is_none()
             && self.paste_preview.is_none()
             && (self.measurement.is_none()
@@ -6013,6 +6100,7 @@ impl BenchUpApp {
         self.paint_solid_tools(&p, rect);
         self.paint_construction_guides(&p, rect);
         self.paint_measurements(&p, rect);
+        self.paint_scale_cage(&p, rect);
         if let Some((notice, until)) = &self.notice {
             if ui.input(|i| i.time) < *until {
                 let galley = p.layout(

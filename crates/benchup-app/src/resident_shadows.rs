@@ -8,6 +8,7 @@ struct Key {
     revision: u64,
     angle: f64,
     elevation: f64,
+    scale: Option<ScaleTransform>,
 }
 pub(super) struct Map {
     key: Key,
@@ -26,6 +27,12 @@ impl Map {
         bounds: (DVec3, DVec3),
         origin: DVec3,
     ) -> Option<Arc<Self>> {
+        Self::for_scene_scaled(cache, scene, bounds, origin, None)
+    }
+    pub fn for_scene_scaled(
+        cache: &mut Option<Arc<Self>>, scene: &SceneKey,
+        bounds: (DVec3, DVec3), origin: DVec3, scale: Option<ScaleTransform>,
+    ) -> Option<Arc<Self>> {
         if !scene.display.shadows || scene.display.shadow_darkness <= 0. {
             return None;
         }
@@ -33,6 +40,7 @@ impl Map {
             revision: scene.model_revision,
             angle: scene.display.sun_angle,
             elevation: scene.display.sun_elevation,
+            scale,
         };
         if cache.as_ref().is_none_or(|map| map.key != key) {
             // Reuse the atlas allocation while editing or dragging the sun.

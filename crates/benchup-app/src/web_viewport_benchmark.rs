@@ -80,6 +80,21 @@ pub(super) fn tick(app: &mut BenchUpApp, ctx: &egui::Context) {
                 app.doc.camera.yaw += 0.35 * (elapsed * 0.8).sin();
                 app.doc.camera.pitch += 0.1 * (elapsed * 0.65).sin();
             }
+        } else if bench.mode == "scale" {
+            if app.tool != Tool::Scale { app.set_tool(Tool::Scale); }
+            if app.modeling.is_none() && elapsed > 1. {
+                app.selected = bench.root.into_iter().collect();
+                let (_, hi) = app.doc.model.selection_bounds(&app.selected).unwrap();
+                let point = app.viewport.min + pv(app.doc.camera.project(hi, dv(app.viewport.size())).unwrap());
+                app.begin_modeling(point, ctx);
+            }
+            if let Some(edit) = &app.modeling {
+                let pointer = edit.pointer;
+                app.length_input = format!("{:.6}", 1. + 0.15 * (elapsed * 1.5).sin());
+                app.update_modeling(pointer);
+                bench.acted = true;
+                bench.actions += 1;
+            }
         } else {
             if app.tool != Tool::Select { app.set_tool(Tool::Select); }
             // The same pick query used by viewport clicks, moving over the scene.
@@ -119,6 +134,7 @@ pub(super) fn tick(app: &mut BenchUpApp, ctx: &egui::Context) {
             bench.action_frames.sort_by(f64::total_cmp);
             let result = serde_json::json!({ "mode": bench.mode, "actions": bench.actions,
                 "final_selection": app.selected, "final_context": app.doc.model.edit_context,
+                "gpu_scaling": app.modeling.as_ref().is_some_and(|edit| edit.gpu_scale.is_some()),
                 "action_frame_p95_ms": bench.action_frames.get(bench.action_frames.len()*95/100), "frames": n, "fps": 1000. / mean,
                 "mean_ms": mean, "p95_ms": bench.samples.get(n * 95 / 100),
                 "faces": app.doc.model.faces.len(), "edges": app.doc.model.edges.len(),

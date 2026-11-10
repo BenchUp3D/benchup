@@ -867,3 +867,206 @@ impl MovePreview {
         Ok(())
     }
 }
+
+/// Reuses source coordinates and a single destination model while scaling.
+/// Topology and lock dependencies are collected once; commit still performs
+/// the complete validated operation, including component synchronization.
+pub struct ScalePreview {
+    affected: MovePreview,
+    texts: Vec<([DVec3; 2], bool)>,
+    areas: BTreeMap<u64, DVec3>,
+    gpu_bounds: Option<(DVec3, DVec3)>,
+    min_edge: f64,
+    min_altitude: f64,
+    min_area: f64,
+}
+impl ScalePreview {
+    pub fn new(model: &Model, selected: &BTreeSet<u64>) -> Result<Self, &'static str> {
+        let affected = MovePreview::new(model, selected)?;
+        let vertices: BTreeSet<_> = affected.vertices.iter().map(|(id, _)| *id).collect();
+        let texts = affected
+            .texts
+            .iter()
+            .map(|text| {
+                (
+                    text.layout(model),
+                    text.anchor.weights.is_empty()
+                        || text
+                            .anchor
+                            .weights
+                            .iter()
+                            .all(|(id, _)| vertices.contains(id)),
+                )
+            })
+            .collect();
+        let areas: BTreeMap<u64, DVec3> = affected
+            .faces
+            .iter()
+            .filter(|(_, partial)| !partial)
+            .map(|(id, _)| {
+                let face = &model.faces[id];
+                let normal = faces::plane(model, &face.vertices).unwrap().normal;
+                (*id, normal * model.face_area(face))
+            })
+            .collect();
+        let min_area = areas.values().map(|area| area.length()).fold(f64::INFINITY, f64::min);
+        let entities = model.expand_entities(selected);
+        // The shader transforms complete selected primitives. Shared vertices,
+        // scoped definitions and attached annotations need the CPU edit path.
+        let gpu_bounds = (model.dimensions.is_empty() && model.texts.is_empty()
+            && model.connections.is_empty() && model.reference_images.is_empty()
+            && affected.guides.is_empty()
+            && affected.edges.iter().all(|id| entities.contains(id))
+            && affected.faces.iter().all(|(id, partial)| !partial && entities.contains(id)))
+            .then(|| model.selection_bounds(selected)).flatten();
+        let min_edge = affected.edges.iter().map(|id| model.edge_length(&model.edges[id]))
+            .fold(f64::INFINITY, f64::min);
+        let min_altitude = affected.faces.iter().flat_map(|(id, _)| {
+            let face = &model.faces[id];
+            std::iter::once(&face.vertices).chain(face.holes.iter()).map(|ring| {
+                let origin = model.vertices[&ring[0]].position;
+                let u = (model.vertices[&ring[1]].position - origin).normalize();
+                ring.iter().skip(2).map(|id| u.cross(model.vertices[id].position - origin).length())
+                    .fold(0., f64::max)
+            })
+        }).fold(f64::INFINITY, f64::min);
+        Ok(Self {
+            affected,
+            texts,
+            areas,
+            gpu_bounds,
+            min_edge,
+            min_altitude,
+            min_area,
+        })
+    }
+
+    /// Conservative, constant-time eligibility for a GPU-only preview. A
+    /// positive diagonal transform preserves complete faces; bounds and lower
+    /// singular-value limits reject numeric collapse before touching buffers.
+    pub fn gpu_factors(&self, center: DVec3, factor: f64,
+        constraint: Option<crate::inference::AxisConstraint>) -> Option<DVec3> {
+        let (lo, hi) = self.gpu_bounds?;
+        if !factor.is_finite() || factor <= EPS || factor > 1e7 { return None; }
+        let factors = constraint.map_or(DVec3::splat(factor), |lock|
+            DVec3::ONE + lock.project(DVec3::ONE) * (factor - 1.));
+        let min = factors.min_element();
+        if self.min_edge * min < EPS * 2.
+            || self.min_area * min * min <= EPS * EPS * 2.
+            || self.min_altitude * min * min / factors.max_element() <= faces::TOL * 2. {
+            return None;
+        }
+        [lo, hi].into_iter().all(|point| {
+            let point = center + (point - center) * factors;
+            point.is_finite() && point.abs().max_element() <= 1e10
+        }).then_some(factors)
+    }
+
+    /// The destination starts as a clone of the source and is reused. Invalid
+    /// previews may be partially updated and must not be displayed or committed.
+    pub fn update(
+        &self,
+        preview: &mut Model,
+        center: DVec3,
+        factor: f64,
+        constraint: Option<crate::inference::AxisConstraint>,
+    ) -> Result<(), &'static str> {
+        const INVALID: &str = tr!("core.modeling.this_change_would_collapse_an_edge_or_bend");
+        if !factor.is_finite() || factor <= EPS || factor > 1e7 {
+            return Err(tr!("core.modeling.enter_a_positive_scale_factor_such_as_2"));
+        }
+        let factors = constraint.map_or(DVec3::splat(factor), |lock| {
+            DVec3::ONE + lock.project(DVec3::ONE) * (factor - 1.)
+        });
+        let scale = |point: DVec3| center + (point - center) * factors;
+        for &(id, point) in &self.affected.vertices {
+            let point = scale(point);
+            if !point.is_finite() || point.abs().max_element() > 1e10 {
+                return Err(INVALID);
+            }
+            preview.vertices.get_mut(&id).unwrap().position = point;
+        }
+        for source in &self.affected.dimensions {
+            let dimension = preview.dimensions.get_mut(&source.id).unwrap();
+            dimension.clone_from(source);
+            dimension.start.point = scale(source.start.point);
+            dimension.end.point = scale(source.end.point);
+            dimension.offset =
+                scale(source.start.point + source.offset) - scale(source.start.point);
+        }
+        for (source, &(points, attached)) in self.affected.texts.iter().zip(&self.texts) {
+            let text = preview.texts.get_mut(&source.id).unwrap();
+            text.clone_from(source);
+            text.anchor.point = if attached {
+                scale(points[0])
+            } else {
+                points[0]
+            };
+            text.offset = scale(points[1]) - text.anchor.point;
+        }
+        for (id, source) in &self.affected.guides {
+            let mut guide = source.clone();
+            guide.origin = scale(source.origin);
+            guide.direction = source
+                .direction
+                .map(|direction| {
+                    (scale(source.origin + direction) - guide.origin)
+                        .try_normalize()
+                        .ok_or(INVALID)
+                })
+                .transpose()?;
+            if !guide.valid() {
+                return Err(INVALID);
+            }
+            preview.guides.insert(*id, guide);
+        }
+        for &(id, frame) in &self.affected.objects {
+            let scaled = if constraint.is_none() {
+                frame.scaled(center, factor)
+            } else {
+                let mut scaled = frame;
+                scaled.translation = scale(frame.translation);
+                scaled.basis = glam::DMat3::from_diagonal(factors)
+                    * frame.basis
+                    * glam::DMat3::from_diagonal(DVec3::ONE / factors);
+                scaled.axes *= factors;
+                scaled
+            };
+            if !scaled.valid() {
+                return Err(INVALID);
+            }
+            preview.objects.get_mut(&id).unwrap().transform = Some(scaled);
+        }
+        preview.sync_dimensions();
+        if self
+            .affected
+            .edges
+            .iter()
+            .any(|id| preview.edge_length(&preview.edges[id]) < EPS)
+        {
+            return Err(INVALID);
+        }
+        for &(id, partial) in &self.affected.faces {
+            let face = &preview.faces[&id];
+            if std::iter::once(&face.vertices)
+                .chain(face.holes.iter())
+                .any(|ring| faces::plane(preview, ring).is_none())
+            {
+                return Err(INVALID);
+            }
+            // A complete face is an affine transform of its source. Its area
+            // follows the transformed area vector, with no triangulation per tick.
+            let area = if partial {
+                preview.face_area(face)
+            } else {
+                (self.areas[&id] / factors * factors.x * factors.y * factors.z).length()
+            };
+            if area <= EPS * EPS {
+                return Err(INVALID);
+            }
+        }
+        preview.validate_dimensions().map_err(|_| INVALID)?;
+        preview.validate_texts().map_err(|_| INVALID)?;
+        Ok(())
+    }
+}

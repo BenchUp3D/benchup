@@ -760,3 +760,100 @@ fn rotation_uses_an_offset_pivot_preserves_lengths_and_is_atomic_on_failure() {
     }
     model.validate().unwrap();
 }
+
+#[test]
+fn scale_preview_reuses_source_and_matches_commits_for_annotations_groups_and_constraints() {
+    use crate::{Axis, inference::AxisConstraint, modeling::ScalePreview};
+    let mut model = Model::default();
+    rectangle(&mut model, DVec3::ZERO, DVec3::new(4., 3., 0.));
+    model
+        .add_dimension(DVec3::ZERO, DVec3::X * 4., DVec3::Y)
+        .unwrap();
+    model
+        .add_text(DVec3::X * 2., DVec3::new(0., 1., 1.), "Scale label")
+        .unwrap();
+    model
+        .add_guide(DVec3::new(1., 1., 0.), Some(DVec3::new(1., 2., 1.)))
+        .unwrap();
+    let group = model
+        .make_object(&model.root_entities(), true, "Scaled component")
+        .unwrap();
+    let selected = BTreeSet::from([group]);
+    let source = model.clone();
+    let plan = ScalePreview::new(&model, &selected).unwrap();
+    let mut preview = model.clone();
+    for constraint in [
+        None,
+        Some(AxisConstraint::Axis(Axis::X)),
+        Some(AxisConstraint::Plane(Axis::Z)),
+    ] {
+        for factor in [2., 0.5, 1., 0.3, 4.] {
+            let center = DVec3::new(1., -2., 3.);
+            plan.update(&mut preview, center, factor, constraint)
+                .unwrap();
+            let mut committed = model.clone();
+            committed
+                .scale_selection_constrained(&selected, center, factor, constraint)
+                .unwrap();
+            assert_eq!(preview, committed);
+            assert_eq!(model, source);
+        }
+    }
+}
+
+#[test]
+fn scale_preview_validates_partial_faces_locks_and_recovers_after_invalid_factors() {
+    use crate::{Axis, inference::AxisConstraint, modeling::ScalePreview};
+    let mut model = Model::default();
+    let face = rectangle(&mut model, DVec3::ZERO, DVec3::new(4., 3., 0.));
+    let edge = *model.edges.keys().next().unwrap();
+    let selected = BTreeSet::from([edge]);
+    let plan = ScalePreview::new(&model, &selected).unwrap();
+    let mut preview = model.clone();
+    for center in [DVec3::ZERO, DVec3::new(1., 2., 3.)] {
+        for factor in [0., 2., -1., 0.5, 1e8, 1., f64::INFINITY] {
+            let constraint = Some(AxisConstraint::Axis(Axis::Z));
+            let mut committed = model.clone();
+            let expected =
+                committed.scale_selection_constrained(&selected, center, factor, constraint);
+            let actual = plan.update(&mut preview, center, factor, constraint);
+            assert_eq!(actual.is_ok(), expected.is_ok());
+            if actual.is_ok() {
+                assert_eq!(preview, committed);
+            }
+        }
+    }
+    model.locked.insert(face);
+    assert!(ScalePreview::new(&model, &selected).is_err());
+    model.locked.clear();
+    let group = model
+        .make_object(&model.root_entities(), true, "Scoped")
+        .unwrap();
+    model.edit_context = Some(group);
+    assert!(ScalePreview::new(&model, &selected).is_err());
+}
+
+#[test]
+fn gpu_scale_requires_complete_isolated_geometry_and_safe_numeric_limits() {
+    use crate::{modeling::ScalePreview, inference::AxisConstraint, Axis};
+    let mut model = Model::default();
+    let face = rectangle(&mut model, DVec3::ZERO, DVec3::new(4., 3., 0.));
+    let partial = ScalePreview::new(&model, &BTreeSet::from([face])).unwrap();
+    assert!(partial.gpu_factors(DVec3::ZERO, 2., None).is_none());
+    let selected = model.root_entities();
+    let complete = ScalePreview::new(&model, &selected).unwrap();
+    for constraint in [None, Some(AxisConstraint::Axis(Axis::X)), Some(AxisConstraint::Plane(Axis::Z))] {
+        let factors = complete.gpu_factors(DVec3::ZERO, 0.75, constraint).unwrap();
+        let mut expected = model.clone();
+        expected.scale_selection_constrained(&selected, DVec3::ZERO, 0.75, constraint).unwrap();
+        for (id, vertex) in &model.vertices {
+            assert_eq!(vertex.position * factors, expected.vertices[id].position);
+        }
+    }
+    for factor in [0., f64::NAN, 1e-7, 1e8] {
+        assert!(complete.gpu_factors(DVec3::ZERO, factor, None).is_none());
+    }
+    assert!(complete.gpu_factors(DVec3::splat(1e11), 2., None).is_none());
+    model.add_text(DVec3::X, DVec3::Z, "Attached label").unwrap();
+    assert!(ScalePreview::new(&model, &selected).unwrap().gpu_factors(DVec3::ZERO, 2., None).is_none());
+}

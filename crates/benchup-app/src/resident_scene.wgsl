@@ -18,6 +18,8 @@ struct Camera {
     edge_muted: vec4<f32>,
     edge_normal: vec4<f32>,
     marker_fill: vec4<f32>,
+    scale_pivot: vec4<f32>,
+    scale_factors: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var interaction_states: texture_2d<u32>;
@@ -31,6 +33,14 @@ fn interaction_state(pair: vec2<u32>) -> u32 {
     if camera.interaction.x != 0u && camera.interaction.x == pair.y {state|=2u;}
     if (state&8u)!=0u {state|=2u;}
     return state;
+}
+fn preview_factors(state: u32) -> vec3<f32> {
+    return select(vec3<f32>(1.0), camera.scale_factors.xyz,
+        camera.scale_pivot.w > 0.0 && (state&1u)!=0u);
+}
+fn preview_point(point: vec3<f32>, state: u32) -> vec3<f32> {
+    return select(point, camera.scale_pivot.xyz + (point-camera.scale_pivot.xyz)*camera.scale_factors.xyz,
+        camera.scale_pivot.w > 0.0 && (state&1u)!=0u);
 }
 // Keep face IDs and exact depth bits in an integer color target: the GLSL
 // backend cannot translate textureLoad from a depth texture.
@@ -53,14 +63,15 @@ fn target_color(color: vec4<f32>) -> vec4<f32> {
 @vertex
 fn face_vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
     @location(2) anchor: vec3<f32>, @location(3) color: vec4<f32>, @location(4) face_id: u32, @location(5) interaction: vec2<u32>) -> Output {
-    var n = normal;
-    var toward_eye = camera.eye.xyz - anchor;
+    let state=interaction_state(interaction);
+    let factors=preview_factors(state);
+    var n = normalize(normal / factors);
+    var toward_eye = camera.eye.xyz - preview_point(anchor,state);
     if camera.flags.y != 0.0 {
         // Perspective division is disabled, but lighting still faces the eye.
         toward_eye = camera.direction.xyz;
     }
     if dot(n, toward_eye) < 0.0 { n = -n; }
-    let state=interaction_state(interaction);
     var material=color;
     if (state&4u)==0u && (state&8u)==0u {material=camera.face_inactive;}
     else if (state&32u)!=0u {material=vec4<f32>(220.0/255.0,91.0/255.0,76.0/255.0,1.0);}
@@ -69,10 +80,10 @@ fn face_vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
     let brightness = 0.62 + 0.38 * max(dot(n, camera.light.xyz), 0.0);
     let shaded = vec4<f32>(floor(material.rgb * brightness * 255.0 + vec3<f32>(0.5)) / 255.0, material.a);
     var output: Output;
-    output.position = camera.matrix * vec4<f32>(position,1.0);
+    output.position = camera.matrix * vec4<f32>(preview_point(position,state),1.0);
     if ((state&64u)!=0u && (camera.interaction.w&4u)==0u) || (camera.interaction.y!=0u && (state&4u)==0u) {output.position=vec4<f32>(2.0,2.0,2.0,1.0);}
     output.color = shaded;
-    output.shadow = (camera.shadow_matrix * vec4<f32>(position,1.0)).xyz;
+    output.shadow = (camera.shadow_matrix * vec4<f32>(preview_point(position,state),1.0)).xyz;
     output.lateral = 0.0;
     output.center = vec3<f32>(0.0);
     output.faces = vec4<u32>(face_id,0u,0u,0u);
@@ -82,7 +93,8 @@ fn face_vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
 fn shadow_vertex(@location(0) position: vec3<f32>, @location(4) face_id: u32,
     @location(5) interaction: vec2<u32>) -> Output {
     var output: Output;
-    output.position = camera.shadow_matrix * vec4<f32>(position,1.0);
+    let state=interaction_state(interaction);
+    output.position = camera.shadow_matrix * vec4<f32>(preview_point(position,state),1.0);
     if (slot_state(interaction.y)&64u)!=0u && (camera.interaction.w&4u)==0u {
         output.position=vec4<f32>(2.0,2.0,2.0,1.0);
     }
@@ -146,10 +158,12 @@ fn edge_vertex(@location(0) world_a: vec3<f32>, @location(1) world_b: vec3<f32>,
     @location(8) normal3: vec3<f32>, @location(9) inward3: vec3<f32>,
     @location(10) color: vec4<f32>, @location(11) width: f32, @location(12) faces: vec4<u32>, @location(13) interaction: vec2<u32>,
     @builtin(vertex_index) vertex: u32) -> Output {
-    var a = camera.matrix * vec4<f32>(world_a,1.0);
-    var b = camera.matrix * vec4<f32>(world_b,1.0);
-    var output: Output;
     let state=interaction_state(interaction);
+    let factors=preview_factors(state);
+    let transformed_a=preview_point(world_a,state);
+    var a = camera.matrix * vec4<f32>(transformed_a,1.0);
+    var b = camera.matrix * vec4<f32>(preview_point(world_b,state),1.0);
+    var output: Output;
     let stroke_active=(state&35u)!=0u;
     let outside=camera.interaction.y!=0u && (state&4u)==0u;
     var edge_color=color;
@@ -187,16 +201,16 @@ fn edge_vertex(@location(0) world_a: vec3<f32>, @location(1) world_b: vec3<f32>,
     // coordinates and cancel perspective interpolation in hidden_center instead.
     output.center = clip.xyz;
     let offset = normal * radius * selector.y * vec2<f32>(2.0,-2.0) / camera.viewport.xy;
-    let first = face_depth_offset(world_a,normal0,inward0,clip,offset,faces.x);
-    let second = face_depth_offset(world_a,normal1,inward1,clip,offset,faces.y);
+    let first = face_depth_offset(transformed_a,normal0/factors,inward0*factors,clip,offset,faces.x);
+    let second = face_depth_offset(transformed_a,normal1/factors,inward1*factors,clip,offset,faces.y);
     var depth_offset = 0.0;
     if first.y > 0.0 { depth_offset = first.x; }
     if second.y > 0.0 {
         depth_offset = second.x;
         if first.y > 0.0 { depth_offset = min(first.x,second.x); }
     }
-    let third = face_depth_offset(world_a,normal2,inward2,clip,offset,faces.z);
-    let fourth = face_depth_offset(world_a,normal3,inward3,clip,offset,faces.w);
+    let third = face_depth_offset(transformed_a,normal2/factors,inward2*factors,clip,offset,faces.z);
+    let fourth = face_depth_offset(transformed_a,normal3/factors,inward3*factors,clip,offset,faces.w);
     var bounded = first.y + second.y > 0.0;
     for(var i = 0u; i < 2u; i++) {
         let candidate = select(third,fourth,i == 1u);
@@ -267,7 +281,7 @@ fn marker_vertex(@location(0) point: vec3<f32>, @location(1) edges: vec4<u32>,
         if (own&1u)!=0u && ((own&64u)==0u || (camera.interaction.w&4u)!=0u) {selected=true;break;}
     }
     if !selected {return output;}
-    let clip = camera.matrix * vec4<f32>(point,1.0);
+    let clip = camera.matrix * vec4<f32>(preview_point(point,1u),1.0);
     if clip.w<=0.0 || clip.z<0.0 || clip.z>clip.w {return output;}
     let corners = array<vec2<f32>,6>(vec2<f32>(-1.0,-1.0),vec2<f32>(1.0,-1.0),vec2<f32>(-1.0,1.0),
         vec2<f32>(-1.0,1.0),vec2<f32>(1.0,-1.0),vec2<f32>(1.0,1.0));

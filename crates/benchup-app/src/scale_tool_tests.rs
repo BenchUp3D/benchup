@@ -1,10 +1,22 @@
 use super::*;
 
+// These factor/snap regressions exercise the arbitrary-anchor, center-based
+// scale path. Grip-origin behavior has separate interaction coverage below.
+fn start_center_scale(h: &mut Harness, pos: Pos2) {
+    h.click(pos);
+    let center = h.app.doc.model.selection_center(&h.app.selected).unwrap();
+    let edit = h.app.modeling.as_mut().unwrap();
+    edit.center = center;
+    edit.scale_grip = None;
+    edit.scale_constraint = None;
+}
+
 fn selection(h: &mut Harness) -> u64 {
     let edge = h.app.doc.model.add_edge(-DVec3::ONE, DVec3::ONE).unwrap();
     h.app.set_tool(Tool::Scale);
     h.app.selected.insert(edge);
-    h.click(h.at(DVec3::ONE));
+    let pos = h.at(DVec3::ONE);
+    start_center_scale(h, pos);
     h.app.doc.snap_to_geometry = false;
     h.app.doc.snap_to_axes = false;
     edge
@@ -210,7 +222,7 @@ fn unlocked_scale_responds_to_every_pointer_direction_without_a_fixed_reference_
         h.app.doc.snap_to_axes = false;
         let center = h.at(DVec3::new(2., 2., 0.));
         let start = h.at(DVec3::new(4., 4., 0.));
-        h.click(start);
+        start_center_scale(&mut h, start);
         let radius = start.distance(center) * 1.25;
         for direction in [
             egui::vec2(1., 0.),
@@ -297,7 +309,8 @@ fn unlocked_scale_keeps_exact_geometry_targets_when_grid_snapping_is_enabled() {
     h.app.selected.insert(edge);
     h.app.doc.snap_to_axes = false;
     h.app.snap_to_grid = true;
-    h.click(h.at(DVec3::ONE));
+    let pos = h.at(DVec3::ONE);
+    start_center_scale(&mut h, pos);
     h.frame(
         vec![egui::Event::PointerMoved(h.at(target) + egui::vec2(2., 0.))],
         egui::Modifiers::NONE,
@@ -326,7 +339,8 @@ fn scale_object_targets_win_over_grid_and_disabled_object_snapping_is_respected(
         h.app.doc.model.add_edge(target, target + DVec3::Y).unwrap();
         h.app.set_tool(Tool::Scale);
         h.app.selected.insert(edge);
-        h.click(h.at(b));
+        let pos = h.at(b);
+        start_center_scale(&mut h, pos);
         h.app.doc.snap_to_geometry = geometry;
         h.app.doc.snap_to_axes = false;
         h.app.snap_to_grid = true;
@@ -406,7 +420,7 @@ fn rectangle_scale_near_center_stays_proportional_for_three_pixel_movements() {
                         h.key(*key);
                     }
                     let start = h.at(DVec3::new(2., 2., 0.)) + offset;
-                    h.click(start);
+                    start_center_scale(&mut h, start);
                     let edit = h.app.modeling.as_ref().unwrap();
                     assert!(
                         (edit.value - 1.).abs() < 1e-5,
@@ -459,4 +473,195 @@ fn near_center_scale_uses_the_selection_extent_for_grid_and_exact_object_targets
     let edit = h.app.modeling.as_ref().unwrap();
     assert_eq!(edit.snap.unwrap().kind, Inference::Endpoint);
     assert!((edit.value - 3.).abs() < 1e-7);
+}
+
+#[test]
+fn yellow_scale_grips_keep_opposite_origin_fixed_and_commit_one_undo_step() {
+    for point in [DVec3::X, DVec3::new(1., 1., 0.), DVec3::ONE] {
+        let mut h = Harness::new();
+        let edge = h.app.doc.model.add_edge(-DVec3::ONE, DVec3::ONE).unwrap();
+        h.app.selected.insert(edge);
+        h.app.set_tool(Tool::Scale);
+        h.app.doc.camera.projection = benchup_core::Projection::Parallel;
+        let before = h.app.doc.model.clone();
+        let pos = h.at(point);
+        h.click(pos);
+        let edit = h.app.modeling.as_ref().unwrap();
+        assert_eq!(edit.anchor, point);
+        assert_eq!(edit.center, -point);
+        assert!(edit.scale_grip.is_some());
+        let expected_constraint = if point == DVec3::X {
+            Some(AxisConstraint::Axis(Axis::X))
+        } else if point.z == 0. {
+            Some(AxisConstraint::Plane(Axis::Z))
+        } else {
+            None
+        };
+        assert_eq!(edit.scale_constraint, expected_constraint);
+        h.app.length_input = "2".into();
+        h.app.update_modeling(pos);
+        let edit = h.app.modeling.as_ref().unwrap();
+        let mask = expected_constraint.map_or(DVec3::ONE, |c| c.project(DVec3::ONE));
+        let vertex = before.edges[&edge].b;
+        let expected = -point + (DVec3::ONE + point) * (DVec3::ONE + mask);
+        assert!(
+            edit.preview.as_ref().unwrap().vertices[&vertex]
+                .position
+                .distance(expected)
+                < 1e-7
+        );
+        h.key(Key::Enter);
+        assert_eq!(h.app.doc.history.position(), 1);
+        assert!(
+            h.app.doc.model.vertices[&vertex]
+                .position
+                .distance(expected)
+                < 1e-7
+        );
+        h.app.undo(&h.ctx, false);
+        assert_eq!(h.app.doc.model, before);
+    }
+}
+
+#[test]
+fn scale_grip_cancel_preserves_document_and_locked_selection_has_no_grips() {
+    let mut h = Harness::new();
+    let edge = h.app.doc.model.add_edge(-DVec3::ONE, DVec3::ONE).unwrap();
+    h.app.selected.insert(edge);
+    h.app.set_tool(Tool::Scale);
+    h.frame(vec![], egui::Modifiers::NONE);
+    let before = h.app.doc.clone();
+    h.click(h.at(DVec3::ONE));
+    h.app.length_input = "2".into();
+    h.key(Key::Escape);
+    assert!(h.app.modeling.is_none());
+    assert_eq!(h.app.doc, before);
+    h.app.doc.model.locked.insert(edge);
+    assert!(h.app.scale_grip_at(h.at(DVec3::ONE), &h.ctx).is_none());
+}
+
+#[test]
+fn scale_without_selection_selects_target_before_starting_a_handle_edit() {
+    for grouped in [false, true] {
+        let mut h = Harness::new();
+        let face = modeling_rectangle(&mut h);
+        let target = if grouped {
+            h.app
+                .doc
+                .model
+                .make_object(&BTreeSet::from([face]), false, "Panel")
+                .unwrap()
+        } else {
+            face
+        };
+        h.app.selected.clear();
+        h.app.set_tool(Tool::Scale);
+        let before = h.app.doc.model.clone();
+        let history_position = h.app.doc.history.position();
+        h.click(h.at(DVec3::new(2., 2., 0.)));
+        assert_eq!(h.app.selected, BTreeSet::from([target]));
+        assert!(h.app.modeling.is_none(), "first click only selects");
+        assert_eq!(h.app.doc.model, before);
+        assert_eq!(h.app.doc.history.position(), history_position);
+        assert!(!h.app.project.modified);
+
+        let corner = h.at(DVec3::new(4., 4., 0.));
+        assert!(h.app.scale_grip_at(corner, &h.ctx).is_some());
+        h.click(corner);
+        let edit = h
+            .app
+            .modeling
+            .as_ref()
+            .expect("second click starts scaling");
+        assert!(edit.scale_grip.is_some());
+        assert_eq!(edit.entities, BTreeSet::from([target]));
+        assert_eq!(edit.center, DVec3::ZERO);
+    }
+}
+
+#[test]
+fn scale_click_on_empty_space_keeps_selection_and_edit_empty() {
+    let mut h = Harness::new();
+    h.app.set_tool(Tool::Scale);
+    let before = h.app.doc.model.clone();
+    h.click(h.app.viewport.center());
+    assert!(h.app.selected.is_empty());
+    assert!(h.app.modeling.is_none());
+    assert_eq!(h.app.doc.model, before);
+    assert!(h.app.doc.history.is_empty());
+    assert!(!h.app.project.modified);
+}
+
+#[test]
+fn scale_preview_reuses_model_allocations_and_unchanged_factors() {
+    let mut h = Harness::new();
+    let edge = selection(&mut h);
+    assert!(h.app.modeling.as_ref().unwrap().scale_preview.is_some());
+    let pos = h.app.modeling.as_ref().unwrap().pointer;
+    let before = h.app.doc.model.clone();
+    h.app.length_input = "2".into();
+    h.app.update_modeling(pos);
+    let vertex = before.edges[&edge].b;
+    let allocation = &h
+        .app
+        .modeling
+        .as_ref()
+        .unwrap()
+        .preview
+        .as_ref()
+        .unwrap()
+        .vertices[&vertex] as *const _;
+    for factor in ["2", "3", "0.5", "1"] {
+        h.app.length_input = factor.into();
+        h.app.update_modeling(pos);
+        let edit = h.app.modeling.as_ref().unwrap();
+        assert!(edit.error.is_none());
+        assert_eq!(
+            allocation,
+            &edit.preview.as_ref().unwrap().vertices[&vertex] as *const _
+        );
+        assert_eq!(h.app.doc.model, before);
+    }
+    h.app.length_input = "0".into();
+    h.app.update_modeling(pos);
+    assert!(h.app.modeling.as_ref().unwrap().preview.is_none());
+    h.app.length_input = "2".into();
+    h.app.update_modeling(pos);
+    assert!(h.app.modeling.as_ref().unwrap().error.is_none());
+    let preview = h.app.modeling.as_ref().unwrap().preview.clone().unwrap();
+    h.key(Key::Enter);
+    assert_eq!(h.app.doc.model, preview);
+    h.app.undo(&h.ctx, false);
+    assert_eq!(h.app.doc.model, before);
+}
+
+#[test]
+fn large_object_scale_uses_uniforms_until_commit_and_preserves_undo() {
+    let mut h = Harness::new();
+    h.app.doc.model = crate::picking::tests::triangle_grid(1024);
+    let object = h.app.doc.model.make_object(&h.app.doc.model.root_entities(), false, "Large object").unwrap();
+    h.app.selected = BTreeSet::from([object]);
+    h.app.fit(&h.ctx);
+    h.app.set_tool(Tool::Scale);
+    h.frame(vec![], egui::Modifiers::NONE);
+    let before = h.app.doc.model.clone();
+    let (_, hi) = before.selection_bounds(&h.app.selected).unwrap();
+    let pos = h.at(hi);
+    h.app.begin_modeling(pos, &h.ctx);
+    let mut expected = before.clone();
+    for factor in ["1.1", "0.9", "1.2"] {
+        h.app.length_input = factor.into();
+        h.app.update_modeling(pos);
+        let edit = h.app.modeling.as_ref().unwrap();
+        assert!(edit.gpu_scale.is_some(), "Large complete objects must use GPU preview");
+        assert!(edit.preview.is_none(), "GPU scaling must not rebuild CPU geometry");
+        assert_eq!(h.app.doc.model, before);
+        expected = before.clone();
+        expected.scale_selection_constrained(&edit.entities, edit.center,
+            factor.parse().unwrap(), edit.scale_constraint).unwrap();
+    }
+    h.key(Key::Enter);
+    assert_eq!(h.app.doc.model, expected);
+    h.app.undo(&h.ctx, false);
+    assert_eq!(h.app.doc.model, before);
 }

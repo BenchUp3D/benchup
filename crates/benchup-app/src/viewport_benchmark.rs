@@ -53,6 +53,8 @@ pub(super) struct Benchmark {
     camera: Camera,
     editing_connection: Option<u64>,
     edited_settings: bool,
+    scaling: Option<String>,
+    scale_started: bool,
     stage: usize,
     stage_start: Instant,
     last_frame: Instant,
@@ -109,6 +111,8 @@ impl Benchmark {
             camera: app.doc.camera.clone(),
             editing_connection,
             edited_settings: false,
+            scaling: std::env::var("BENCHUP_BENCH_SCALE").ok(),
+            scale_started: false,
             stage: 0,
             stage_start: now,
             last_frame: now,
@@ -132,6 +136,17 @@ impl Benchmark {
             return;
         }
         if self.last_number.is_none() {
+            if let Some(scope) = &self.scaling {
+                let root = app.doc.model.root_entities().into_iter()
+                    .find(|id| app.doc.model.objects.contains_key(id)).expect("Benchmark object");
+                let target = if scope == "leaf" {
+                    app.doc.model.objects.values().filter(|object|
+                        !object.entities.iter().any(|id| app.doc.model.objects.contains_key(id)))
+                        .max_by_key(|object| object.entities.len()).unwrap().id
+                } else { root };
+                app.selected = BTreeSet::from([target]);
+                app.set_tool(Tool::Scale);
+            }
             if let Some(id) = self.editing_connection {
                 let members = app.doc.model.connections[&id].members;
                 app.selected = members.into_iter().collect();
@@ -149,7 +164,7 @@ impl Benchmark {
                 "window_points": [ctx.viewport_rect().width(), ctx.viewport_rect().height()],
                 "pixels_per_point": ctx.pixels_per_point(), "debug_assertions": cfg!(debug_assertions),
                 "surface_config": format!("{:?}", frame.wgpu_surface_config()),
-                "editing_connection": self.editing_connection});
+                "editing_connection": self.editing_connection, "scaling": self.scaling});
         }
         self.last_number = Some(number);
         let now = Instant::now();
@@ -232,6 +247,25 @@ impl Benchmark {
             }
         }
         app.release_notes.open = false;
+        if self.scaling.is_some() {
+            app.doc.camera = self.camera.clone();
+            if self.stage > 0 {
+                if !self.scale_started {
+                    let (_, hi) = app.doc.model.selection_bounds(&app.selected).unwrap();
+                    let pos = app.viewport.min + pv(app.doc.camera.project(hi, dv(app.viewport.size())).unwrap());
+                    app.begin_modeling(pos, ctx);
+                    assert!(app.modeling.is_some(), "Scale benchmark did not start");
+                    self.scale_started = true;
+                }
+                let pointer = app.modeling.as_ref().unwrap().pointer;
+                app.length_input = format!("{:.6}", 1. + 0.15 * (elapsed * 1.5).sin());
+                app.update_modeling(pointer);
+                assert!(app.modeling.as_ref().unwrap().error.is_none(), "Invalid scale preview");
+                self.environment["gpu_scaling"] = serde_json::json!(app.modeling.as_ref().unwrap().gpu_scale.is_some());
+            }
+            ctx.request_repaint();
+            return;
+        }
         app.doc.display.wood_joinery = self.stage != 1;
         app.doc.camera = self.camera.clone();
         if self.stage == 1 || self.stage == 2 {
@@ -257,7 +291,9 @@ impl Benchmark {
                 "p95_ms": percentile(0.95), "p99_ms": percentile(0.99), "max_ms": percentile(1.),
                 "fps": if mean > 0. { 1000. / mean } else { 0. }})
         };
-        let name = if self.editing_connection.is_some() {
+        let name = if self.scaling.is_some() {
+            ["scale_selected", "scale_drag", "scale_drag_repeat", "scale_drag_final"][self.stage]
+        } else if self.editing_connection.is_some() {
             [
                 "edit_static_on",
                 "edit_orbit_off",

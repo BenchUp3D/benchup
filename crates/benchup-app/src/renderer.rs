@@ -6,6 +6,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 #[path = "resident_scene.rs"]
 mod resident;
+#[path = "scale_handles.rs"]
+mod scale_handles;
+pub(crate) use scale_handles::{Cache as ScaleHandleCache, paint as paint_scale_handles};
 pub(crate) use resident::{edited_geometry as geometry_changes, supported as resident_supported};
 
 /// Shared reference geometry fade, measured along the camera's forward axis.
@@ -202,6 +205,7 @@ pub struct SceneKey {
 
 #[derive(Default)]
 pub struct SceneCache {
+    pub(crate) scale_transform: Option<ScaleTransform>,
     image_matrix: Option<glam::DMat4>,
     image_depth: Option<[f32; 4]>,
     resident: resident::Cache,
@@ -217,6 +221,23 @@ pub struct SceneCache {
     pub key: Option<SceneKey>,
     #[cfg(test)]
     pub mesh_builds: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ScaleTransform {
+    pub pivot: DVec3,
+    pub factors: DVec3,
+}
+
+pub(crate) fn scale_preview_supported(camera: &Camera, display: &benchup_core::DisplaySettings,
+    model: &Model, faces: &FaceCache) -> bool {
+    resident_supported(&SceneKey {
+        joinery_members: None, joint_preview: None, model_revision: 0,
+        edit_context: model.edit_context, camera: camera.clone(), size: DVec2::ONE,
+        pixels_per_point: 1., display: display.clone(), dark: false,
+        tool: benchup_core::Tool::Scale, selected: Default::default(), hover: None,
+        outliner_hover: Default::default(), erasing: Default::default(),
+    }, model, faces)
 }
 
 impl SceneCache {
@@ -3224,6 +3245,7 @@ pub(crate) fn install_resources(
     });
     resident::install(device, format, renderer);
     crate::reference_image_gpu::install(device, format, renderer);
+    scale_handles::install(device, format, renderer);
 }
 #[derive(Clone, Copy, PartialEq)]
 enum PipelinePass {

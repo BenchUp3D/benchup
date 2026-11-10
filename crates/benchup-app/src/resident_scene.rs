@@ -75,6 +75,8 @@ struct Uniform {
     edge_muted: [f32; 4],
     edge_normal: [f32; 4],
     marker_fill: [f32; 4],
+    scale_pivot: [f32; 4],
+    scale_factors: [f32; 4],
 }
 #[derive(Default)]
 pub(super) struct Cache {
@@ -399,7 +401,7 @@ pub(crate) fn supported(key: &SceneKey, model: &Model, faces: &FaceCache) -> boo
     let d = &key.display;
     model.faces.len() >= 1024
         && faces.max_edge_faces <= 4
-        && key.camera.projection == benchup_core::Projection::Perspective
+        && (key.camera.projection == benchup_core::Projection::Perspective || key.tool == benchup_core::Tool::Scale)
         && matches!(
             d.face_style,
             benchup_core::FaceStyle::Materials | benchup_core::FaceStyle::Shaded
@@ -417,8 +419,7 @@ pub(crate) fn supported(key: &SceneKey, model: &Model, faces: &FaceCache) -> boo
             || d.hidden_geometry
             || d.hidden_objects
             || d.section_planes
-            || d.section_cuts
-            || d.section_fill)
+            || d.section_cuts)
         && model.dimensions.is_empty()
         && model.texts.is_empty()
         && model.connections.is_empty()
@@ -526,7 +527,13 @@ impl SceneCache {
     ) {
         self.prepare_resident(key, model, faces, entities, ui);
         let geometry = Arc::clone(self.resident.geometry.as_ref().unwrap());
-        let (near, far) = clip_planes(&key.camera, self.resident.bounds.unwrap_or(geometry.bounds));
+        let source_bounds = self.resident.bounds.unwrap_or(geometry.bounds);
+        let bounds = self.scale_transform.map_or(source_bounds, |scale| {
+            let a = scale.pivot + (source_bounds.0 - scale.pivot) * scale.factors;
+            let b = scale.pivot + (source_bounds.1 - scale.pivot) * scale.factors;
+            (source_bounds.0.min(a), source_bounds.1.max(b))
+        });
+        let (near, far) = clip_planes(&key.camera, bounds);
         let matrix = key.camera.matrix_with_clip_planes(key.size, near, far)
             * glam::DMat4::from_translation(geometry.origin);
         self.image_matrix = Some(key.camera.matrix_with_clip_planes(key.size, near, far));
@@ -548,9 +555,8 @@ impl SceneCache {
         let face_palette = FacePalette::for_ui(ui);
         let rgba = |color: Color32| color.to_array().map(|v| v as f32 / 255.);
         let previous_shadow = self.resident.shadows.clone();
-        let shadows = shadows::Map::for_scene(
-            &mut self.resident.shadows, key, self.resident.bounds.unwrap_or(geometry.bounds),
-            geometry.origin,
+        let shadows = shadows::Map::for_scene_scaled(
+            &mut self.resident.shadows, key, bounds, geometry.origin, self.scale_transform,
         );
         if shadows.as_ref().is_some_and(|map| previous_shadow.as_ref().is_none_or(|old| !Arc::ptr_eq(old, map))) {
             self.resident.shadow_builds += 1;
@@ -607,6 +613,10 @@ impl SceneCache {
                 edge_muted: rgba(palette.muted.gamma_multiply(0.55)),
                 edge_normal: rgba(palette.ink),
                 marker_fill: rgba(palette.paper),
+                scale_pivot: self.scale_transform.map_or([0.; 4], |scale|
+                    (scale.pivot - geometry.origin).extend(1.).as_vec4().to_array()),
+                scale_factors: self.scale_transform.map_or([1.; 4], |scale|
+                    scale.factors.extend(0.).as_vec4().to_array()),
                 flags: [
                     0.,
                     if key.camera.projection == benchup_core::Projection::Parallel {
@@ -1383,7 +1393,11 @@ mod tests {
             camera: Camera::default(),
             size: DVec2::new(800., 600.),
             pixels_per_point: 1.,
-            display: Default::default(),
+            display: benchup_core::DisplaySettings {
+                // Production resolves the empty grain overlay before rendering.
+                grain_direction: false,
+                ..Default::default()
+            },
             dark: false,
             tool: benchup_core::Tool::Orbit,
             selected: Default::default(),
@@ -1391,6 +1405,40 @@ mod tests {
             outliner_hover: Default::default(),
             erasing: Default::default(),
         }
+    }
+
+    #[test]
+    fn scaling_one_part_keeps_the_large_scene_geometry_resident() {
+        let ctx = egui::Context::default();
+        let source = model(1024);
+        let selected = std::collections::BTreeSet::from([7]);
+        let plan = benchup_core::modeling::ScalePreview::new(&source, &selected).unwrap();
+        let mut preview = source.clone();
+        let mut snapshot = ModelSnapshot::default();
+        let mut faces = FaceCache::default();
+        let mut entities = EntityCache::default();
+        let mut cache = SceneCache::default();
+        let mut key = key();
+        key.tool = benchup_core::Tool::Scale;
+        key.selected = selected;
+        let mut geometry = None;
+        for factor in [1., 1.5, 0.75, 2., 1.] {
+            plan.update(&mut preview, DVec3::ZERO, factor, None).unwrap();
+            key.model_revision = snapshot.update_scene(&preview);
+            faces.update_for_revision(&preview, key.model_revision);
+            entities.update_for_revision(&preview, key.model_revision);
+            assert!(supported(&key, &preview, &faces));
+            let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
+                cache.prepare_resident(&key, &preview, &faces, &entities, ui);
+            });
+            let current = cache.resident.geometry.as_ref().unwrap();
+            if let Some(original) = &geometry {
+                assert!(Arc::ptr_eq(original, current));
+            } else { geometry = Some(Arc::clone(current)); }
+            assert_eq!(cache.resident.builds, 1);
+            assert!(cache.resident.removed.len() <= 4);
+        }
+        assert_eq!(preview, source);
     }
 
     #[test]
@@ -1487,6 +1535,9 @@ mod tests {
         let root = model
             .make_object(&BTreeSet::from([child]), false, "Root")
             .unwrap();
+        // Grouping copies descendants and assigns their current entity IDs.
+        let child = *model.objects[&root].entities.iter()
+            .find(|id| model.objects.contains_key(id)).unwrap();
         model.locked.insert(child);
         let face = *model
             .faces
