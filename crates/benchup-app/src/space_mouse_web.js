@@ -192,7 +192,7 @@ class SpaceMouseConnection {
         }
         if (!this.current(generation)) return;
         if (lastError) {
-            this.failed(lastError, generation);
+            this.failed(lastError, generation, true);
         } else {
             this.busy = false;
             this.publish(requested
@@ -201,13 +201,17 @@ class SpaceMouseConnection {
         }
     }
 
-    failed(error, generation) {
+    failed(error, generation, opening = false) {
         if (!this.current(generation)) return;
         this.busy = false;
-        const denied = error?.name === "SecurityError" || error?.name === "NotAllowedError";
+        this.env.console?.warn("3D Mouse connection failed:", error);
+        // Chrome also rejects open() with NotAllowedError when the OS refuses
+        // the device, typically because a driver or another app holds it.
+        const denied = !opening &&
+            (error?.name === "SecurityError" || error?.name === "NotAllowedError");
         this.publish(denied
             ? "3D Mouse access was not allowed. Check this site's device permissions and try again."
-            : "Could not connect the 3D Mouse. Close other apps using it, check device permissions, and try again.");
+            : "Could not open the 3D Mouse. Quit other apps or drivers using it, such as 3DxWare, and try again.");
     }
 
     inputReport(event) {
