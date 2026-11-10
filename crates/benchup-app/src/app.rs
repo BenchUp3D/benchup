@@ -4279,7 +4279,7 @@ impl BenchUpApp {
     fn navigate(&mut self, ctx: &egui::Context, delta: DVec2, pivot: &mut Option<DVec3>) {
         if ctx.input(|i| i.modifiers.shift) {
             self.doc.camera.pan(
-                delta * self.general_settings.pan_speed,
+                delta * self.general_settings.mouse_pan_speed(),
                 self.viewport.height() as f64,
             );
             *pivot = None;
@@ -4287,7 +4287,7 @@ impl BenchUpApp {
             let center = *pivot.get_or_insert_with(|| self.orbit_center());
             self.doc
                 .camera
-                .orbit_around(delta * self.general_settings.orbit_speed, center);
+                .orbit_around(delta * self.general_settings.mouse_orbit_speed(), center);
         }
         self.camera_changed(ctx);
     }
@@ -4319,7 +4319,13 @@ impl BenchUpApp {
                 self.navigate(ctx, dv(delta), pivot);
             } else {
                 let center = *pivot.get_or_insert_with(|| self.orbit_center());
-                self.doc.camera.orbit_around(dv(delta), center);
+                // Keep the compass's own sensitivity, while honoring orbit inversion.
+                let direction = if self.general_settings.invert_orbit {
+                    -1.
+                } else {
+                    1.
+                };
+                self.doc.camera.orbit_around(dv(delta) * direction, center);
                 self.camera_changed(ctx);
             }
             ctx.request_repaint();
@@ -4328,11 +4334,12 @@ impl BenchUpApp {
 
     fn zoom_viewport(&mut self, ctx: &egui::Context) -> Option<Pos2> {
         let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
-        if scroll.abs() <= 0.01 { return None; }
+        if scroll.abs() <= 0.01 {
+            return None;
+        }
         let pos = ctx.input(|i| i.pointer.hover_pos())?;
         self.doc.camera.zoom(
-            scroll as f64 * self.general_settings.zoom_speed
-                * if self.general_settings.reverse_zoom { -1. } else { 1. },
+            scroll as f64 * self.general_settings.mouse_zoom_speed(),
             dv(pos - self.viewport.min),
             dv(self.viewport.size()),
         );

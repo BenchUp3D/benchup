@@ -1111,6 +1111,69 @@ fn precision_commit_uses_current_pointer_even_when_it_moved_in_the_same_frame() 
 }
 
 #[test]
+fn mouse_inversions_apply_regardless_of_the_selected_settings_device() {
+    for kind in [
+        settings::NavigationType::MouseTrackpad,
+        settings::NavigationType::SpaceMouse,
+    ] {
+        for inverted in [false, true] {
+            let mut h = Harness::new();
+            h.app.general_settings.navigation_type = kind;
+            h.app.general_settings.orbit_speed = 1.7;
+            h.app.general_settings.pan_speed = 0.5;
+            h.app.general_settings.invert_orbit = inverted;
+            h.app.general_settings.invert_pan = inverted;
+            h.app.general_settings.reverse_zoom = inverted;
+            h.app.general_settings.space_mouse.invert_orbit = !inverted;
+            h.app.general_settings.space_mouse.invert_pan = !inverted;
+            h.app.general_settings.space_mouse.invert_zoom = !inverted;
+            let direction = if inverted { -1. } else { 1. };
+            let start = h.app.viewport.center();
+            let delta = egui::vec2(12., 8.);
+            h.pointer(start, egui::PointerButton::Middle, true, false);
+            let mut expected = h.app.doc.camera.clone();
+            expected.orbit_around(dv(delta) * (1.7 * direction), DVec3::ZERO);
+            h.frame(
+                vec![egui::Event::PointerMoved(start + delta)],
+                egui::Modifiers::NONE,
+            );
+            assert_eq!(h.app.doc.camera, expected);
+            h.pointer(start + delta, egui::PointerButton::Middle, false, false);
+
+            h.pointer(start, egui::PointerButton::Middle, true, true);
+            let mut expected = h.app.doc.camera.clone();
+            expected.pan(
+                dv(delta) * (0.5 * direction),
+                h.app.viewport.height() as f64,
+            );
+            h.frame(
+                vec![egui::Event::PointerMoved(start + delta)],
+                egui::Modifiers::SHIFT,
+            );
+            assert_eq!(h.app.doc.camera, expected);
+            h.pointer(start + delta, egui::PointerButton::Middle, false, true);
+
+            let distance = h.app.doc.camera.distance;
+            h.frame(
+                vec![
+                    egui::Event::PointerMoved(start),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                        delta: egui::vec2(0., 60.),
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                egui::Modifiers::NONE,
+            );
+            assert_ne!(h.app.doc.camera.distance, distance);
+            assert_eq!(h.app.doc.camera.distance > distance, inverted);
+        }
+    }
+}
+
+#[test]
 fn navigation_clears_hover_and_freezes_tool_inference_until_release() {
     for tool in [
         Tool::Select,
