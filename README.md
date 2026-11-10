@@ -43,9 +43,11 @@ For instructions on using BenchUp, see the [user documentation](docs/README.md).
 - Rust 1.95 or newer, installed with rustup; the repository was checked with Rust 1.97.1.
 - A C/C++17 compiler for the native SketchUp reader (GCC/Clang on Linux, Xcode Clang on macOS, or MSVC on Windows). Browser builds do not require it.
 - A GPU/driver supported by wgpu. The browser prefers WebGPU and falls back to WebGL2.
-- On Linux, development libraries for X11/Wayland and xkbcommon. For Debian/Ubuntu: `sudo apt install build-essential pkg-config libx11-dev libxcb1-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev`.
-- On Windows, the MSVC Rust toolchain and Visual Studio C++ build tools.
-- On macOS, Xcode Command Line Tools.
+- On Linux, development libraries for X11/Wayland, xkbcommon, and libudev. For Debian/Ubuntu: `sudo apt install build-essential pkg-config libx11-dev libxcb1-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libudev-dev`.
+- On Windows, the MSVC Rust toolchain and Visual Studio Build Tools with the **Desktop development with C++** workload and a Windows SDK. SpaceMouse support uses Windows system APIs; no separate HIDAPI or libusb installation is required.
+- On macOS, Xcode Command Line Tools (`xcode-select --install`), including Clang and the macOS SDK. SpaceMouse support uses the system IOKit, CoreFoundation, and AppKit frameworks; no Homebrew HIDAPI or libusb package is required.
+
+Linux desktop builds use libudev through the `hidapi` dependency to discover SpaceMouse devices. The `libudev-dev` package supplies the headers and `pkg-config` metadata needed to compile this support, even if no SpaceMouse is connected. If compilation fails with `Unable to find libudev` or `Package 'libudev' not found`, install `libudev-dev` and retry. Browser builds do not use `hidapi`. See the upstream [HIDAPI build prerequisites](https://github.com/libusb/hidapi/blob/master/BUILD.md#prerequisites).
 
 ## Run on desktop
 

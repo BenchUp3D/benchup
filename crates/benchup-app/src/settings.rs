@@ -138,16 +138,36 @@ pub(super) const TOOLS: [(Tool, &str); 17] = [
 const DEFAULT_LANGUAGE: &str = "en";
 const LANGUAGES: &[(&str, &str)] = &[(DEFAULT_LANGUAGE, tr!("settings.language_english"))];
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub(super) enum NavigationType {
+    #[default]
+    MouseTrackpad,
+    SpaceMouse,
+}
+
+impl NavigationType {
+    fn label(self) -> &'static str {
+        match self {
+            Self::MouseTrackpad => "Mouse/Trackpad",
+            Self::SpaceMouse => "3D Mouse",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(super) struct GeneralSettings {
     pub section: Section,
     pub language: String,
+    pub navigation_type: NavigationType,
     pub orbit_speed: f64,
     pub pan_speed: f64,
     pub zoom_speed: f64,
     pub reverse_zoom: bool,
+    pub invert_orbit: bool,
+    pub invert_pan: bool,
     pub walk: walk::Settings,
+    pub space_mouse: space_mouse::Settings,
     pub reset_axis_locks_on_action: bool,
     pub auto_group_new_shapes: bool,
     pub show_fps: bool,
@@ -161,11 +181,15 @@ impl Default for GeneralSettings {
         Self {
             section: Section::default(),
             language: DEFAULT_LANGUAGE.into(),
+            navigation_type: NavigationType::default(),
             orbit_speed: 1.,
             pan_speed: 1.,
             zoom_speed: 1.,
             reverse_zoom: false,
+            invert_orbit: false,
+            invert_pan: false,
             walk: walk::Settings::default(),
+            space_mouse: space_mouse::Settings::default(),
             reset_axis_locks_on_action: true,
             auto_group_new_shapes: false,
             show_fps: false,
@@ -177,8 +201,54 @@ impl Default for GeneralSettings {
 }
 
 impl GeneralSettings {
+    // Keep the existing serialized fields and input-device bindings independent.
+    // The selector only chooses which device's settings are being edited.
+    fn navigation_speeds_mut(&mut self) -> [&mut f64; 3] {
+        match self.navigation_type {
+            NavigationType::MouseTrackpad => [
+                &mut self.orbit_speed,
+                &mut self.pan_speed,
+                &mut self.zoom_speed,
+            ],
+            NavigationType::SpaceMouse => [
+                &mut self.space_mouse.orbit_speed,
+                &mut self.space_mouse.pan_speed,
+                &mut self.space_mouse.zoom_speed,
+            ],
+        }
+    }
+
+    fn navigation_inversions_mut(&mut self) -> [&mut bool; 3] {
+        match self.navigation_type {
+            NavigationType::MouseTrackpad => [
+                &mut self.invert_orbit,
+                &mut self.invert_pan,
+                // Preserve the existing saved reverse-scroll preference.
+                &mut self.reverse_zoom,
+            ],
+            NavigationType::SpaceMouse => [
+                &mut self.space_mouse.invert_orbit,
+                &mut self.space_mouse.invert_pan,
+                &mut self.space_mouse.invert_zoom,
+            ],
+        }
+    }
+
+    pub(super) fn mouse_orbit_speed(&self) -> f64 {
+        self.orbit_speed * if self.invert_orbit { -1. } else { 1. }
+    }
+
+    pub(super) fn mouse_pan_speed(&self) -> f64 {
+        self.pan_speed * if self.invert_pan { -1. } else { 1. }
+    }
+
+    pub(super) fn mouse_zoom_speed(&self) -> f64 {
+        self.zoom_speed * if self.reverse_zoom { -1. } else { 1. }
+    }
+
     pub(super) fn normalize(&mut self) {
         self.walk.normalize();
+        self.space_mouse.normalize();
         self.stock.normalize();
         if !LANGUAGES.iter().any(|&(code, _)| code == self.language.as_str()) {
             self.language = DEFAULT_LANGUAGE.into();
@@ -251,6 +321,84 @@ impl BenchUpApp {
     pub(super) fn inference_color(&self) -> Color32 {
         let [r, g, b] = self.doc.display.inference_color;
         Color32::from_rgb(r, g, b)
+    }
+
+    fn navigation_settings_contents(&mut self, ui: &mut egui::Ui) {
+        let navigation_type = &mut self.general_settings.navigation_type;
+        inspector_field(ui, "settings/navigation/type", "Navigation type", |ui| {
+            egui::ComboBox::from_id_salt("settings_navigation_type")
+                .width(ui.available_width())
+                .selected_text(navigation_type.label())
+                .show_ui(ui, |ui| {
+                    for kind in [NavigationType::MouseTrackpad, NavigationType::SpaceMouse] {
+                        ui.selectable_value(navigation_type, kind, kind.label());
+                    }
+                })
+                .response
+        });
+        ui.text_weak("Adjust navigation sensitivity for the selected device.");
+        let navigation_type = self.general_settings.navigation_type;
+        if navigation_type == NavigationType::SpaceMouse {
+            let space_mouse = &mut self.general_settings.space_mouse;
+            ui.checkbox(&mut space_mouse.enabled, "Enable 3D Mouse");
+            #[cfg(target_arch = "wasm32")]
+            ui.add_enabled_ui(space_mouse.enabled, |ui| {
+                if ui
+                    .add_enabled(
+                        self.space_mouse.browser_can_connect(),
+                        egui::Button::new("Connect 3D Mouse"),
+                    )
+                    .clicked()
+                {
+                    self.space_mouse.connect_browser();
+                }
+            });
+            let status = if !space_mouse.enabled {
+                "Disabled".to_owned()
+            } else {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.space_mouse.browser_status()
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    match self.space_mouse.device() {
+                        Some(device) => format!("Connected: {device}"),
+                        None => "No device detected".to_owned(),
+                    }
+                }
+            };
+            ui.text_weak(status);
+            ui.text_weak("Tilt or twist the cap to orbit, slide it to pan, and push or pull it to zoom. The Fit button frames the model.");
+        }
+        let enabled = navigation_type == NavigationType::MouseTrackpad
+            || self.general_settings.space_mouse.enabled;
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.push_id(("settings/navigation/inversions", navigation_type), |ui| {
+                for (label, value) in ["Invert tilt and twist", "Invert pan", "Invert zoom"]
+                    .into_iter()
+                    .zip(self.general_settings.navigation_inversions_mut())
+                {
+                    ui.checkbox(value, label);
+                }
+            });
+            // Separate widget state prevents an in-progress slider edit from
+            // carrying over when the selected device changes.
+            ui.push_id(("settings/navigation/speeds", navigation_type), |ui| {
+                for ((key, label), value) in [
+                    ("orbit", tr!("settings.orbit_speed")),
+                    ("pan", tr!("settings.pan_speed")),
+                    ("zoom", tr!("settings.zoom_speed")),
+                ]
+                .into_iter()
+                .zip(self.general_settings.navigation_speeds_mut())
+                {
+                    inspector_field(ui, key, label, |ui| {
+                        ui.add(egui::Slider::new(value, 0.1..=4.).suffix(tr!("settings.format")))
+                    });
+                }
+            });
+        });
     }
 
     pub(super) fn settings_window(&mut self, ctx: &egui::Context) {
@@ -453,18 +601,7 @@ impl BenchUpApp {
                 }
             }
             Section::Navigation => {
-                ui.text_weak(tr!("settings.adjust_mouse_and_trackpad_navigation_sensitivity"));
-                for (label, value) in [
-                    (tr!("settings.orbit_speed"), &mut self.general_settings.orbit_speed),
-                    (tr!("settings.pan_speed"), &mut self.general_settings.pan_speed),
-                    (tr!("settings.zoom_speed"), &mut self.general_settings.zoom_speed),
-                ] {
-                    ui.add(egui::Slider::new(value, 0.1..=4.).text(label).suffix(tr!("settings.format")));
-                }
-                ui.checkbox(
-                    &mut self.general_settings.reverse_zoom,
-                    tr!("settings.reverse_scroll_zoom"),
-                );
+                self.navigation_settings_contents(ui);
                 ui.separator();
                 ui.text_label(RichText::new("Walking person").strong());
                 inspector_field(ui, "walk_speed", "Walking speed", |ui| {
@@ -817,6 +954,103 @@ mod tests {
         assert_eq!(settings.orbit_speed, 1.);
         let old: GeneralSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(old, GeneralSettings::default());
+    }
+
+    #[test]
+    fn navigation_controls_edit_separate_device_values_when_switching() {
+        let mut settings = GeneralSettings::default();
+        for (kind, values, inversions) in [
+            (
+                NavigationType::MouseTrackpad,
+                [2., 0.5, 3.],
+                [true, false, true],
+            ),
+            (
+                NavigationType::SpaceMouse,
+                [0.4, 2.5, 1.5],
+                [false, true, false],
+            ),
+        ] {
+            settings.navigation_type = kind;
+            for (speed, value) in settings.navigation_speeds_mut().into_iter().zip(values) {
+                *speed = value;
+            }
+            for (invert, value) in settings
+                .navigation_inversions_mut()
+                .into_iter()
+                .zip(inversions)
+            {
+                *invert = value;
+            }
+        }
+        for (kind, expected, inversions) in [
+            (
+                NavigationType::MouseTrackpad,
+                [2., 0.5, 3.],
+                [true, false, true],
+            ),
+            (
+                NavigationType::SpaceMouse,
+                [0.4, 2.5, 1.5],
+                [false, true, false],
+            ),
+        ] {
+            settings.navigation_type = kind;
+            assert_eq!(
+                settings.navigation_speeds_mut().map(|value| *value),
+                expected
+            );
+            assert_eq!(
+                settings.navigation_inversions_mut().map(|value| *value),
+                inversions
+            );
+        }
+        assert!(settings.space_mouse.enabled);
+    }
+
+    #[test]
+    fn navigation_renders_one_speed_group_and_device_options_above_it() {
+        for kind in [NavigationType::MouseTrackpad, NavigationType::SpaceMouse] {
+            let ctx = egui::Context::default();
+            let mut app = BenchUpApp::with_document(Document::default(), None, true);
+            app.general_settings.navigation_type = kind;
+            let mut output = ctx.run_test_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(900., 900.))),
+                    ..Default::default()
+                },
+                |ui| app.navigation_settings_contents(ui),
+            );
+            let text = rendered_text(&output.shapes);
+            output.textures_delta.clear();
+            assert!(text.iter().any(|label| label == "Navigation type"));
+            assert!(text.iter().any(|label| label == kind.label()));
+            for label in ["Orbit speed", "Pan speed", "Zoom speed"] {
+                assert_eq!(
+                    text.iter().filter(|value| value.as_str() == label).count(),
+                    1
+                );
+            }
+            assert!(!text.iter().any(|label| label == "Reverse scroll zoom"));
+            assert!(!text.iter().any(|label| label == "Navigate with a 3D mouse"));
+            assert_eq!(
+                text.iter().any(|label| label == "Enable 3D Mouse"),
+                kind == NavigationType::SpaceMouse
+            );
+            for label in ["Invert tilt and twist", "Invert pan", "Invert zoom"] {
+                assert_eq!(
+                    text.iter().filter(|value| value.as_str() == label).count(),
+                    1
+                );
+            }
+            let option = "Invert zoom";
+            let option_index = text.iter().position(|label| label == option).unwrap();
+            let orbit_index = text
+                .iter()
+                .position(|label| label == "Orbit speed")
+                .unwrap();
+            assert!(option_index < orbit_index);
+        }
     }
 
     #[test]

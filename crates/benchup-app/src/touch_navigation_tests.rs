@@ -48,30 +48,39 @@ fn touch(id: u64, phase: egui::TouchPhase, pos: Pos2) -> egui::Event {
 
 #[test]
 fn pinch_zooms_and_parallel_two_finger_motion_matches_shift_orbit_pan() {
-    use egui::TouchPhase::*;
-    let mut h = UiHarness::new();
-    let center = h.app.viewport.center();
-    let a = center - egui::vec2(50., 0.);
-    let b = center + egui::vec2(50., 0.);
-    let before = h.app.doc.camera.clone();
-    h.frame(vec![touch(1, Start, a), touch(2, Start, b)]);
-    h.frame(vec![
-        touch(1, Move, a - egui::vec2(50., 0.)),
-        touch(2, Move, b + egui::vec2(50., 0.)),
-    ]);
-    let zoomed = h.app.doc.camera.clone();
-    assert!((zoomed.distance - before.distance / 2.).abs() < 1e-5);
-    let delta = egui::vec2(20., 15.);
-    h.frame(vec![
-        touch(1, Move, a - egui::vec2(50., 0.) + delta),
-        touch(2, Move, b + egui::vec2(50., 0.) + delta),
-    ]);
-    let mut expected = zoomed;
-    expected.pan(
-        dv(delta) * h.app.general_settings.pan_speed,
-        h.app.viewport.height() as f64,
-    );
-    assert_eq!(h.app.doc.camera, expected);
+    for inverted in [false, true] {
+        use egui::TouchPhase::*;
+        let mut h = UiHarness::new();
+        h.app.general_settings.invert_pan = inverted;
+        h.app.general_settings.reverse_zoom = inverted;
+        let center = h.app.viewport.center();
+        let a = center - egui::vec2(50., 0.);
+        let b = center + egui::vec2(50., 0.);
+        let before = h.app.doc.camera.clone();
+        h.frame(vec![touch(1, Start, a), touch(2, Start, b)]);
+        h.frame(vec![
+            touch(1, Move, a - egui::vec2(50., 0.)),
+            touch(2, Move, b + egui::vec2(50., 0.)),
+        ]);
+        let zoomed = h.app.doc.camera.clone();
+        let expected_distance = if inverted {
+            before.distance * 2.
+        } else {
+            before.distance / 2.
+        };
+        assert!((zoomed.distance - expected_distance).abs() < 1e-5);
+        let delta = egui::vec2(20., 15.);
+        h.frame(vec![
+            touch(1, Move, a - egui::vec2(50., 0.) + delta),
+            touch(2, Move, b + egui::vec2(50., 0.) + delta),
+        ]);
+        let mut expected = zoomed;
+        expected.pan(
+            dv(delta) * h.app.general_settings.pan_speed * if inverted { -1. } else { 1. },
+            h.app.viewport.height() as f64,
+        );
+        assert_eq!(h.app.doc.camera, expected);
+    }
 }
 
 #[test]

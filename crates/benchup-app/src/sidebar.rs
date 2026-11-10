@@ -2668,6 +2668,114 @@ mod preference_tests {
     }
 
     #[test]
+    fn navigation_type_defaults_without_changing_legacy_device_settings() {
+        let old: InspectorPreferences = serde_json::from_str(
+            r#"{"general":{"orbit_speed":2.0,"pan_speed":0.5,"zoom_speed":3.0,"space_mouse":{"orbit_speed":0.4,"pan_speed":2.5,"zoom_speed":1.5}}}"#,
+        ).unwrap();
+        assert_eq!(
+            old.general.navigation_type,
+            settings::NavigationType::MouseTrackpad
+        );
+        assert_eq!(
+            (
+                old.general.orbit_speed,
+                old.general.pan_speed,
+                old.general.zoom_speed
+            ),
+            (2., 0.5, 3.)
+        );
+        assert_eq!(
+            (
+                old.general.space_mouse.orbit_speed,
+                old.general.space_mouse.pan_speed,
+                old.general.space_mouse.zoom_speed
+            ),
+            (0.4, 2.5, 1.5)
+        );
+        let defaults: InspectorPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            defaults.general.navigation_type,
+            settings::NavigationType::MouseTrackpad
+        );
+    }
+
+    #[test]
+    fn mouse_inversions_default_and_preserve_saved_reverse_zoom() {
+        for json in ["{}", r#"{"general":{"reverse_zoom":true}}"#] {
+            let old: InspectorPreferences = serde_json::from_str(json).unwrap();
+            assert!(!old.general.invert_orbit);
+            assert!(!old.general.invert_pan);
+            assert_eq!(old.general.reverse_zoom, json != "{}");
+            assert!(!old.general.space_mouse.invert_orbit);
+            assert!(!old.general.space_mouse.invert_pan);
+            assert!(!old.general.space_mouse.invert_zoom);
+        }
+    }
+
+    #[test]
+    fn navigation_type_and_both_device_values_save_without_a_model_edit() {
+        let ctx = egui::Context::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        let mut storage = SavedPreferences::default();
+        app.general_settings.orbit_speed = 2.;
+        app.general_settings.pan_speed = 0.5;
+        app.general_settings.zoom_speed = 3.;
+        app.general_settings.reverse_zoom = true;
+        app.general_settings.invert_orbit = true;
+        app.general_settings.invert_pan = false;
+        app.general_settings.space_mouse = space_mouse::Settings {
+            orbit_speed: 0.4,
+            pan_speed: 2.5,
+            zoom_speed: 1.5,
+            invert_orbit: false,
+            invert_pan: true,
+            invert_zoom: false,
+            ..Default::default()
+        };
+        for kind in [
+            settings::NavigationType::SpaceMouse,
+            settings::NavigationType::MouseTrackpad,
+        ] {
+            app.general_settings.navigation_type = kind;
+            storage.flushed = false;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            assert!(app.dirty_since.is_none());
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+            assert_eq!(restored.general_settings, app.general_settings);
+            restored.replace_project(Document::default(), None, &ctx);
+            assert_eq!(restored.general_settings, app.general_settings);
+        }
+    }
+
+    #[test]
+    fn space_mouse_settings_default_and_save_without_a_model_edit() {
+        let old: InspectorPreferences = serde_json::from_str(r#"{"general":{"orbit_speed":2.0}}"#).unwrap();
+        assert_eq!(old.general.space_mouse, space_mouse::Settings::default());
+        assert!(old.general.space_mouse.enabled);
+
+        let ctx = egui::Context::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        let mut storage = SavedPreferences::default();
+        app.general_settings.space_mouse = space_mouse::Settings {
+            enabled: false,
+            orbit_speed: 2.5,
+            invert_zoom: true,
+            ..Default::default()
+        };
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        assert!(storage.flushed);
+        assert!(!app.project.modified);
+        assert!(app.dirty_since.is_none());
+
+        let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        assert_eq!(restored.general_settings.space_mouse, app.general_settings.space_mouse);
+    }
+
+    #[test]
     fn currency_changes_save_immediately_and_apply_after_switching_projects() {
         let ctx = egui::Context::default();
         let mut app = BenchUpApp::with_document(Document::default(), None, true);
