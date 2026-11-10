@@ -440,6 +440,7 @@ dependencies = [
  "tempfile",
  "tungstenite",
  "ureq",
+ "uuid",
  "velopack",
  "wasm-bindgen",
  "wasm-bindgen-futures",

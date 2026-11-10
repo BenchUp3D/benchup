@@ -159,6 +159,8 @@ pub(super) struct AgentLink {
     pub token: Option<String>,
     pub token_error: Option<String>,
     token_checked: bool,
+    /// Makes tokens; replaced in tests to simulate a missing RNG.
+    generator: fn() -> Result<String, String>,
     /// Session-only: revealing a secret is never remembered.
     pub show_token: bool,
     active: Option<Active>,
@@ -174,54 +176,12 @@ impl Default for AgentLink {
     }
 }
 
-/// A random version-4 UUID, from the OS (native) or the browser's crypto.
-fn random_bytes() -> [u8; 16] {
-    #[cfg(target_arch = "wasm32")]
-    {
-        use eframe::wasm_bindgen::JsCast as _;
-        let array = js_sys::Uint8Array::new_with_length(16);
-        let crypto = js_sys::Reflect::get(&js_sys::global(), &"crypto".into()).ok();
-        let filled = crypto.is_some_and(|crypto| {
-            js_sys::Reflect::get(&crypto, &"getRandomValues".into())
-                .ok()
-                .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
-                .is_some_and(|f| f.call1(&crypto, &array).is_ok())
-        });
-        let mut bytes = [0u8; 16];
-        array.copy_to(&mut bytes);
-        if !filled {
-            // No Web Crypto: refuse to make a guessable token.
-            bytes = [0; 16];
-        }
-        bytes
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use std::{
-            collections::hash_map::RandomState,
-            hash::{BuildHasher, Hasher},
-            io::Read,
-        };
-        let mut bytes = [0u8; 16];
-        #[cfg(unix)]
-        if std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes)).is_ok() {
-            return bytes;
-        }
-        // std seeds every `RandomState` from the OS.
-        for half in bytes.chunks_mut(8) {
-            let mut hasher = RandomState::new().build_hasher();
-            hasher.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
-            half.copy_from_slice(&hasher.finish().to_le_bytes());
-        }
-        bytes
-    }
-}
-pub(super) fn new_token() -> String {
-    let mut b = random_bytes();
-    b[6] = (b[6] & 0x0f) | 0x40;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    let hex: String = b.iter().map(|byte| format!("{byte:02x}")).collect();
-    format!("{}-{}-{}-{}-{}", &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..])
+/// A new random version-4 UUID from the OS (native) or Web Crypto (browser).
+/// If no secure randomness is available no token is made; it is never guessable.
+pub(super) fn new_token() -> Result<String, String> {
+    // `uuid` panics rather than return weak bytes when the system RNG fails.
+    std::panic::catch_unwind(|| uuid::Uuid::new_v4().to_string())
+        .map_err(|_| tr!("agent_link.error.no_randomness").to_owned())
 }
 
 /// `claude mcp add` command for this token (and port, when not the default).
@@ -248,6 +208,7 @@ impl AgentLink {
             token: None,
             token_error: None,
             token_checked: false,
+            generator: new_token,
             show_token: false,
             active: None,
             connector,
@@ -264,21 +225,26 @@ impl AgentLink {
             self.token = credentials::load(TOKEN_FILE, TOKEN_STORAGE);
         }
     }
-    /// The saved token, or a new one saved now.
-    fn ensure_token(&mut self) -> String {
+    /// The saved token, or a new one saved now; `None` if none could be made
+    /// (the reason is in `token_error`).
+    fn ensure_token(&mut self) -> Option<String> {
         self.load_token();
-        if let Some(token) = &self.token {
-            return token.clone();
+        if self.token.is_none() {
+            self.regenerate();
         }
-        self.regenerate();
-        self.token.clone().unwrap_or_default()
+        self.token.clone()
     }
-    /// Replace the token. Connections made with the old one are dropped.
+    /// Replace the token. Connections made with the old one are dropped. If a
+    /// new token cannot be made the old one stays and `token_error` says why.
     pub(super) fn regenerate(&mut self) {
-        let token = new_token();
-        self.token_error = credentials::save(TOKEN_FILE, TOKEN_STORAGE, &token).err();
-        self.token_checked = true;
-        self.token = Some(token);
+        match (self.generator)() {
+            Ok(token) => {
+                self.token_error = credentials::save(TOKEN_FILE, TOKEN_STORAGE, &token).err();
+                self.token_checked = true;
+                self.token = Some(token);
+            }
+            Err(error) => self.token_error = Some(error),
+        }
     }
 
     /// Test hook: use this token without touching the credentials file.
@@ -336,7 +302,12 @@ impl AgentLink {
             self.retry_at = 0.;
             return;
         }
-        let token = self.ensure_token();
+        let Some(token) = self.ensure_token() else {
+            // No secure token, so nothing connects.
+            self.stop();
+            self.status = Status::Error(self.token_error.clone().unwrap_or_default());
+            return;
+        };
         if self.active.as_ref().is_some_and(|a| a.port != prefs.port || a.token != token) {
             self.stop();
             self.backoff = BACKOFF_START;

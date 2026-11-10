@@ -565,7 +565,7 @@ fn the_pairing_token_never_reaches_preferences_storage_or_the_project() {
 
 #[test]
 fn tokens_are_version_4_uuids_and_snippets_carry_the_token_and_port() {
-    let (a, b) = (new_token(), new_token());
+    let (a, b) = (new_token().unwrap(), new_token().unwrap());
     assert_ne!(a, b);
     for token in [&a, &b] {
         let parts: Vec<_> = token.split('-').collect();
@@ -590,7 +590,7 @@ fn the_token_is_saved_privately_once_and_regenerated_on_request() {
         let mut link = AgentLink::default();
         link.load_token();
         assert!(link.token.is_none(), "viewing never creates a token");
-        let first = link.ensure_token();
+        let first = link.ensure_token().unwrap();
         let dir = crate::storage::data_dir().unwrap();
         assert_eq!(std::fs::read_to_string(dir.join(TOKEN_FILE)).unwrap().trim(), first);
         #[cfg(unix)]
@@ -599,10 +599,10 @@ fn the_token_is_saved_privately_once_and_regenerated_on_request() {
             assert_eq!(std::fs::metadata(dir.join(TOKEN_FILE)).unwrap().permissions().mode() & 0o777, 0o600);
         }
         let mut again = AgentLink::default();
-        assert_eq!(again.ensure_token(), first);
+        assert_eq!(again.ensure_token().unwrap(), first);
         again.regenerate();
         assert_ne!(again.token.as_deref(), Some(first.as_str()));
-        assert_eq!(AgentLink::default().ensure_token(), again.token.unwrap());
+        assert_eq!(AgentLink::default().ensure_token(), again.token);
     });
 }
 
@@ -666,4 +666,22 @@ fn the_agent_link_works_with_mira_off_and_records_no_transcript() {
         app.undo(&ctx, false);
         assert!(app.doc.model.objects.is_empty());
     });
+}
+
+/// Without a token nothing connects, and the reason is shown.
+#[test]
+fn no_secure_randomness_means_no_token_no_connection_and_a_clear_error() {
+    let (bridge, ctx) = (FakeBridge::default(), egui::Context::default());
+    let mut app = app_with(&bridge);
+    app.agent_link.token = None;
+    app.agent_link.generator = || Err("no randomness".into());
+    app.poll_agent_link(&ctx);
+    assert_eq!(bridge.connects(), 0);
+    assert_eq!(app.agent_link.status, Status::Error("no randomness".into()));
+    assert!(app.agent_link.token.is_none());
+    // Regenerating cannot replace a good token with nothing.
+    app.agent_link.token = Some(TOKEN.into());
+    app.agent_link.regenerate();
+    assert_eq!(app.agent_link.token.as_deref(), Some(TOKEN));
+    assert_eq!(app.agent_link.token_error.as_deref(), Some("no randomness"));
 }

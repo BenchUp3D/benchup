@@ -2055,5 +2055,6 @@
   "settings.add_on_mira_help": "The in-app design assistant. It sends nothing until you connect a server.",
   "settings.add_on_mira_toggle": "Build with MIRA",
   "settings.add_on_mira_toggle_help": "Show the MIRA panel, menu items and shortcut. Turning it off stops a running request and keeps what it already changed.",
-  "settings.no_add_ons": "No add-ons are included in this build."
+  "settings.no_add_ons": "No add-ons are included in this build.",
+  "agent_link.error.no_randomness": "This device could not provide secure random numbers, so no pairing token was created"
 }

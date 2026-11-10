@@ -16,6 +16,7 @@ agent-link = []
 benchup-core = { path = "../benchup-core" }
 serde.workspace = true
 serde_json.workspace = true
+uuid = { version = "1", features = ["v4", "js"] }
 benchup-tools = { path = "../benchup-tools" }
 skrifa = "0.44"
 glam.workspace = true
