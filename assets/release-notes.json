@@ -1,5 +1,43 @@
 [
   {
+    "version": "0.6.7",
+    "date": "2026-11-10",
+    "title": "Reference images, scale handles, and 3D Mouse navigation",
+    "sections": [
+      {
+        "title": "Reference images",
+        "changes": [
+          "Place PNG, JPEG, and WebP reference images by drawing a rectangle, with snapping, axis locks, and precise dimensions. Images are embedded in the project.",
+          "Adjust image fit, opacity, brightness, contrast, and placement offset, or replace an image while keeping its placement. Image defaults and inspector sections are remembered.",
+          "Preview image appearance adjustments smoothly, with undo and redo recorded when the adjustment finishes."
+        ]
+      },
+      {
+        "title": "Modeling and navigation",
+        "changes": [
+          "Resize selections with visible scale handles for individual axes, planes, or uniform scaling, with GPU-accelerated previews.",
+          "Navigate with a 3Dconnexion SpaceMouse on desktop or through WebHID in supported browsers. Connect from Settings, adjust orbit, pan, zoom, and inversion, and use the Fit button to frame the model.",
+          "Find mouse and 3D Mouse preferences together in the navigation settings, with remembered speeds and controls.",
+          "See both the signed change and total depth while using Push/Pull, and enjoy a cleaner left toolbar without a visible scrollbar."
+        ]
+      },
+      {
+        "title": "Reliability and performance",
+        "changes": [
+          "Keep browser projects in durable IndexedDB storage, with migration from previous browser saves and more reliable autosave for larger projects.",
+          "Restore responsive object selection and split large viewport GPU buffers to stay within device limits.",
+          "Import warped SketchUp faces more reliably by filtering sliver triangles, and improve entity ID remapping during model edits."
+        ]
+      },
+      {
+        "title": "Downloads and website",
+        "changes": [
+          "Download a standalone WebAssembly bundle alongside desktop packages. The website uses the same browser bundle produced for the release."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.6.6",
     "date": "2026-11-08",
     "title": "BenchUp, workshop labels, and faster modeling",
