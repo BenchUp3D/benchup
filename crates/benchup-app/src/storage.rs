@@ -1,4 +1,5 @@
 use benchup_core::Document;
+#[cfg(not(target_arch = "wasm32"))]
 use benchup_core::tr;
 
 use std::{
