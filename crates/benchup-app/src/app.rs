@@ -85,6 +85,24 @@ pub(crate) mod viewport_benchmark;
 #[path = "web_viewport_benchmark.rs"]
 mod web_viewport_benchmark;
 
+#[path = "agent_host.rs"]
+mod agent_host;
+#[path = "addons.rs"]
+mod addons;
+#[cfg(feature = "agent-link")]
+#[path = "agent_link/mod.rs"]
+mod agent_link;
+#[cfg(not(feature = "agent-link"))]
+#[path = "agent_link/stub.rs"]
+mod agent_link;
+#[cfg(feature = "assistant")]
+#[path = "assistant/mod.rs"]
+mod assistant;
+#[cfg(not(feature = "assistant"))]
+#[path = "assistant/stub.rs"]
+mod assistant;
+#[path = "credentials.rs"]
+mod credentials;
 #[path = "fasteners.rs"]
 mod fasteners;
 #[path = "sharing.rs"]
@@ -319,6 +337,9 @@ pub struct BenchUpApp {
     #[cfg(not(target_arch = "wasm32"))]
     viewport_benchmark: Option<viewport_benchmark::Benchmark>,
     account: crate::account::Account,
+    assistant: assistant::Assistant,
+    #[cfg_attr(not(feature = "agent-link"), allow(dead_code))]
+    agent_link: agent_link::AgentLink,
     joinery_geometry: joinery::GeometryCache,
     joinery: joinery::Preferences,
     joinery_dialog: joinery::Dialog,
@@ -328,6 +349,11 @@ pub struct BenchUpApp {
     #[cfg(not(target_arch = "wasm32"))]
     updates: crate::updates::Updater,
     doc: Document,
+    /// Bumped whenever the open document is replaced or changes identity
+    /// (new, open, close, recovery, shared update), so queued agent calls
+    /// can tell the project changed under them.
+    #[cfg_attr(not(feature = "agent-link"), allow(dead_code))]
+    doc_epoch: u64,
     project: projects::Project,
     screenshot: screenshot_dialog::ScreenshotDialog,
     screenshot_gpu: Option<(eframe::wgpu::Device, eframe::wgpu::Queue)>,
@@ -500,6 +526,9 @@ impl BenchUpApp {
             #[cfg(not(target_arch = "wasm32"))]
             updates: crate::updates::Updater::default(),
             account: Default::default(),
+            assistant: Default::default(),
+            agent_link: Default::default(),
+            doc_epoch: 0,
             joinery_geometry: Default::default(),
             joinery: Default::default(),
             joinery_dialog: Default::default(),
@@ -751,11 +780,23 @@ impl BenchUpApp {
         }
     }
     fn finish_edit(&mut self, label: &str, before: Model, ctx: &egui::Context) {
+        self.commit_edit(label, before, ctx);
+    }
+    /// Like `finish_edit`, and says whether the edit was recorded in the
+    /// history. A refused edit is rolled back and returns `false`.
+    fn commit_edit(&mut self, label: &str, before: Model, ctx: &egui::Context) -> bool {
         let edited = before != self.doc.model;
+        // User edits must not interleave with MIRA's tool calls. The assistant's
+        // own commit runs after its turn has ended, so it is never refused here.
+        if edited && self.assistant.busy() {
+            self.doc.model = before;
+            self.say(ctx, tr!("assistant.busy_blocked"));
+            return false;
+        }
         if edited && !self.shared_edit_allowed(ctx) {
             self.doc.model = before;
             self.say(ctx, self.shared_edit_block_reason(ctx));
-            return;
+            return false;
         }
         if edited {
             self.solid_first = None;
@@ -777,6 +818,7 @@ impl BenchUpApp {
             self.changed(ctx);
             self.persist_edit();
         }
+        edited
     }
     fn undo(&mut self, ctx: &egui::Context, redo: bool) {
         let current = self.doc.history.position();
@@ -799,6 +841,7 @@ impl BenchUpApp {
         }
     }
     fn navigate_history(&mut self, ctx: &egui::Context, target: usize) {
+        if self.assistant.busy() { self.say(ctx, tr!("assistant.busy_blocked")); return; }
         if !self.shared_edit_allowed(ctx) { self.say(ctx, self.shared_edit_block_reason(ctx)); return; }
         self.history_preview = None;
         self.drawing_reference = None;
@@ -979,6 +1022,7 @@ impl BenchUpApp {
         }
     }
     fn new_model(&mut self, ctx: &egui::Context) {
+        self.assistant_stop(ctx);
         let doc = Document {
             snap_to_geometry: self.doc.snap_to_geometry,
             snap_to_axes: self.doc.snap_to_axes,
@@ -2138,6 +2182,16 @@ impl BenchUpApp {
         if self.project.blocked() || self.screenshot.open {
             return;
         }
+        if self.assistant_toggle_shortcut(ctx) {
+            return;
+        }
+        // MIRA owns the model while it works; Escape stops it, nothing else edits.
+        if self.assistant.busy() {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
+                self.assistant_stop(ctx);
+            }
+            return;
+        }
         if self.section_drag.is_some() {
             if ctx.input(|i| i.key_pressed(Key::Escape)) {
                 self.cancel_section_drag(ctx);
@@ -2927,6 +2981,9 @@ impl BenchUpApp {
             )
             .show(ui, |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(agent) = self.agent_status_text() {
+                        ui.text_label(RichText::new(agent).size(12.).color(colors.muted));
+                    }
                     let drawing_orbit = self.drawing_orbit_modifier(ctx.input(|i| i.modifiers));
                     let navigating = self
                         .gesture
@@ -4486,6 +4543,13 @@ impl BenchUpApp {
                         continue;
                     }
                     if self.gesture.is_some() {
+                        continue;
+                    }
+                    // Camera navigation and selecting stay available while MIRA edits.
+                    if self.assistant.busy()
+                        && button == egui::PointerButton::Primary
+                        && !matches!(self.tool, Tool::Select | Tool::Orbit)
+                    {
                         continue;
                     }
                     let kind = if button == egui::PointerButton::Middle
@@ -6409,6 +6473,8 @@ impl eframe::App for BenchUpApp {
         self.account.poll(&ctx);
         self.poll_project(&ctx);
         self.poll_sharing(&ctx);
+        self.poll_assistant(&ctx);
+        self.poll_agent_link(&ctx);
         self.sharing_before_frame(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -6438,6 +6504,8 @@ impl eframe::App for BenchUpApp {
         {
             save_preference(&ctx, storage);
         }
+        self.assistant_busy_banner(&ctx);
+        self.assistant_window(&ctx);
         self.object_creation_window(&ctx);
         self.rename_object_window(&ctx);
         self.connection_sidebar_selection(&ctx);

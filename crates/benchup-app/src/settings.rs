@@ -19,6 +19,8 @@ pub(super) enum Section {
     Diagnostics,
     Rendering,
     Tools,
+    /// Appended: saved layouts store the variant name.
+    AddOns,
 }
 
 impl Section {
@@ -29,10 +31,10 @@ impl Section {
             tr!("settings.materials_estimates"),
             &[Self::StockPricing, Self::SurfaceTreatment],
         ),
-        (tr!("settings.system"), &[Self::Diagnostics, Self::Rendering]),
+        (tr!("settings.system"), &[Self::Diagnostics, Self::Rendering, Self::AddOns]),
     ];
     #[cfg(test)]
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::Units,
         Self::Navigation,
         Self::Shortcuts,
@@ -43,6 +45,7 @@ impl Section {
         Self::Diagnostics,
         Self::Rendering,
         Self::Tools,
+        Self::AddOns,
     ];
     fn label(self) -> &'static str {
         match self {
@@ -56,6 +59,7 @@ impl Section {
             Self::Diagnostics => tr!("settings.diagnostics"),
             Self::Rendering => tr!("settings.rendering"),
             Self::Tools => tr!("settings.tools"),
+            Self::AddOns => tr!("settings.add_ons"),
         }
     }
 
@@ -71,6 +75,7 @@ impl Section {
             Self::Diagnostics => "diagnostics",
             Self::Rendering => "settings_colors",
             Self::Tools => "settings_shortcuts",
+            Self::AddOns => "diagnostics",
         }
     }
 
@@ -173,7 +178,14 @@ pub(super) struct GeneralSettings {
     pub show_fps: bool,
     pub default_units: benchup_core::UnitSettings,
     pub tool_keys: Vec<String>,
+    /// Key of the Ctrl/Cmd+Shift shortcut that toggles Build with MIRA.
+    pub assistant_key: String,
     pub stock: stock_settings::Settings,
+    /// Agent connection add-on: on/off and port. The pairing token is not here.
+    pub agent_link: agent_link::Preferences,
+    /// "Build with MIRA" is on (default). Off hides the panel, menu items and
+    /// shortcut and stops any running turn.
+    pub assistant_enabled: bool,
 }
 
 impl Default for GeneralSettings {
@@ -196,6 +208,9 @@ impl Default for GeneralSettings {
             default_units: Default::default(),
             stock: Default::default(),
             tool_keys: TOOLS.iter().map(|(_, key)| key.to_string()).collect(),
+            assistant_key: "M".into(),
+            agent_link: Default::default(),
+            assistant_enabled: true,
         }
     }
 }
@@ -250,6 +265,7 @@ impl GeneralSettings {
         self.walk.normalize();
         self.space_mouse.normalize();
         self.stock.normalize();
+        self.agent_link.normalize();
         if !LANGUAGES.iter().any(|&(code, _)| code == self.language.as_str()) {
             self.language = DEFAULT_LANGUAGE.into();
         }
@@ -272,6 +288,9 @@ impl GeneralSettings {
                 .unwrap();
             self.tool_keys.push(key.into());
         }
+        if !Self::assistant_key_allowed(&self.assistant_key) {
+            self.assistant_key = Self::default().assistant_key;
+        }
         if self.tool_keys.len() != TOOLS.len()
             || self
                 .tool_keys
@@ -281,6 +300,15 @@ impl GeneralSettings {
         {
             self.tool_keys = Self::default().tool_keys;
         }
+    }
+
+    /// Letters already bound to a Ctrl/Cmd(+Shift) command in the keyboard
+    /// handler: New, Open, Save (as), Undo/Redo, Select all, Cut, Copy, Paste
+    /// (in place), Find. Shift is ignored when those match, so MIRA cannot use them.
+    pub(super) const RESERVED_ASSISTANT_KEYS: [&'static str; 11] = ["A", "C", "F", "N", "O", "S", "V", "X", "Y", "Z", "Space"];
+
+    pub(super) fn assistant_key_allowed(key: &str) -> bool {
+        valid_tool_key(key) && !Self::RESERVED_ASSISTANT_KEYS.contains(&key)
     }
 
     pub(super) fn tool_for_key(&self, key: Key) -> Option<Tool> {
@@ -492,6 +520,7 @@ impl BenchUpApp {
                                     Section::Diagnostics => "settings/diagnostics",
                                     Section::Rendering => "settings/rendering",
                                     Section::Tools => "settings/tools",
+                                    Section::AddOns => "settings/add_ons",
                                 };
                                 let scroll = sidebar::restored_scroll_area(
                                     ui,
@@ -545,6 +574,19 @@ impl BenchUpApp {
 
     fn settings_contents(&mut self, ui: &mut egui::Ui) {
         match self.general_settings.section {
+            Section::AddOns => {
+                if cfg!(feature = "assistant") {
+                    ui.text_strong(tr!("assistant.name"));
+                    ui.text_weak(tr!("settings.add_on_mira_help"));
+                    ui.checkbox(&mut self.general_settings.assistant_enabled, tr!("settings.add_on_mira_toggle"))
+                        .on_hover_text(tr!("settings.add_on_mira_toggle_help"));
+                    ui.add_space(8.);
+                }
+                self.agent_link_settings(ui);
+                if !cfg!(feature = "assistant") && !cfg!(feature = "agent-link") {
+                    ui.text_weak(tr!("settings.no_add_ons"));
+                }
+            }
             Section::Tools => {
                 ui.checkbox(
                     &mut self.general_settings.reset_axis_locks_on_action,
@@ -673,11 +715,42 @@ impl BenchUpApp {
                         }
                     });
                 }
+                let assistant_label = tr!("assistant.name");
+                if self.assistant_available() && assistant_label.to_lowercase().contains(&query) {
+                    matches += 1;
+                    table.row(ui, "settings_assistant_key", |column, ui| {
+                        let rejected_id = egui::Id::NULL.with("settings_assistant_key_rejected");
+                        if column == 0 {
+                            let modifier = if ui.ctx().os() == egui::os::OperatingSystem::Mac { "⌘ Shift" } else { "Ctrl+Shift" };
+                            ui.vertical(|ui| {
+                                ui.text_label(tr!("assistant.shortcut_label", name = assistant_label, modifier = modifier));
+                                if let Some(key) = ui.data(|d| d.get_temp::<String>(rejected_id)) {
+                                    let message = tr!("assistant.shortcut_reserved", key = super::shortcut_input::key_label(&key));
+                                    ui.colored_label(ui.visuals().warn_fg_color, message);
+                                }
+                            });
+                        } else if let Some(key) = shortcut_input(
+                            ui,
+                            "settings_assistant_key_input",
+                            &self.general_settings.assistant_key,
+                            ui.available_width(),
+                        ) {
+                            if GeneralSettings::assistant_key_allowed(&key) {
+                                self.general_settings.assistant_key = key;
+                                ui.data_mut(|d| d.remove_temp::<String>(rejected_id));
+                            } else {
+                                ui.data_mut(|d| d.insert_temp(rejected_id, key));
+                            }
+                        }
+                    });
+                }
                 if matches == 0 {
                     ui.text_weak(tr!("settings.no_tools_match_your_search"));
                 }
                 if ui.button(tr!("settings.restore_default_shortcuts")).clicked() {
-                    self.general_settings.tool_keys = GeneralSettings::default().tool_keys;
+                    let defaults = GeneralSettings::default();
+                    self.general_settings.tool_keys = defaults.tool_keys;
+                    self.general_settings.assistant_key = defaults.assistant_key;
                 }
             }
             Section::Units => {

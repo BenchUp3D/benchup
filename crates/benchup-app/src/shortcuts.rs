@@ -83,14 +83,21 @@ impl BenchUpApp {
                 shortcut_input::key_label(self.general_settings.tool_shortcut(tool)),
             )
         };
+        let mira = self.assistant_available();
         let section = |id, title: &'static str, rows: &[(&'static str, &str)]| Section {
             id,
             title,
             rows: rows
                 .iter()
+                // The MIRA shortcut is only listed while the add-on is on.
+                .filter(|(action, _)| mira || *action != tr!("assistant.name"))
                 .map(|(action, keys)| (*action, (*keys).to_owned()))
                 .collect(),
         };
+        let assistant_keys = format!(
+            "{command} + Shift + {}",
+            shortcut_input::key_label(&self.general_settings.assistant_key)
+        );
         let sections = [
             section(
                 "drawing_measuring",
@@ -279,6 +286,7 @@ impl BenchUpApp {
                         tr!("shortcuts.delete_selection"),
                         tr!("shortcuts.delete_backspace"),
                     ),
+                    (tr!("assistant.name"), assistant_keys.as_str()),
                 ],
             ),
         ];

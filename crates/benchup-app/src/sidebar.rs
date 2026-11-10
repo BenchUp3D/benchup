@@ -11,7 +11,8 @@ mod view_controls;
 
 #[path = "outliner.rs"]
 mod outliner;
-pub(super) use outliner::OutlinerCache;
+#[cfg_attr(not(feature = "assistant"), allow(unused_imports))]
+pub(super) use outliner::{OutlinerCache, OutlinerDrag};
 
 #[path = "inspector_docking.rs"]
 mod docking;
@@ -61,6 +62,7 @@ pub(super) struct InspectorPreferences {
     section_aliases: std::collections::BTreeMap<String, String>,
     scroll_positions: std::collections::BTreeMap<String, [f32; 2]>,
     modal_sizes: std::collections::BTreeMap<String, [f32; 2]>,
+    assistant: assistant::Preferences,
 }
 
 impl Default for InspectorPreferences {
@@ -100,6 +102,7 @@ impl Default for InspectorPreferences {
             section_aliases: Default::default(),
             scroll_positions: Default::default(),
             modal_sizes: Default::default(),
+            assistant: Default::default(),
         }
     }
 }
@@ -564,6 +567,17 @@ pub(super) fn remember_section(ctx: &egui::Context, id: egui::Id, key: &str) {
     }
 }
 
+#[cfg_attr(not(feature = "assistant"), allow(dead_code))]
+pub(super) fn section_open(ctx: &egui::Context, key: &str, default_open: bool) -> bool {
+    ctx.data_mut(|data| {
+        data.get_temp_mut_or_default::<SectionMemory>(section_memory_id())
+            .0
+            .get(key)
+            .copied()
+            .unwrap_or(default_open)
+    })
+}
+
 pub(super) fn set_section_open(ctx: &egui::Context, key: &str, open: bool) {
     ctx.data_mut(|data| {
         let memory = data.get_temp_mut_or_default::<SectionMemory>(section_memory_id());
@@ -598,6 +612,7 @@ impl BenchUpApp {
             *position = valid_scroll_position(*position);
         }
         self.sharing.preferences = preferences.sharing.clone();
+        self.assistant.restore(&preferences.assistant);
         self.account.open = preferences.account_open;
         self.account.menu_open = preferences.account_menu_open;
         self.general_settings = preferences.general.clone();
@@ -699,6 +714,7 @@ impl BenchUpApp {
             joinery: self.joinery.clone(),
             fasteners: self.fasteners.clone(),
             sharing: self.sharing.preferences.clone(),
+            assistant: self.assistant.preferences(),
             account_open: self.account.open,
             account_menu_open: self.account.menu_open,
             general: self.general_settings.clone(),
@@ -812,6 +828,9 @@ pub(super) enum InspectorSection {
     TimeCostEstimates,
     Materials,
     History,
+    // Appended after History so saved layouts keep their order; the legacy
+    // Fasteners variant stays last only to migrate old saves.
+    Assistant,
     // Legacy serialized section retained only to migrate saved layouts.
     Fasteners,
 }
@@ -849,6 +868,7 @@ pub(super) fn restore_order(
         InspectorSection::TimeCostEstimates,
         InspectorSection::Materials,
         InspectorSection::History,
+        InspectorSection::Assistant,
     ] {
         if !order.contains(&section) {
             order.push(section);
@@ -1031,13 +1051,13 @@ mod preference_tests {
         let ctx = egui::Context::default();
         let mut storage = SavedPreferences::default();
         let previous: Vec<_> = InspectorSection::ALL.into_iter()
-            .filter(|section| !matches!(section, InspectorSection::History | InspectorSection::Fasteners)).collect();
+            .filter(|section| !matches!(section, InspectorSection::History | InspectorSection::Assistant | InspectorSection::Fasteners)).collect();
         eframe::set_value(&mut storage, ORDER_PREFERENCE_KEY, &previous);
         let mut app = BenchUpApp::with_document(Document::default(), None, true);
         app.restore_inspector_preferences(&ctx, Some(&storage));
         assert_eq!(&app.inspector_order[..previous.len()], previous.as_slice());
         assert_eq!(app.inspector_order[previous.len()], InspectorSection::History);
-        assert_eq!(app.inspector_order.last(), Some(&InspectorSection::History));
+        assert_eq!(app.inspector_order.last(), Some(&InspectorSection::Assistant));
         let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
             assert_eq!(restored_header_open(ui, "history", true), Some(true));
         });
@@ -3504,11 +3524,12 @@ mod preference_tests {
         let restored = restore_order(Some(&storage));
         assert_eq!(&restored[..previous.len()], previous.as_slice());
         assert_eq!(
-            restored[restored.len() - 3],
+            restored[restored.len() - 4],
             InspectorSection::TimeCostEstimates
         );
-        assert_eq!(restored[restored.len() - 2], InspectorSection::Materials);
-        assert_eq!(restored.last(), Some(&InspectorSection::History));
+        assert_eq!(restored[restored.len() - 3], InspectorSection::Materials);
+        assert_eq!(restored[restored.len() - 2], InspectorSection::History);
+        assert_eq!(restored.last(), Some(&InspectorSection::Assistant));
     }
 
     #[test]
@@ -3531,6 +3552,7 @@ mod preference_tests {
             InspectorSection::TimeCostEstimates,
             InspectorSection::Materials,
             InspectorSection::History,
+            InspectorSection::Assistant,
         ];
         let mut storage = SavedPreferences::default();
         eframe::set_value(&mut storage, ORDER_PREFERENCE_KEY, &original);
@@ -3626,11 +3648,12 @@ mod preference_tests {
         assert_eq!(&restored[..previous.len()], previous.as_slice());
         assert_eq!(restored[previous.len()], InspectorSection::Units);
         assert_eq!(
-            restored[restored.len() - 3],
+            restored[restored.len() - 4],
             InspectorSection::TimeCostEstimates
         );
-        assert_eq!(restored[restored.len() - 2], InspectorSection::Materials);
-        assert_eq!(restored.last(), Some(&InspectorSection::History));
+        assert_eq!(restored[restored.len() - 3], InspectorSection::Materials);
+        assert_eq!(restored[restored.len() - 2], InspectorSection::History);
+        assert_eq!(restored.last(), Some(&InspectorSection::Assistant));
     }
 
     #[test]
@@ -3878,6 +3901,7 @@ mod preference_tests {
                 InspectorSection::TimeCostEstimates,
                 InspectorSection::Materials,
                 InspectorSection::History,
+                InspectorSection::Assistant,
             ]
         );
     }
@@ -4084,7 +4108,7 @@ mod preference_tests {
 }
 
 impl InspectorSection {
-    pub(super) const COUNT: usize = 10;
+    pub(super) const COUNT: usize = 11;
 
     pub(super) const ALL: [Self; Self::COUNT] = [
         Self::EntityInfo,
@@ -4097,6 +4121,7 @@ impl InspectorSection {
         Self::TimeCostEstimates,
         Self::Materials,
         Self::History,
+        Self::Assistant,
     ];
 
     fn default_open(self) -> bool {
@@ -4115,6 +4140,7 @@ impl InspectorSection {
             Self::TimeCostEstimates => tr!("sidebar.time_cost_estimates"),
             Self::Materials => tr!("sidebar.materials"),
             Self::History => tr!("sidebar.history"),
+            Self::Assistant => tr!("assistant.name"),
             Self::Fasteners => tr!("sidebar.automatic_fasteners"),
         }
     }
@@ -4131,6 +4157,7 @@ impl InspectorSection {
             Self::TimeCostEstimates => "time_cost_estimates",
             Self::Materials => "materials",
             Self::History => "history",
+            Self::Assistant => "assistant",
             Self::Fasteners => "connections/fasteners",
         }
     }
@@ -4261,6 +4288,7 @@ fn inspector_icon_color(ui: &egui::Ui, id: &str) -> Color32 {
     let (light, dark) = match icons::section_icon(id) {
         "outliner" => ([48, 111, 173], [131, 185, 239]),
         "history" => ([117, 105, 155], [181, 169, 219]),
+        "assistant" => ([17, 129, 133], [103, 207, 211]),
         "entity_info" => ([17, 129, 133], [103, 207, 211]),
         "units" => ([67, 131, 68], [143, 205, 144]),
         "time_cost_estimates" => ([183, 92, 19], [242, 170, 100]),
@@ -4992,6 +5020,7 @@ impl BenchUpApp {
             ui.ctx().request_repaint();
         }
         ui.separator();
+        self.assistant_view_menu_item(ui);
         self.sections_menu(ui);
     }
 
@@ -5187,5 +5216,83 @@ mod face_center_preference_tests {
         assert!(!restored.snap_to_face_center);
         let older:SnappingPreferences=serde_json::from_str(r#"{"geometry":true,"faces":false}"#).unwrap();
         assert!(older.face_centers);
+    }
+}
+
+#[cfg(test)]
+mod add_on_preference_tests {
+    use super::*;
+    use crate::app::addons::{AgentPreferences, AssistantPreferences, WindowPreferences};
+    #[derive(Default)]
+    struct Saved(std::collections::BTreeMap<String, String>);
+    impl eframe::Storage for Saved {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.into(), value);
+        }
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+        fn flush(&mut self) {}
+    }
+
+    #[test]
+    fn add_on_toggles_default_on_and_off_and_load_from_older_settings() {
+        let defaults = settings::GeneralSettings::default();
+        assert!(defaults.assistant_enabled, "Build with MIRA is on by default");
+        assert!(!defaults.agent_link.enabled, "Agent connection is off by default");
+        // Settings saved before the toggles existed.
+        let old: settings::GeneralSettings = serde_json::from_str(r#"{"show_fps":true}"#).unwrap();
+        assert!(old.assistant_enabled && !old.agent_link.enabled && old.show_fps);
+        let off: settings::GeneralSettings = serde_json::from_str(r#"{"assistant_enabled":false}"#).unwrap();
+        assert!(!off.assistant_enabled);
+    }
+
+    #[test]
+    fn add_on_toggles_save_without_a_model_edit_and_restore() {
+        let ctx = egui::Context::default();
+        let mut storage = Saved::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        app.general_settings.assistant_enabled = false;
+        app.general_settings.agent_link.enabled = true;
+        app.general_settings.section = settings::Section::AddOns;
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        assert!(!app.project.modified);
+        let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        assert!(!restored.general_settings.assistant_enabled);
+        assert!(restored.general_settings.agent_link.enabled);
+        assert_eq!(restored.general_settings.section, settings::Section::AddOns);
+    }
+
+    /// Whatever features are compiled in, saved add-on preferences survive a
+    /// load and save: a build without an add-on must not erase them.
+    #[test]
+    fn saved_add_on_preferences_round_trip_in_every_build() {
+        let ctx = egui::Context::default();
+        let assistant = AssistantPreferences {
+            base_url: "https://example.org/v1".into(),
+            model: "model-1".into(),
+            include_selection: false,
+            privacy_dismissed: true,
+            window: WindowPreferences { detached: true, position: Some([10., 20.]), size: Some([500., 600.]) },
+        };
+        let agent = AgentPreferences { enabled: true, port: 51000 };
+        let mut storage = Saved::default();
+        let mut first = BenchUpApp::with_document(Document::default(), None, true);
+        first.assistant.restore(&assistant);
+        first.general_settings.agent_link = agent.clone();
+        first.persist_inspector_changes(&ctx, Some(&mut storage), true);
+        let mut second = BenchUpApp::with_document(Document::default(), None, true);
+        second.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        // Saving again without touching them keeps them.
+        let mut again = Saved::default();
+        second.persist_inspector_changes(&ctx, Some(&mut again), true);
+        let mut third = BenchUpApp::with_document(Document::default(), None, true);
+        third.restore_inspector_preferences(&egui::Context::default(), Some(&again));
+        assert_eq!(third.assistant.preferences(), assistant);
+        assert_eq!(third.general_settings.agent_link, agent);
     }
 }

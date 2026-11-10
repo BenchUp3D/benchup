@@ -574,6 +574,9 @@ impl BenchUpApp {
         let colors = Palette::for_ui(ui);
         let mut top = 0.;
         for &section in sections {
+            if self.section_hidden(section) {
+                continue;
+            }
             let index = section.index();
             let id = egui::Id::unique(("inspector_section", section.id()));
             let target = origin + egui::vec2(0., top);
@@ -631,6 +634,7 @@ impl BenchUpApp {
                     InspectorSection::TimeCostEstimates => self.time_estimates_contents(ui),
                     InspectorSection::Materials => self.materials_contents(ui),
                     InspectorSection::History => self.history_contents(ui),
+                    InspectorSection::Assistant => self.assistant_section_contents(ui),
                     InspectorSection::Fasteners => {},
                 },
             );
@@ -937,6 +941,32 @@ mod tests {
         right.dock(InspectorSection::Components, 1, Side::Bottom, 0);
         right.dock(InspectorSection::Components, 999, Side::Center, 0);
         assert_eq!(right, before);
+    }
+
+    #[test]
+    fn saved_layouts_without_the_assistant_section_gain_it_at_the_end() {
+        assert_eq!(InspectorSection::ALL.len(), InspectorSection::COUNT);
+        assert_eq!(InspectorSection::ALL.last(), Some(&InspectorSection::Assistant));
+        let previous: Vec<_> = InspectorSection::ALL
+            .into_iter()
+            .filter(|section| *section != InspectorSection::Assistant)
+            .rev()
+            .collect();
+        // A split layout saved before the section existed keeps both areas.
+        let saved = DockLayout::Split {
+            id: 9,
+            horizontal: true,
+            ratio: 0.4,
+            first: Box::new(DockLayout::Stack { id: 4, sections: previous[..3].to_vec() }),
+            second: Box::new(DockLayout::Stack { id: 7, sections: previous[3..].to_vec() }),
+        };
+        let mut order = previous.clone();
+        order.push(InspectorSection::Assistant);
+        let order: [InspectorSection; InspectorSection::COUNT] = order.try_into().unwrap();
+        let restored = InspectorLayout::restore(Some(&saved), &order);
+        assert_eq!(restored.order(), order);
+        let DockLayout::Split { ratio, .. } = restored.dock.unwrap() else { panic!() };
+        assert_eq!(ratio, 0.4);
     }
 
     #[test]

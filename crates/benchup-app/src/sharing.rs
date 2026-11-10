@@ -369,10 +369,16 @@ impl BenchUpApp {
         });
         let path = self.project.path.clone();
         // Do not replace the whole project: preserve file operation / unsaved prompts.
-        let edit_context = self.doc.model.edit_context;
         let previous_selection = self.sharing.desired.clone();
+        // A MIRA turn works on the model that is about to be replaced. Its
+        // snapshot would be recorded against the remote history, so drop the
+        // turn without committing anything.
+        self.assistant.discard_turn(&mut self.doc.model, tr!("assistant.error.shared_changed").to_owned());
+        // After the discard, so a scope the turn opened is not carried over.
+        let edit_context = self.doc.model.edit_context;
         self.doc.project_author = doc.project_author;
         self.doc.model = doc.model;
+        self.doc_epoch += 1;
         self.doc.model.edit_context =
             edit_context.filter(|id| self.doc.model.objects.contains_key(id));
         self.doc.name = doc.name;
@@ -741,6 +747,39 @@ impl BenchUpApp {
                 && self.sharing.frame_selection.as_ref().unwrap_or(&self.selected)
                     == &self.sharing.confirmed
                 && self.sharing.desired == self.sharing.confirmed)
+    }
+    /// The entities this user holds the edit lease on, when the project is
+    /// shared and sharing is available; `None` means edits are unrestricted.
+    pub(super) fn shared_lease(&self) -> Option<BTreeSet<u64>> {
+        (self.account.sharing_available() && self.doc.shared_project.is_some())
+            .then(|| self.sharing.confirmed.clone())
+    }
+    /// Test hook: make this a shared project whose edit lease is `ids`.
+    #[cfg(test)]
+    #[cfg_attr(not(any(feature = "assistant", feature = "agent-link")), allow(dead_code))]
+    pub(super) fn test_share_with_lease(&mut self, ctx: &egui::Context, ids: &BTreeSet<u64>) {
+        self.account.server = "https://sharing.example".into();
+        self.account.server_reachable = true;
+        self.doc.shared_project = Some(benchup_core::SharedProject {
+            server: self.account.server.clone(),
+            id: "a".repeat(48),
+            revision: 1,
+            server_updated_at: 100,
+            file_updated_at: 100,
+        });
+        self.sharing.active = Some("a".repeat(48));
+        self.sharing.role = "owner".into();
+        self.sharing.baseline = Some(serde_json::json!({}));
+        self.sharing.last_ack = ctx.input(|i| i.time);
+        self.sharing.confirmed = ids.clone();
+        self.sharing.desired = ids.clone();
+        self.selected = ids.clone();
+    }
+    /// Test hook: the server connection went quiet, so edits are blocked.
+    #[cfg(test)]
+    #[cfg_attr(not(any(feature = "assistant", feature = "agent-link")), allow(dead_code))]
+    pub(super) fn test_expire_lease(&mut self) {
+        self.sharing.last_ack = f64::NEG_INFINITY;
     }
     pub(super) fn shared_edit_block_reason(&self, ctx: &egui::Context) -> &'static str {
         if !matches!(self.sharing.role.as_str(), "owner" | "edit") {
@@ -1160,6 +1199,39 @@ mod tests {
             locks: vec![],
             actor: None,
         }
+    }
+    #[cfg(feature = "assistant")]
+    #[test]
+    fn a_remote_replacement_discards_the_running_mira_turn() {
+        use super::super::assistant::{
+            Assistant, Prompt,
+            client::{ToolCall, fake::FakeTransport},
+            tools,
+        };
+        let ctx = egui::Context::default();
+        let mut app = app();
+        let fake = FakeTransport::default();
+        app.assistant = Assistant::with_transport(Box::new(fake.clone()));
+        app.assistant.key = Some("k".into());
+        app.assistant.settings.model = "m".into();
+        let mut env = tools::ToolEnv::default();
+        let create = ToolCall::new("c", "create_board", &json!({"name": "A", "origin_mm": [0, 0, 0], "size_mm": [100, 100, 100]}));
+        let board = tools::execute(&mut app.doc.model, &create, &mut env).created[0];
+        app.test_share_with_lease(&ctx, &BTreeSet::from([board]));
+        fake.push_tool_calls(vec![ToolCall::new("m", "move", &json!({"ids": [board], "delta_mm": [500, 0, 0]}))]);
+        app.assistant_send(&ctx, Prompt { prompt: "move it".into(), references: BTreeSet::new() }).unwrap();
+        app.poll_assistant(&ctx);
+        assert!(app.assistant.busy(), "the turn waits for its next reply");
+
+        let incoming = remote(&app, "Remote", 2);
+        let steps = app.doc.history.position();
+        app.apply_shared_remote(&ctx, &incoming).unwrap();
+        assert!(!app.assistant.busy(), "the turn stops before the model is replaced");
+        let last = app.assistant.transcript.last().unwrap();
+        assert_eq!(last.text, "The shared project changed; MIRA stopped");
+        assert!(app.assistant.transcript.iter().all(|e| e.changes.is_none()), "nothing is reported as changed");
+        assert_eq!(app.doc.history.position(), steps, "no stale step lands in the remote history");
+        assert_eq!(app.doc.name, "Remote");
     }
     #[test]
     fn unavailable_server_bypasses_sharing_without_removing_project_link() {

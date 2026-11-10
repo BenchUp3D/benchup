@@ -1482,6 +1482,38 @@ fn paint_line_icon(p: &egui::Painter, c: Pos2, kind: &str, color: Color32) {
                 p.add(egui::Shape::line(points, s));
             }
         }
+        "assistant" => {
+            // A speech bubble with a small spark.
+            let bubble = Rect::from_center_size(c + egui::vec2(0., -1.), egui::vec2(18., 13.));
+            p.rect_stroke(bubble, 4, s, egui::StrokeKind::Inside);
+            p.add(egui::Shape::line(
+                vec![
+                    c + egui::vec2(-4., 5.5),
+                    c + egui::vec2(-5., 9.),
+                    c + egui::vec2(0., 5.5),
+                ],
+                s,
+            ));
+            p.line_segment([c + egui::vec2(-3., -1.), c + egui::vec2(3., -1.)], s);
+            p.line_segment([c + egui::vec2(0., -4.), c + egui::vec2(0., 2.)], s);
+        }
+        "latch" | "unlatch" => {
+            // A window with an arrow leaving it (unlatch) or entering it (latch).
+            let frame = Rect::from_center_size(c + egui::vec2(-2., 2.), egui::vec2(13., 11.));
+            p.rect_stroke(frame, 2, s, egui::StrokeKind::Inside);
+            let (from, to) = if kind == "unlatch" {
+                (c + egui::vec2(-1., 1.), c + egui::vec2(7., -7.))
+            } else {
+                (c + egui::vec2(7., -7.), c + egui::vec2(-1., 1.))
+            };
+            p.line_segment([from, to], s);
+            let direction = (to - from).normalized();
+            let side = egui::vec2(-direction.y, direction.x);
+            let tip = to;
+            for wing in [side, -side] {
+                p.line_segment([tip, tip - direction * 5. + wing * 3.], s);
+            }
+        }
         "panel" => {
             p.rect_stroke(
                 Rect::from_center_size(c, egui::vec2(18., 15.)),

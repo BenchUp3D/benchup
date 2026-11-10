@@ -5,11 +5,19 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+default = ["assistant", "agent-link"]
+# "Build with MIRA": the in-app LLM design assistant.
+assistant = []
+# "Agent connection": lets an external agent (benchup-mcp) edit the project.
+agent-link = []
+
 [dependencies]
 benchup-core = { path = "../benchup-core" }
 serde.workspace = true
 serde_json.workspace = true
-flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+uuid = { version = "1", features = ["v4", "js"] }
+benchup-tools = { path = "../benchup-tools" }
 skrifa = "0.44"
 glam.workspace = true
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland", "accesskit", "persistence", "links"] }
@@ -38,6 +46,9 @@ rayon = "1.12"
 hidapi = { version = "2.4", default-features = false, features = ["linux-static-hidraw", "macos-shared-device"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# End-to-end tests of the agent link against the real bridge.
+benchup-mcp = { path = "../benchup-mcp" }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 pollster = "0.4"
 png = "0.18"
 

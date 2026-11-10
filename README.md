@@ -29,6 +29,14 @@ Create mortise-and-tenon, half-lap, tongue-and-groove, rabbet, dovetail, and fin
 
 Set the grain direction on groups and components and show grain-direction guides directly on the model. Review how the grain runs across each board and through the full assembly before building. Grain orientation is saved with the project and follows the parts when they rotate.
 
+### Build with MIRA
+
+Describe a change in plain language, such as "make the left leg 40 mm thicker", and the Build with MIRA assistant applies it with BenchUp's own tools. Refer to parts with @, by dragging from the Outliner, or from the right-click menu. Each request is one undo step, with a review card to jump to what changed. The panel can be detached into its own window on a second monitor. See the [assistant guide](docs/assistant.md).
+
+### Use your own AI agent (MCP)
+
+The `benchup-mcp` server lets Claude Code, Cursor, or any MCP client read and edit a BenchUp project, either a file on disk or the project open in the desktop or browser app. Every change is one undo step. It is a separate add-on from Build with MIRA, and agent control is off until you turn it on in Settings → Add-ons → Agent connection. See the [MCP guide](docs/mcp.md).
+
 ### Plan materials and workshop work
 
 Assign stock materials and wood types to parts, configure sanding and finishing products, and prepare cut lists, cutting plans, and workshop labels. Export cutting plans and time and cost estimates to PDF to take the design into the workshop.
@@ -36,7 +44,7 @@ Assign stock materials and wood types to parts, configure sanding and finishing 
 ## Documentation
 
 This README covers developer installation, building, verification, and deployment.
-For instructions on using BenchUp, see the [user documentation](docs/README.md).
+For instructions on using BenchUp, see the [user documentation](docs/README.md). To drive BenchUp from an AI agent, see the [MCP guide](docs/mcp.md).
 
 ## Prerequisites
 
@@ -355,6 +363,8 @@ Verified during implementation: native Linux and browser WASM Cargo checks; core
 ## Layout
 
 - `crates/benchup-core`: double-precision document geometry, planar face discovery/triangulation, inference, picking, camera, tool definitions, and bounded history. It has no GUI or GPU dependencies.
+- `crates/benchup-tools`: the tools an AI agent can call (create, move, join and so on), the scene summary, and `.bup` file reading and writing. It has no GUI or network dependencies and builds for the browser. Build with MIRA and the MCP server both use it.
+- `crates/benchup-mcp`: the `benchup-mcp` MCP server (native only), with a file mode and a live mode that drives the open app. See [docs/mcp.md](docs/mcp.md).
 - `crates/benchup-app`: egui workspace, gesture routing, local persistence, native/browser launchers, and the wgpu/WGSL edge renderer. Model coordinates remain independent of GPU resources.
 - `index.html` and `Trunk.toml`: static browser host and WASM development configuration.
 

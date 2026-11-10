@@ -1,0 +1,574 @@
+use super::*;
+use serde_json::{Value, json};
+
+pub fn call(name: &str, args: Value) -> Call {
+    Call::new("t1", name, args)
+}
+pub fn run(model: &mut Model, env: &mut ToolEnv, name: &str, args: Value) -> ToolOutcome {
+    execute(model, &call(name, args), env)
+}
+fn ok(model: &mut Model, env: &mut ToolEnv, name: &str, args: Value) -> ToolOutcome {
+    let outcome = run(model, env, name, args);
+    assert!(outcome.ok, "{name} failed: {}", outcome.result);
+    outcome
+}
+fn err(model: &mut Model, env: &mut ToolEnv, name: &str, args: Value) -> String {
+    let before = model.clone();
+    let outcome = run(model, env, name, args);
+    assert!(!outcome.ok, "{name} unexpectedly succeeded: {}", outcome.result);
+    assert_eq!(outcome.result["ok"], false);
+    assert!(!outcome.mutated);
+    assert_eq!(*model, before, "{name} must leave the model untouched on error");
+    outcome.result["error"].as_str().unwrap().to_owned()
+}
+pub fn board(model: &mut Model, env: &mut ToolEnv, name: &str, origin: [f64; 3], size: [f64; 3]) -> u64 {
+    ok(model, env, "create_board", json!({"name": name, "origin_mm": origin, "size_mm": size})).created[0]
+}
+fn bounds(model: &Model, id: u64) -> (DVec3, DVec3) {
+    model.selection_bounds(&BTreeSet::from([id])).unwrap()
+}
+fn near(a: DVec3, b: [f64; 3]) {
+    assert!(a.distance(DVec3::from(b)) < 1e-6, "{a:?} != {b:?}");
+}
+
+#[test]
+fn create_board_converts_millimetres_to_metres() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let outcome = ok(&mut model, &mut env, "create_board", json!({
+        "name": "Top", "origin_mm": [100, 200, 300], "size_mm": [600, 400, 19]}));
+    let id = outcome.created[0];
+    assert_eq!(model.objects[&id].name, "Top");
+    let (lo, hi) = bounds(&model, id);
+    near(lo, [0.1, 0.2, 0.3]);
+    near(hi, [0.7, 0.6, 0.319]);
+    assert_eq!(outcome.result["bounds_mm"]["size"], json!([600.0, 400.0, 19.0]));
+    assert_eq!(outcome.result["created"], json!([id]));
+    assert!(outcome.mutated);
+    assert!(env.before.is_some(), "first mutation snapshots the model");
+    // It is a closed solid: six faces.
+    let faces = model.expand_entities(&BTreeSet::from([id])).iter().filter(|f| model.faces.contains_key(f)).count();
+    assert_eq!(faces, 6);
+}
+
+#[test]
+fn create_board_applies_material_grain_and_tag() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let material = benchup_core::MaterialId::new_v4();
+    env.catalog.insert(material, StockMaterial { name: "Oak 19".into(), dimensions: [190, 890, 24400] });
+    let id = ok(&mut model, &mut env, "create_board", json!({
+        "name": "Leg", "origin_mm": [0, 0, 0], "size_mm": [40, 40, 700],
+        "material_id": material.to_string(), "grain_axis": "z", "tag": "Legs"})).created[0];
+    assert_eq!(model.objects[&id].stock_material_id, Some(material));
+    assert!(model.stock_materials.contains_key(&material));
+    assert!(model.objects[&id].grain_axis().unwrap().z.abs() > 0.99);
+    assert_eq!(model.inherited_tag(id).unwrap().name, "Legs");
+    let again = ok(&mut model, &mut env, "create_board", json!({
+        "name": "Leg 2", "origin_mm": [100, 0, 0], "size_mm": [40, 40, 700], "tag": "legs"})).created[0];
+    assert_eq!(model.tags.len(), 1, "tag names match case-insensitively");
+    assert_eq!(model.inherited_tag(again).unwrap().name, "Legs");
+    err(&mut model, &mut env, "create_board", json!({
+        "name": "X", "origin_mm": [0, 0, 0], "size_mm": [1, 1, 1], "material_id": benchup_core::MaterialId::new_v4().to_string()}));
+}
+
+#[test]
+fn argument_and_id_errors_are_structured_and_harmless() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let leg = board(&mut model, &mut env, "Leg", [0., 0., 0.], [40., 40., 700.]);
+    assert!(err(&mut model, &mut env, "nope", json!({})).contains("unknown tool"));
+    assert!(err(&mut model, &mut env, "move", json!({"ids": [leg]})).contains("invalid arguments"));
+    assert!(err(&mut model, &mut env, "move", json!({"ids": [leg], "delta_mm": [1, 2, 3], "extra": 1})).contains("invalid arguments"));
+    assert!(err(&mut model, &mut env, "move", json!({"ids": "a", "delta_mm": [1, 2, 3]})).contains("invalid arguments"));
+    assert!(err(&mut model, &mut env, "move", json!({"ids": [9999], "delta_mm": [1, 2, 3]})).contains("unknown id"));
+    assert!(err(&mut model, &mut env, "move", json!({"ids": [], "delta_mm": [1, 2, 3]})).contains("empty"));
+    assert!(err(&mut model, &mut env, "move", json!({"ids": [leg], "delta_mm": [1e12, 0, 0]})).contains("out of range"));
+    assert!(err(&mut model, &mut env, "create_board", json!({"name": "", "origin_mm": [0,0,0], "size_mm": [1,1,1]})).contains("name"));
+    assert!(err(&mut model, &mut env, "create_board", json!({"name": "a", "origin_mm": [0,0,0], "size_mm": [0,1,1]})).contains("size"));
+    assert!(err(&mut model, &mut env, "get_object", json!({"id": 424242})).contains("unknown id"));
+    // Malformed text never panics.
+    let outcome = execute(&mut model, &Call::from_text("x", "move", "{not json"), &mut env);
+    assert!(!outcome.ok);
+    let hint = run(&mut model, &mut env, "move", json!({"ids": [9999], "delta_mm": [1, 2, 3]}));
+    assert!(hint.result["hint"].is_string());
+}
+
+#[test]
+fn locked_hidden_and_read_only_are_refused() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "A", [0., 0., 0.], [100., 100., 100.]);
+    let b = board(&mut model, &mut env, "B", [500., 0., 0.], [100., 100., 100.]);
+    model.locked.insert(a);
+    assert!(err(&mut model, &mut env, "move", json!({"ids": [a], "delta_mm": [1, 0, 0]})).contains("locked"));
+    assert!(err(&mut model, &mut env, "rename", json!({"id": a, "name": "Z"})).contains("locked"));
+    assert!(err(&mut model, &mut env, "erase", json!({"ids": [a]})).contains("locked"));
+    assert!(err(&mut model, &mut env, "add_joint", json!({"a": a, "b": b, "kind": "half_lap"})).contains("locked"));
+    // Locked entities can still be read.
+    ok(&mut model, &mut env, "get_object", json!({"id": a}));
+    model.hidden.insert(b);
+    assert!(err(&mut model, &mut env, "move", json!({"ids": [b], "delta_mm": [1, 0, 0]})).contains("hidden"));
+    model.hidden.clear();
+    env.read_only = true;
+    assert_eq!(err(&mut model, &mut env, "move", json!({"ids": [b], "delta_mm": [1, 0, 0]})), "read-only");
+    assert_eq!(err(&mut model, &mut env, "create_board", json!({"name":"x","origin_mm":[0,0,0],"size_mm":[1,1,1]})), "read-only");
+    // Reads still work when read-only.
+    ok(&mut model, &mut env, "get_scene", json!({}));
+}
+
+#[test]
+fn read_tools_report_scene_objects_and_faces() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let top = board(&mut model, &mut env, "Table top", [0., 0., 700.], [600., 400., 20.]);
+    let leg = board(&mut model, &mut env, "Left leg", [0., 0., 0.], [40., 40., 700.]);
+    env.selection = BTreeSet::from([leg]);
+    let scene = ok(&mut model, &mut env, "get_scene", json!({})).result;
+    assert_eq!(scene["units"], "mm");
+    assert_eq!(scene["objects"].as_array().unwrap().len(), 2);
+    assert_eq!(scene["selection"], json!([leg]));
+    assert_eq!(scene["objects"][0]["id"], leg, "selected objects come first");
+    let found = ok(&mut model, &mut env, "find_objects", json!({"query": "LEG"})).result;
+    assert_eq!(found["total"], 1);
+    assert_eq!(found["objects"][0]["id"], leg);
+    assert_eq!(ok(&mut model, &mut env, "find_objects", json!({"query": "group"})).result["total"], 2);
+    let object = ok(&mut model, &mut env, "get_object", json!({"id": top})).result;
+    assert_eq!(object["size_mm"], json!([600.0, 400.0, 20.0]));
+    let faces = object["faces"].as_array().unwrap();
+    assert_eq!(faces.len(), 6);
+    let facings: BTreeSet<&str> = faces.iter().filter_map(|f| f["facing"].as_str()).collect();
+    assert_eq!(facings, BTreeSet::from(["+x", "-x", "+y", "-y", "+z", "-z"]));
+    let top_face = faces.iter().find(|f| f["facing"] == "+z").unwrap();
+    assert_eq!(top_face["center_mm"][2], 720.0);
+    assert_eq!(top_face["area_mm2"], 240_000.0);
+    let selection = ok(&mut model, &mut env, "get_selection", json!({})).result;
+    assert_eq!(selection["selection"], json!([leg]));
+    let materials = ok(&mut model, &mut env, "list_stock_materials", json!({})).result;
+    assert_eq!(materials["materials"], json!([]));
+}
+
+#[test]
+fn transform_tools_move_rotate_scale_and_resize() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let id = board(&mut model, &mut env, "Rail", [0., 0., 0.], [100., 50., 20.]);
+    let outcome = ok(&mut model, &mut env, "move", json!({"ids": [id], "delta_mm": [10, 20, 30]}));
+    assert_eq!(outcome.modified, [id]);
+    near(bounds(&model, id).0, [0.01, 0.02, 0.03]);
+    ok(&mut model, &mut env, "rotate", json!({"ids": [id], "pivot_mm": [10, 20, 30], "axis": "z", "degrees": 90}));
+    let (lo, hi) = bounds(&model, id);
+    near(hi - lo, [0.05, 0.1, 0.02]);
+    ok(&mut model, &mut env, "scale", json!({"ids": [id], "center_mm": [10, 20, 30], "factor": 2}));
+    let (lo, hi) = bounds(&model, id);
+    near(hi - lo, [0.1, 0.2, 0.04]);
+    near(lo, [-0.09, 0.02, 0.03]);
+    let outcome = ok(&mut model, &mut env, "resize_board", json!({"id": id, "size_mm": [100, 200, 60]}));
+    let (lo2, hi2) = bounds(&model, id);
+    near(hi2 - lo2, [0.1, 0.2, 0.06]);
+    near(lo2, lo.to_array());
+    assert_eq!(outcome.result["bounds_mm"]["size"], json!([100.0, 200.0, 60.0]));
+    assert!(err(&mut model, &mut env, "scale", json!({"ids": [id], "center_mm": [0,0,0], "factor": -1})).len() > 3);
+    assert!(err(&mut model, &mut env, "resize_board", json!({"id": id, "size_mm": [0, 10, 10]})).contains("size_mm"));
+}
+
+#[test]
+fn push_pull_extrudes_a_face_of_a_board() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let id = board(&mut model, &mut env, "Block", [0., 0., 0.], [100., 100., 100.]);
+    let object = ok(&mut model, &mut env, "get_object", json!({"id": id})).result;
+    let top = object["faces"].as_array().unwrap().iter().find(|f| f["facing"] == "+z").unwrap()["id"].as_u64().unwrap();
+    let outcome = ok(&mut model, &mut env, "push_pull", json!({"face_id": top, "distance_mm": 50}));
+    assert_eq!(outcome.modified, [id]);
+    near(bounds(&model, id).1, [0.1, 0.1, 0.15]);
+    assert_eq!(model.edit_context, None, "scope is restored");
+    assert!(err(&mut model, &mut env, "push_pull", json!({"face_id": id, "distance_mm": 5})).contains("not a face"));
+    assert!(err(&mut model, &mut env, "push_pull", json!({"face_id": top, "distance_mm": 0})).len() > 3);
+}
+
+#[test]
+fn naming_material_grain_tag_paint_and_erase() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "A", [0., 0., 0.], [100., 100., 20.]);
+    let b = board(&mut model, &mut env, "B", [200., 0., 0.], [100., 100., 20.]);
+    ok(&mut model, &mut env, "rename", json!({"id": a, "name": "  Shelf "}));
+    assert_eq!(model.objects[&a].name, "Shelf");
+    assert!(err(&mut model, &mut env, "rename", json!({"id": a, "name": "  "})).contains("name"));
+    let material = benchup_core::MaterialId::new_v4();
+    env.catalog.insert(material, StockMaterial { name: "Pine".into(), dimensions: [190, 890, 24400] });
+    ok(&mut model, &mut env, "set_material", json!({"ids": [a, b], "material_id": material.to_string()}));
+    assert_eq!(model.objects[&b].stock_material_id, Some(material));
+    let listed = ok(&mut model, &mut env, "list_stock_materials", json!({})).result;
+    assert_eq!(listed["materials"][0]["thickness_mm"], 19.0);
+    ok(&mut model, &mut env, "set_material", json!({"ids": [a], "material_id": null}));
+    assert_eq!(model.objects[&a].stock_material_id, None);
+    ok(&mut model, &mut env, "set_grain", json!({"id": a, "axis": "x"}));
+    assert!(model.objects[&a].grain_axis().is_some());
+    ok(&mut model, &mut env, "set_grain", json!({"id": a, "axis": null}));
+    assert!(model.objects[&a].grain_axis().is_none());
+    let tagged = ok(&mut model, &mut env, "tag", json!({"ids": [a, b], "tag": "Shelves"}));
+    assert!(tagged.result["tag_id"].is_u64());
+    assert_eq!(model.inherited_tag(b).unwrap().name, "Shelves");
+    ok(&mut model, &mut env, "tag", json!({"ids": [a], "tag": null}));
+    assert!(model.inherited_tag(a).is_none());
+    ok(&mut model, &mut env, "paint", json!({"ids": [a], "rgb": [200, 10, 10]}));
+    assert!(!model.face_colors.is_empty());
+    assert!(err(&mut model, &mut env, "paint", json!({"ids": [a], "rgb": [300, 0, 0]})).contains("invalid arguments"));
+    let erased = ok(&mut model, &mut env, "erase", json!({"ids": [b]}));
+    assert_eq!(erased.erased, [b]);
+    assert!(!model.objects.contains_key(&b));
+    assert_eq!(erased.result["erased"], json!([b]));
+}
+
+#[test]
+fn copy_group_ungroup_and_selection_scope() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "A", [0., 0., 0.], [100., 100., 20.]);
+    let b = board(&mut model, &mut env, "B", [200., 0., 0.], [100., 100., 20.]);
+    let copy = ok(&mut model, &mut env, "create_copy", json!({"id": a, "offset_mm": [0, 500, 0]}));
+    assert_eq!(copy.created.len(), 1);
+    near(bounds(&model, copy.created[0]).0, [0., 0.5, 0.]);
+    let grouped = ok(&mut model, &mut env, "group", json!({"ids": [a, b], "name": "Pair", "component": false}));
+    let group = grouped.created[0];
+    assert_eq!(model.objects[&group].name, "Pair");
+    assert_eq!(grouped.result["members"].as_array().unwrap().len(), 2);
+    // Parts are now inside the group: editing one needs its scope open.
+    let inner = grouped.result["members"][0]["id"].as_u64().unwrap();
+    let message = err(&mut model, &mut env, "rename", json!({"id": inner, "name": "Inner"}));
+    assert!(message.contains("not editable"), "{message}");
+    ok(&mut model, &mut env, "enter_object", json!({"id": group}));
+    assert_eq!(model.edit_context, Some(group));
+    ok(&mut model, &mut env, "rename", json!({"id": inner, "name": "Inner"}));
+    assert!(err(&mut model, &mut env, "enter_object", json!({"id": 99999})).contains("cannot open"));
+    ok(&mut model, &mut env, "exit_to_root", json!({}));
+    assert_eq!(model.edit_context, None);
+    let freed = ok(&mut model, &mut env, "ungroup", json!({"ids": [group]}));
+    assert!(!model.objects.contains_key(&group));
+    assert_eq!(freed.erased, [group]);
+    assert_eq!(model.objects.values().filter(|o| o.name == "Inner").count(), 1);
+    let any = *model.objects.keys().next().unwrap();
+    let selected = ok(&mut model, &mut env, "select", json!({"ids": [any]}));
+    assert!(!selected.mutated);
+    assert_eq!(env.selection, BTreeSet::from([any]));
+}
+
+#[test]
+fn drawing_and_annotation_tools() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let outcome = ok(&mut model, &mut env, "draw_polyline", json!({
+        "points_mm": [[0, 0, 0], [100, 0, 0], [100, 100, 0], [0, 100, 0]], "close": true}));
+    assert!(outcome.created.len() >= 5, "four edges and a face: {:?}", outcome.created);
+    assert_eq!(model.faces.len(), 1);
+    assert!(err(&mut model, &mut env, "draw_polyline", json!({"points_mm": [[0, 0, 0]], "close": false})).contains("at least 2"));
+    let dim = ok(&mut model, &mut env, "add_dimension", json!({"start_mm": [0, 0, 0], "end_mm": [100, 0, 0], "offset_mm": [0, -50, 0]}));
+    assert!(model.dimensions.contains_key(&dim.created[0]));
+    err(&mut model, &mut env, "add_dimension", json!({"start_mm": [0, 0, 0], "end_mm": [0, 0, 0], "offset_mm": [0, -50, 0]}));
+    let text = ok(&mut model, &mut env, "add_text", json!({"point_mm": [0, 0, 0], "offset_mm": [0, 0, 100], "text": "Front"}));
+    assert_eq!(model.texts[&text.created[0]].text, "Front");
+    err(&mut model, &mut env, "add_text", json!({"point_mm": [0, 0, 0], "offset_mm": [0, 0, 100], "text": ""}));
+}
+
+#[test]
+fn joints_connect_two_boards() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let leg = board(&mut model, &mut env, "Leg", [0., 0., 0.], [40., 40., 700.]);
+    let apron = board(&mut model, &mut env, "Apron", [20., 0., 500.], [300., 40., 80.]);
+    let outcome = ok(&mut model, &mut env, "add_joint", json!({
+        "a": apron, "b": leg, "kind": "mortise_tenon", "params": {"width_ratio": 0.6, "clearance_mm": 0.2}}));
+    assert_eq!(outcome.joints.len(), 1);
+    assert_eq!(model.connections.len(), 1);
+    match &model.connections[&outcome.joints[0]].operation {
+        benchup_core::connections::ConnectionOperation::Joinery(s) => {
+            assert_eq!(s.kind, benchup_core::joinery::JointKind::MortiseTenon);
+            assert_eq!(s.width_ratio, 0.6);
+            assert!((s.clearance - 0.0002).abs() < 1e-12);
+        }
+        other => panic!("{other:?}"),
+    }
+    let scene = ok(&mut model, &mut env, "get_scene", json!({})).result;
+    assert_eq!(scene["joints"][0]["kind"], "MortiseTenon");
+    // A second joint between the same boards is refused by the core.
+    err(&mut model, &mut env, "add_joint", json!({"a": leg, "b": apron, "kind": "half_lap"}));
+    err(&mut model, &mut env, "add_joint", json!({"a": leg, "b": leg, "kind": "half_lap"}));
+    err(&mut model, &mut env, "add_joint", json!({"a": leg, "b": apron, "kind": "bogus"}));
+    err(&mut model, &mut env, "add_joint", json!({"a": leg, "b": apron, "kind": "finger", "params": {"width_ratio": 3}}));
+}
+
+#[test]
+fn failed_calls_do_not_set_the_turn_snapshot() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    err(&mut model, &mut env, "move", json!({"ids": [1], "delta_mm": [1, 0, 0]}));
+    assert!(env.before.is_none());
+    let id = board(&mut model, &mut env, "A", [0., 0., 0.], [10., 10., 10.]);
+    let first = env.before.clone().unwrap();
+    assert!(first.objects.is_empty());
+    ok(&mut model, &mut env, "move", json!({"ids": [id], "delta_mm": [1, 0, 0]}));
+    assert_eq!(env.before.as_ref().unwrap(), &first, "snapshot stays at the first change");
+}
+
+#[test]
+fn tool_definitions_are_strict_and_match_the_executor() {
+    let definitions = definitions();
+    assert_eq!(definitions.len(), TOOLS.len());
+    for definition in &definitions {
+        let name = definition.name.as_str();
+        assert!(is_known(name), "{name}");
+        assert!(!definition.description.is_empty());
+        let parameters = &definition.input_schema;
+        assert_eq!(parameters["type"], "object");
+        assert_eq!(parameters["additionalProperties"], false, "{name}");
+        let properties = parameters["properties"].as_object().unwrap();
+        for required in parameters["required"].as_array().unwrap() {
+            assert!(properties.contains_key(required.as_str().unwrap()), "{name}.{required}");
+        }
+        // Every tool accepts the empty object or reports a clean argument error.
+        let outcome = run(&mut Model::default(), &mut ToolEnv::default(), name, json!({"__unexpected": 1}));
+        assert!(!outcome.ok, "{name} must reject unknown fields");
+    }
+}
+
+fn first_face(model: &Model, object: u64) -> u64 {
+    model.expand_entities(&BTreeSet::from([object])).into_iter().find(|f| model.faces.contains_key(f)).unwrap()
+}
+
+#[test]
+fn shared_lease_refuses_entities_outside_it() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let mine = board(&mut model, &mut env, "Mine", [0., 0., 0.], [100., 100., 100.]);
+    let theirs = board(&mut model, &mut env, "Theirs", [500., 0., 0.], [100., 100., 100.]);
+    // Not shared: no restriction.
+    ok(&mut model, &mut env, "move", json!({"ids": [theirs], "delta_mm": [1, 0, 0]}));
+    env.created.clear();
+    env.lease = Some(BTreeSet::from([mine]));
+    let refused = run(&mut model, &mut env, "move", json!({"ids": [mine, theirs], "delta_mm": [1, 0, 0]}));
+    assert!(!refused.ok && !refused.mutated);
+    assert_eq!(refused.result["error"], "not-leased");
+    assert_eq!(refused.result["hint"], "select it first so you hold the edit lease");
+    let face = first_face(&model, theirs);
+    let attempts = [
+        ("rename", json!({"id": theirs, "name": "X"})),
+        ("erase", json!({"ids": [theirs]})),
+        ("tag", json!({"ids": [theirs], "tag": "t"})),
+        ("add_joint", json!({"a": mine, "b": theirs, "kind": "half_lap"})),
+        ("push_pull", json!({"face_id": face, "distance_mm": 5})),
+        ("resize_board", json!({"id": theirs, "size_mm": [10, 10, 10]})),
+    ];
+    for (name, args) in attempts {
+        assert_eq!(err(&mut model, &mut env, name, args), "not-leased", "{name}");
+    }
+    // Leased entities, their faces, and reads remain available.
+    ok(&mut model, &mut env, "move", json!({"ids": [mine], "delta_mm": [1, 0, 0]}));
+    let own_face = first_face(&model, mine);
+    ok(&mut model, &mut env, "push_pull", json!({"face_id": own_face, "distance_mm": 5}));
+    ok(&mut model, &mut env, "get_object", json!({"id": theirs}));
+    // New entities are free to create, and then to edit within the same turn.
+    let fresh = board(&mut model, &mut env, "Fresh", [900., 0., 0.], [50., 50., 50.]);
+    ok(&mut model, &mut env, "move", json!({"ids": [fresh], "delta_mm": [1, 0, 0]}));
+    let copy = ok(&mut model, &mut env, "create_copy", json!({"id": theirs, "offset_mm": [0, 500, 0]})).created[0];
+    ok(&mut model, &mut env, "rename", json!({"id": copy, "name": "Copy"}));
+    let group = ok(&mut model, &mut env, "group", json!({"ids": [fresh, copy], "name": "G", "component": false})).created[0];
+    ok(&mut model, &mut env, "rename", json!({"id": group, "name": "G2"}));
+    assert_eq!(model.objects[&theirs].name, "Theirs");
+}
+
+#[test]
+fn model_output_is_bounded() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "A", [0., 0., 0.], [2000., 100., 100.]);
+    let points: Vec<[f64; 3]> = (0..1001).map(|i| [i as f64, 0., 0.]).collect();
+    assert!(err(&mut model, &mut env, "draw_polyline", json!({"points_mm": points})).contains("too many points"));
+    let ids: Vec<u64> = vec![a; 501];
+    assert!(err(&mut model, &mut env, "move", json!({"ids": ids, "delta_mm": [1, 0, 0]})).contains("too many ids"));
+    // Scale factor bounds.
+    for factor in [0.0, 0.0009, 1001.0, -2.0] {
+        let error = err(&mut model, &mut env, "scale", json!({"ids": [a], "center_mm": [0, 0, 0], "factor": factor}));
+        assert!(error.contains("factor"), "{factor}: {error}");
+    }
+    ok(&mut model, &mut env, "scale", json!({"ids": [a], "center_mm": [0, 0, 0], "factor": 1.5}));
+    // In range but the result leaves the sane absolute range: restored.
+    assert_eq!(
+        err(&mut model, &mut env, "scale", json!({"ids": [a], "center_mm": [0, 0, 0], "factor": 1000.0})),
+        "result out of range"
+    );
+    for _ in 0..9 {
+        ok(&mut model, &mut env, "move", json!({"ids": [a], "delta_mm": [100_000, 0, 0]}));
+    }
+    assert_eq!(err(&mut model, &mut env, "move", json!({"ids": [a], "delta_mm": [100_000, 0, 0]})), "result out of range");
+    // Inputs: |coordinate| <= 100 m, size >= 0.1 mm, strings <= 500 chars.
+    assert!(err(&mut model, &mut env, "create_board", json!({"name": "x", "origin_mm": [100_001, 0, 0], "size_mm": [1, 1, 1]})).contains("out of range"));
+    assert!(err(&mut model, &mut env, "create_board", json!({"name": "x", "origin_mm": [0, 0, 0], "size_mm": [0.05, 1, 1]})).contains("out of range"));
+    let long = "t".repeat(501);
+    assert!(err(&mut model, &mut env, "add_text", json!({"point_mm": [0, 0, 0], "offset_mm": [0, 0, 0], "text": long})).contains("too long"));
+    assert!(err(&mut model, &mut env, "rename", json!({"id": a, "name": long})).contains("name"));
+    assert!(err(&mut model, &mut env, "tag", json!({"ids": [a], "tag": long})).contains("too long"));
+}
+
+#[test]
+fn push_pull_requires_the_whole_owner_chain_to_be_editable() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "A", [0., 0., 0.], [100., 100., 100.]);
+    let b = board(&mut model, &mut env, "B", [500., 0., 0.], [100., 100., 100.]);
+    let outer = ok(&mut model, &mut env, "group", json!({"ids": [a], "name": "Outer", "component": false})).created[0];
+    let inner = *model.objects[&outer].entities.iter().next().unwrap();
+    let face = first_face(&model, inner);
+    // A locked ancestor, however far up, blocks the edit.
+    model.locked.insert(outer);
+    assert!(err(&mut model, &mut env, "push_pull", json!({"face_id": face, "distance_mm": 5})).contains("locked"));
+    model.locked.clear();
+    ok(&mut model, &mut env, "push_pull", json!({"face_id": face, "distance_mm": 5}));
+    // A face outside the open editing scope cannot be reached through its owner.
+    assert!(model.enter_object(outer));
+    let other = first_face(&model, b);
+    assert!(err(&mut model, &mut env, "push_pull", json!({"face_id": other, "distance_mm": 5})).contains("scope"));
+    ok(&mut model, &mut env, "push_pull", json!({"face_id": face, "distance_mm": 5}));
+}
+
+#[test]
+fn hidden_selection_is_not_revealed_by_get_scene_or_get_selection() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "A", [0., 0., 0.], [100., 100., 20.]);
+    env.selection = BTreeSet::from([a]);
+    let shown = ok(&mut model, &mut env, "get_selection", json!({})).result;
+    assert_eq!(shown["selection"], json!([a]));
+    assert_eq!(ok(&mut model, &mut env, "get_scene", json!({})).result["selection"], json!([a]));
+    env.hide_selection = true;
+    let hidden = ok(&mut model, &mut env, "get_selection", json!({})).result;
+    assert_eq!(hidden, json!({"ok": true, "selection": [], "note": "The designer has turned off sharing their selection."}));
+    let scene = ok(&mut model, &mut env, "get_scene", json!({})).result;
+    assert_eq!(scene["selection"], json!([]));
+    assert!(scene.get("selection_total").is_none_or(|n| n == 0));
+}
+
+#[test]
+fn tag_names_follow_the_core_limit_in_the_tool_and_the_schema() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "A", [0., 0., 0.], [100., 100., 20.]);
+    ok(&mut model, &mut env, "tag", json!({"ids": [a], "tag": "x".repeat(128)}));
+    for long in ["x".repeat(129), "é".repeat(65)] {
+        assert!(err(&mut model, &mut env, "tag", json!({"ids": [a], "tag": long})).contains("too long"));
+    }
+    let board_with_long_tag = err(&mut model, &mut env, "create_board", json!({
+        "name": "B", "origin_mm": [0, 0, 0], "size_mm": [1, 1, 1], "tag": "y".repeat(129)}));
+    assert!(board_with_long_tag.contains("too long"));
+    let definitions = definitions();
+    let property = |tool: &str, name: &str| {
+        definitions.iter().find(|d| d.name == tool).unwrap().input_schema["properties"][name].clone()
+    };
+    assert_eq!(property("tag", "tag")["maxLength"], 128);
+    assert_eq!(property("create_board", "tag")["maxLength"], 128);
+}
+
+#[test]
+fn the_scale_schema_states_the_range_the_executor_enforces() {
+    let definitions = definitions();
+    let scale = definitions.iter().find(|d| d.name == "scale").unwrap();
+    let factor = &scale.input_schema["properties"]["factor"];
+    assert_eq!(factor["minimum"], MIN_SCALE);
+    assert_eq!(factor["maximum"], MAX_SCALE);
+    assert!(factor.get("exclusiveMinimum").is_none());
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "A", [0., 0., 0.], [100., 100., 20.]);
+    ok(&mut model, &mut env, "scale", json!({"ids": [a], "center_mm": [0, 0, 0], "factor": MIN_SCALE}));
+    assert!(err(&mut model, &mut env, "scale", json!({"ids": [a], "center_mm": [0, 0, 0], "factor": MAX_SCALE * 2.})).contains("out of range"));
+}
+
+#[test]
+fn select_is_limited_to_the_lease_in_shared_projects() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let mine = board(&mut model, &mut env, "Mine", [0., 0., 0.], [100., 100., 100.]);
+    let theirs = board(&mut model, &mut env, "Theirs", [500., 0., 0.], [100., 100., 100.]);
+    // Not shared: unchanged behaviour.
+    ok(&mut model, &mut env, "select", json!({"ids": [theirs]}));
+    env.created.clear();
+    env.lease = Some(BTreeSet::from([mine]));
+    env.selection.clear();
+    let message = err(&mut model, &mut env, "select", json!({"ids": [mine, theirs]}));
+    assert!(message.contains("lease"), "{message}");
+    assert!(env.selection.is_empty(), "a refused select changes nothing");
+    ok(&mut model, &mut env, "select", json!({"ids": [mine]}));
+    assert_eq!(env.selection, BTreeSet::from([mine]));
+    let fresh = board(&mut model, &mut env, "Fresh", [900., 0., 0.], [50., 50., 50.]);
+    ok(&mut model, &mut env, "select", json!({"ids": [fresh]}));
+}
+
+#[test]
+fn openai_and_mcp_adapters_keep_the_wire_shapes() {
+    let (openai, mcp, neutral) = (openai_tools(), mcp_tools(), definitions());
+    assert_eq!(openai.len(), neutral.len());
+    assert_eq!(mcp.len(), neutral.len());
+    for (i, d) in neutral.iter().enumerate() {
+        assert_eq!(openai[i]["type"], "function");
+        assert_eq!(openai[i]["function"]["name"], d.name.as_str());
+        assert_eq!(openai[i]["function"]["description"], d.description.as_str());
+        assert_eq!(openai[i]["function"]["parameters"], d.input_schema);
+        assert_eq!(openai[i].as_object().unwrap().len(), 2);
+        assert_eq!(openai[i]["function"].as_object().unwrap().len(), 3);
+        assert_eq!(mcp[i]["name"], d.name.as_str());
+        assert_eq!(mcp[i]["inputSchema"], d.input_schema);
+        assert_eq!(mcp[i].as_object().unwrap().len(), 3);
+    }
+}
+
+#[test]
+fn text_arguments_behave_like_the_app_did() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    // Empty text means no arguments.
+    assert!(execute(&mut model, &Call::from_text("1", "get_selection", "  "), &mut env).ok);
+    // Valid JSON text equals a JSON value.
+    let a = Call::from_text("1", "get_object", "{\"id\": 5}");
+    assert_eq!(a.arguments, json!({"id": 5}));
+    // Not JSON: structured error, no panic, model untouched.
+    let bad = execute(&mut model, &Call::from_text("1", "get_object", "{oops"), &mut env);
+    assert!(!bad.ok);
+    assert!(bad.result["error"].as_str().unwrap().starts_with("invalid arguments: "));
+    assert!(bad.result["hint"].is_string());
+}
+
+#[test]
+fn lease_blocks_entering_and_creating_inside_foreign_groups() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let mine = board(&mut model, &mut env, "Mine", [0., 0., 0.], [100., 100., 100.]);
+    let theirs = board(&mut model, &mut env, "Theirs", [500., 0., 0.], [100., 100., 100.]);
+    let theirs_group = ok(&mut model, &mut env, "group", json!({"ids": [theirs], "name": "TG", "component": false})).created[0];
+    let my_group = ok(&mut model, &mut env, "group", json!({"ids": [mine], "name": "MG", "component": false})).created[0];
+    env.created.clear();
+    env.lease = Some(BTreeSet::from([my_group]));
+
+    assert_eq!(err(&mut model, &mut env, "enter_object", json!({"id": theirs_group})), "not-leased");
+    assert_eq!(model.edit_context, None);
+
+    // Scoped inside a group someone else holds: nothing may be created.
+    model.edit_context = Some(theirs_group);
+    for (name, args) in [
+        ("create_board", json!({"name": "X", "origin_mm": [0, 0, 0], "size_mm": [10, 10, 10]})),
+        ("draw_polyline", json!({"points_mm": [[0, 0, 0], [10, 0, 0]]})),
+        ("add_text", json!({"text": "hi", "position_mm": [0, 0, 0]})),
+    ] {
+        assert_eq!(err(&mut model, &mut env, name, args), "not-leased", "{name}");
+    }
+    model.edit_context = None;
+
+    // The leased group can be entered and created in.
+    ok(&mut model, &mut env, "enter_object", json!({"id": my_group}));
+    ok(&mut model, &mut env, "create_board", json!({"name": "In", "origin_mm": [0, 0, 0], "size_mm": [10, 10, 10]}));
+    ok(&mut model, &mut env, "exit_to_root", json!({}));
+    // Root creation still works.
+    board(&mut model, &mut env, "Fresh", [900., 0., 0.], [50., 50., 50.]);
+}
+
+#[test]
+fn lease_rolls_back_calls_that_alter_foreign_loose_geometry() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    ok(&mut model, &mut env, "draw_polyline", json!({"points_mm": [[0, 0, 0], [1000, 0, 0]]}));
+    let mine = board(&mut model, &mut env, "Mine", [0., 500., 0.], [100., 100., 100.]);
+    env.created.clear();
+    let edges_before = model.edges.len();
+
+    // Without a lease the crossing line splits the loose edge.
+    let mut free = model.clone();
+    ok(&mut free, &mut ToolEnv::default(), "draw_polyline", json!({"points_mm": [[500, 0, 0], [500, 300, 0]]}));
+    assert!(free.edges.len() > edges_before + 1, "crossing should split the loose edge");
+
+    env.lease = Some(BTreeSet::from([mine]));
+    assert_eq!(
+        err(&mut model, &mut env, "draw_polyline", json!({"points_mm": [[500, 0, 0], [500, 300, 0]]})),
+        "not-leased"
+    );
+    assert_eq!(model.edges.len(), edges_before);
+    // Geometry that touches nothing existing is fine.
+    ok(&mut model, &mut env, "draw_polyline", json!({"points_mm": [[0, 5000, 0], [100, 5000, 0]]}));
+}

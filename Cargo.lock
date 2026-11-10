@@ -420,6 +420,8 @@ name = "benchup-app"
 version = "0.6.7"
 dependencies = [
  "benchup-core",
+ "benchup-mcp",
+ "benchup-tools",
  "bytemuck",
  "cc",
  "directories",
@@ -440,6 +442,7 @@ dependencies = [
  "tempfile",
  "tungstenite",
  "ureq",
+ "uuid",
  "velopack",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -457,6 +460,30 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "benchup-mcp"
+version = "0.6.6"
+dependencies = [
+ "benchup-core",
+ "benchup-tools",
+ "getrandom 0.4.3",
+ "serde_json",
+ "tempfile",
+ "tungstenite",
+]
+
+[[package]]
+name = "benchup-tools"
+version = "0.6.6"
+dependencies = [
+ "benchup-core",
+ "flate2",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]

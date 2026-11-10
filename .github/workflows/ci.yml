@@ -1,0 +1,104 @@
+name: CI
+
+# Fast checks for pull requests and branch pushes. Release builds, packaging
+# and publishing stay in build.yml (tags) and pages.yml.
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native:
+    name: Desktop check and tests (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential pkg-config libx11-dev libxcb1-dev \
+            libxkbcommon-dev libwayland-dev libegl1-mesa-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-native
+
+      - name: Check all targets
+        run: cargo check --workspace --all-targets --locked
+
+      - name: Test geometry core
+        run: cargo test -p benchup-core --locked
+
+      - name: Test shared tool layer and MCP server
+        # Loopback and temp directories only; no outside network.
+        run: |
+          cargo test -p benchup-tools --locked
+          cargo test -p benchup-mcp --locked
+
+      - name: Test agent connection
+        run: cargo test -p benchup-app --lib --locked 'agent'
+
+      - name: Check add-on feature combinations
+        # Each add-on must build with the other compiled out.
+        run: |
+          cargo check -p benchup-app --locked --no-default-features
+          cargo check -p benchup-app --locked --no-default-features --features assistant
+          cargo check -p benchup-app --locked --no-default-features --features agent-link
+
+      - name: Test assistant
+        # The substring filters also select the assistant_ui tests, the docking
+        # test and the sharing test for the running MIRA turn, which a
+        # module-path filter such as 'assistant::' would skip.
+        run: |
+          cargo test -p benchup-app --lib --locked 'assistant'
+          cargo test -p benchup-app --lib --locked 'mira'
+
+      - name: Test release-critical modules
+        run: |
+          cargo test -p benchup-app --lib --locked updates::
+          cargo test -p benchup-app --lib --locked identity::
+          cargo test -p benchup-app --lib --locked storage::
+          cargo test -p benchup-app --lib --locked project_files::
+
+  web:
+    name: Browser check (wasm32)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-wasm
+
+      - name: Check browser build
+        run: cargo check -p benchup-app --locked --target wasm32-unknown-unknown
+
+      - name: Check browser build without add-ons
+        run: cargo check -p benchup-app --locked --target wasm32-unknown-unknown --no-default-features
+
+      - name: Check the tool layer for the browser
+        run: cargo check -p benchup-tools --locked --target wasm32-unknown-unknown

@@ -47,7 +47,21 @@ pub(crate) fn valid_endpoint(server: &str, endpoint: &str) -> bool {
 }
 impl Socket {
     pub fn connect(ctx: &egui::Context, url: String, ticket: String, connection: String) -> Self {
+        Self::connect_limited(ctx, url, ticket, connection, None)
+    }
+    /// Like `connect`, with a cap on the size of one incoming message
+    /// (`None` keeps the library default). The browser build already caps
+    /// messages at about 17 MB, so the cap only changes the native build.
+    pub fn connect_limited(
+        ctx: &egui::Context,
+        url: String,
+        ticket: String,
+        connection: String,
+        max_message: Option<usize>,
+    ) -> Self {
         let (sender, events) = mpsc::channel();
+        #[cfg(target_arch = "wasm32")]
+        let _ = max_message;
         #[cfg(not(target_arch = "wasm32"))]
         {
             let (outgoing, commands) = mpsc::channel::<Value>();
@@ -86,8 +100,20 @@ impl Socket {
                     stream
                         .set_write_timeout(Some(Duration::from_secs(10)))
                         .map_err(|e| e.to_string())?;
-                    let (mut socket, _) =
-                        tungstenite::client_tls(request, stream).map_err(|e| e.to_string())?;
+                    let (mut socket, _) = match max_message {
+                        None => tungstenite::client_tls(request, stream),
+                        Some(limit) => tungstenite::client_tls_with_config(
+                            request,
+                            stream,
+                            Some(
+                                tungstenite::protocol::WebSocketConfig::default()
+                                    .max_message_size(Some(limit))
+                                    .max_frame_size(Some(limit)),
+                            ),
+                            None,
+                        ),
+                    }
+                    .map_err(|e| e.to_string())?;
                     match socket.get_mut() {
                         MaybeTlsStream::Plain(s) => {
                             s.set_read_timeout(Some(Duration::from_millis(20)))
