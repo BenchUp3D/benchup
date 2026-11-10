@@ -301,6 +301,7 @@ pub(crate) fn edited_geometry(
         .collect();
     let mut faces = changed(&source.faces, &model.faces);
     faces.extend(changed(&source.face_colors, &model.face_colors));
+    faces.extend(changed(&source.reference_images, &model.reference_images));
     if !vertices.is_empty() {
         faces.extend(
             model
@@ -528,6 +529,8 @@ impl SceneCache {
         let (near, far) = clip_planes(&key.camera, self.resident.bounds.unwrap_or(geometry.bounds));
         let matrix = key.camera.matrix_with_clip_planes(key.size, near, far)
             * glam::DMat4::from_translation(geometry.origin);
+        self.image_matrix = Some(key.camera.matrix_with_clip_planes(key.size, near, far));
+        self.image_depth = None;
         let eye = key.camera.eye();
         let toward_eye = (eye - key.camera.target).normalize();
         let light =
@@ -676,7 +679,7 @@ impl Geometry {
         let mut vertices = Vec::new();
         let mut surfaces: BTreeMap<(u64, u64), Vec<(DVec3, DVec3, u32)>> = BTreeMap::new();
         for face in model.faces.values().filter(|f| {
-            dirty.is_none_or(|dirty| dirty.contains(&f.id))
+            !model.reference_images.contains_key(&f.id) && dirty.is_none_or(|dirty| dirty.contains(&f.id))
                 && entities.get(f.id).displayed(&key.display)
         }) {
             // Visibility IDs also address interaction states. Retained edges

@@ -60,11 +60,11 @@ impl ShadowCache {
                 && key.section == section
                 && key.receivers.iter().copied().eq(faces
                     .iter()
-                    .filter(|(id, _)| entities.get(*id).displayed(d))
+                    .filter(|(id, face)| !face.reference_image && entities.get(*id).displayed(d))
                     .map(|(id, _)| id))
                 && key.casters.iter().copied().eq(faces
                     .iter()
-                    .filter(|(id, _)| !entities.get(*id).hidden)
+                    .filter(|(id, face)| !face.reference_image && !entities.get(*id).hidden)
                     .map(|(id, _)| id))
         }) {
             return;
@@ -76,12 +76,12 @@ impl ShadowCache {
             section,
             receivers: faces
                 .iter()
-                .filter(|(id, _)| entities.get(*id).displayed(d))
+                .filter(|(id, face)| !face.reference_image && entities.get(*id).displayed(d))
                 .map(|(id, _)| id)
                 .collect(),
             casters: faces
                 .iter()
-                .filter(|(id, _)| !entities.get(*id).hidden)
+                .filter(|(id, face)| !face.reference_image && !entities.get(*id).hidden)
                 .map(|(id, _)| id)
                 .collect(),
         };

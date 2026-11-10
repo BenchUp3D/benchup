@@ -114,7 +114,7 @@ impl Section {
     }
 }
 
-pub(super) const TOOLS: [(Tool, &str); 17] = [
+pub(super) const TOOLS: [(Tool, &str); 18] = [
     (Tool::Select, "Space"),
     (Tool::Line, "L"),
     (Tool::Rectangle, "R"),
@@ -133,6 +133,7 @@ pub(super) const TOOLS: [(Tool, &str); 17] = [
     (Tool::Dimensions, "I"),
     // Append to preserve the indices of saved custom shortcuts.
     (Tool::Rotate, "Q"),
+    (Tool::Image, "J"),
 ];
 
 const DEFAULT_LANGUAGE: &str = "en";
@@ -195,12 +196,15 @@ impl GeneralSettings {
             };
         }
         // Migrate older shortcut lists without discarding custom assignments.
-        if self.tool_keys.len() + 1 == TOOLS.len() {
-            let key = std::iter::once("Q")
-                .chain(["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"])
-                .find(|key| !self.tool_keys.iter().any(|saved| saved.as_str() == *key))
-                .unwrap();
-            self.tool_keys.push(key.into());
+        if (16..TOOLS.len()).contains(&self.tool_keys.len()) {
+            while self.tool_keys.len() < TOOLS.len() {
+                let preferred = TOOLS[self.tool_keys.len()].1;
+                let key = std::iter::once(preferred)
+                    .chain(["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"])
+                    .find(|key| !self.tool_keys.iter().any(|saved| saved.as_str() == *key))
+                    .unwrap();
+                self.tool_keys.push(key.into());
+            }
         }
         if self.tool_keys.len() != TOOLS.len()
             || self
@@ -789,7 +793,7 @@ mod tests {
     fn adding_rotate_migrates_existing_custom_keys_and_resolves_conflicts() {
         for custom in ["H", "Q"] {
             let mut settings = GeneralSettings::default();
-            settings.tool_keys.pop();
+            settings.tool_keys.truncate(16);
             settings.tool_keys[1] = custom.into();
             let old = settings.tool_keys.clone();
             settings.normalize();
@@ -800,6 +804,19 @@ mod tests {
             assert_ne!(rotation, custom);
             assert_eq!(settings.tool_for_key(Key::from_name(rotation).unwrap()), Some(Tool::Rotate));
         }
+    }
+
+    #[test]
+    fn adding_image_keeps_custom_shortcuts_and_picks_an_unused_key() {
+        let mut settings = GeneralSettings::default();
+        settings.tool_keys.truncate(17);
+        settings.tool_keys[1] = "J".into();
+        let original = settings.tool_keys.clone();
+        settings.normalize();
+        assert_eq!(&settings.tool_keys[..17], &original);
+        assert_eq!(settings.tool_for_key(Key::J), Some(Tool::Line));
+        assert_ne!(settings.tool_shortcut(Tool::Image), "J");
+        assert_eq!(settings.tool_shortcut(Tool::Rotate), "Q");
     }
 
     #[test]

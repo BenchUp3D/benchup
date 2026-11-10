@@ -60,6 +60,7 @@ fn main() {
             depth_buffer: 32,
             ..Default::default()
         };
+        benchup_app::prepare_browser_storage().await;
         let result = eframe::WebRunner::new()
             .start(
                 canvas,

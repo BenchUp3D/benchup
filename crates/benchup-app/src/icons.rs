@@ -268,6 +268,12 @@ fn paint_tool(p: &egui::Painter, rect: Rect, tool: Tool, colors: ToolPalette) {
                 egui::StrokeKind::Inside,
             );
         }
+        Tool::Image => {
+            p.rect_filled(Rect::from_two_pos(xy(-1., -0.8), xy(1., 0.8)), 0, face);
+            p.rect_stroke(Rect::from_two_pos(xy(-1., -0.8), xy(1., 0.8)), 0, stroke, egui::StrokeKind::Inside);
+            p.circle_filled(xy(0.5, -0.4), r * 0.17, gold);
+            p.add(egui::Shape::line(vec![xy(-0.9, 0.65), xy(-0.3, -0.15), xy(0.15, 0.4), xy(0.5, 0.1), xy(0.9, 0.65)], stroke));
+        }
         Tool::Circle => {
             p.circle_filled(c, r, face);
             p.circle_stroke(c, r, stroke);

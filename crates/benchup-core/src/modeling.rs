@@ -378,6 +378,9 @@ impl Model {
     }
 
     fn editable_surface(&self, face: u64) -> Result<(), &'static str> {
+        if self.reference_images.contains_key(&face) {
+            return Err("Use image Properties, Move, Rotate or Scale to edit a reference image.");
+        }
         if self.is_locked(face) {
             return Err(tr!("core.modeling.unlock_the_object_before_editing_it"));
         }
@@ -604,6 +607,7 @@ impl Model {
             }
         }
         next.face_colors.retain(|id, _| next.faces.contains_key(id));
+        next.reference_images.retain(|id, _| next.faces.contains_key(id));
         if let Some(color) = color {
             for id in next.faces.keys().filter(|id| !old_faces.contains(id)) {
                 next.face_colors.insert(*id, color);

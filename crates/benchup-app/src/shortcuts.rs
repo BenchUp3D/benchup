@@ -99,6 +99,7 @@ impl BenchUpApp {
                     tool_row(Tool::Select, tr!("shortcuts.select")),
                     tool_row(Tool::Line, tr!("shortcuts.connected_lines")),
                     tool_row(Tool::Rectangle, tr!("shortcuts.rectangle")),
+                    tool_row(Tool::Image, "Reference image"),
                     tool_row(Tool::Circle, tr!("shortcuts.circle")),
                     tool_row(Tool::Polygon, tr!("shortcuts.polygon")),
                     tool_row(Tool::Freehand, tr!("shortcuts.freehand")),

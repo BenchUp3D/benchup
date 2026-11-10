@@ -51,3 +51,8 @@ mod pdf_qa_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod update_repository;
+
+mod reference_image_gpu;
+
+#[cfg(target_arch = "wasm32")]
+pub use storage::prepare_browser_storage;

@@ -460,6 +460,7 @@ impl Model {
             .collect();
         self.faces.retain(|id, _| !replaced.contains(id));
         self.face_colors.retain(|id, _| self.faces.contains_key(id));
+        self.reference_images.retain(|id, _| self.faces.contains_key(id));
         for vertices in fresh {
             let id = self.id();
             self.faces.insert(

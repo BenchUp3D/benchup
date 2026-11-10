@@ -77,3 +77,23 @@ fn zero_duration_selection_snaps_and_nested_tools_share_their_slot() {
     app.set_tool(Tool::Circle);
     assert_eq!(frame(&ctx, &mut app, 0.03), drawing);
 }
+
+#[test]
+fn image_appears_after_text_and_shares_its_toolbar_slot() {
+    let text = Tool::MEASUREMENT_MENU.iter().position(|tool| *tool == Tool::Text).unwrap();
+    assert_eq!(Tool::MEASUREMENT_MENU[text + 1], Tool::Image);
+    assert!(!Tool::DRAWING.contains(&Tool::Image));
+    assert!(Tool::Image.is_drawing());
+    assert!(!Tool::Image.is_measuring());
+    let ctx = egui::Context::default();
+    apply(&ctx);
+    ctx.style_mut_of(ctx.theme(), |s| s.animation_time = 0.);
+    let mut app = BenchUpApp::with_document(Document::default(), None, true);
+    app.set_tool(Tool::Rectangle);
+    app.set_tool(Tool::Text);
+    let text_slot = frame(&ctx, &mut app, 0.);
+    app.set_tool(Tool::Image);
+    assert_eq!(frame(&ctx, &mut app, 0.01), text_slot);
+    assert_eq!(app.measurement_tool, Tool::Image);
+    assert_eq!(app.drawing_tool, Tool::Rectangle);
+}

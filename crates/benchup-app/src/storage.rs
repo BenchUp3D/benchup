@@ -208,97 +208,15 @@ pub fn save_selection(doc: &Document) -> Result<(), String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn browser_storage() -> Result<web_sys::Storage, String> {
-    let storage = web_sys::window()
-        .ok_or(tr!("storage.no_browser_window"))?
-        .local_storage()
-        .map_err(|_| tr!("storage.local_storage_is_blocked").to_string())?
-        .ok_or_else(|| tr!("storage.local_storage_is_unavailable").to_string())?;
-    // Migrate the document and its overlays as a unit before new writes. Once
-    // complete, never resurrect legacy overlays after a new snapshot is saved.
-    const MARKER: &str = "benchup.storage-migrated.v1";
-    if storage
-        .get_item(MARKER)
-        .map_err(|e| format!("{e:?}"))?
-        .is_none()
-    {
-        for suffix in ["selection.v1", "edits.v1", "document.v1"] {
-            let key = format!("benchup.{suffix}");
-            if storage
-                .get_item(&key)
-                .map_err(|e| format!("{e:?}"))?
-                .is_none()
-                && let Some(value) = storage
-                    .get_item(&format!("ketchup.{suffix}"))
-                    .map_err(|e| format!("{e:?}"))?
-            {
-                storage
-                    .set_item(&key, &value)
-                    .map_err(|e| format!("{e:?}"))?;
-            }
-        }
-        storage
-            .set_item(MARKER, "true")
-            .map_err(|e| format!("{e:?}"))?;
-    }
-    Ok(storage)
-}
+#[path = "browser_storage.rs"]
+mod browser;
 #[cfg(target_arch = "wasm32")]
-pub fn load() -> Result<Option<Document>, String> {
-    *AUTOSAVE_TOKEN.lock().unwrap() = None;
-    let storage = browser_storage()?;
-    let json = storage
-        .get_item("benchup.document.v1")
-        .map_err(|_| tr!("storage.cannot_read_local_storage").to_string())?;
-    json.map(|json| {
-        restore_autosave(
-            &json,
-            storage
-                .get_item("benchup.selection.v1")
-                .ok()
-                .flatten()
-                .as_deref(),
-            storage
-                .get_item("benchup.edits.v1")
-                .ok()
-                .flatten()
-                .as_deref(),
-        )
-    })
-    .transpose()
-}
-#[cfg(target_arch = "wasm32")]
-pub fn save(doc: &Document) -> Result<(), String> {
-    *AUTOSAVE_TOKEN.lock().unwrap() = None;
-    let (json, token) = autosave_json(doc)?;
-    browser_storage()?
-        .set_item("benchup.document.v1", &json)
-        .map_err(|_| tr!("storage.local_storage_is_blocked_or_full").to_string())?;
-    browser_storage()?
-        .remove_item("benchup.edits.v1")
-        .map_err(|_| tr!("storage.local_storage_is_blocked_or_full").to_string())?;
-    *AUTOSAVE_TOKEN.lock().unwrap() = Some(token);
-    remember_base(doc);
-    Ok(())
-}
-#[cfg(target_arch = "wasm32")]
-pub fn save_edits(doc: &Document) -> Result<(), String> {
-    let Some(json) = edits_json(doc)? else {
-        return save(doc);
-    };
-    browser_storage()?
-        .set_item("benchup.edits.v1", &json)
-        .map_err(|_| tr!("storage.local_storage_is_blocked_or_full").to_string())?;
-    save_selection(doc)
-}
-#[cfg(target_arch = "wasm32")]
-pub fn save_selection(doc: &Document) -> Result<(), String> {
-    let Some(json) = selection_json(doc)? else {
-        return save(doc);
-    };
-    browser_storage()?
-        .set_item("benchup.selection.v1", &json)
-        .map_err(|_| tr!("storage.local_storage_is_blocked_or_full").to_string())
+pub use browser::{
+    is_pending, load, poll_save, prepare as prepare_browser_storage, save, save_edits, save_selection,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub fn is_pending() -> bool {
+    false
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

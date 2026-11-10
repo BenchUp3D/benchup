@@ -315,7 +315,7 @@ impl BenchUpApp {
         let origin = drawing.origin;
         let delta = self.snap.map_or(DVec3::ZERO, |snap| snap.point - origin);
         match self.tool {
-            Tool::Rectangle => {
+            Tool::Rectangle | Tool::Image => {
                 let (width, height) = self
                     .length_input
                     .split_once(',')

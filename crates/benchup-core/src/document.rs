@@ -81,6 +81,10 @@ pub struct Model {
     #[serde(default)]
     #[serde(deserialize_with = "deserialize_map_or_empty_sequence")]
     pub face_colors: BTreeMap<u64, [u8; 3]>,
+    #[serde(default, deserialize_with = "deserialize_map_or_empty_sequence")]
+    pub reference_images: BTreeMap<u64, crate::ReferenceImage>,
+    #[serde(default, deserialize_with = "deserialize_map_or_empty_sequence")]
+    pub image_assets: BTreeMap<crate::reference_images::ImageAssetId, crate::ImageAsset>,
     #[serde(default)]
     #[serde(deserialize_with = "deserialize_map_or_empty_sequence")]
     pub dimensions: BTreeMap<u64, crate::Dimension>,
@@ -116,6 +120,8 @@ impl Model {
             && self.vertices == other.vertices
             && self.edges == other.edges
             && self.faces == other.faces
+            && self.image_assets == other.image_assets
+            && self.reference_images == other.reference_images
             && self.face_colors == other.face_colors
             && self.dimensions == other.dimensions
             && self.texts == other.texts
@@ -343,6 +349,7 @@ impl Model {
             self.face_colors.remove(id);
         }
         self.face_colors.retain(|id, _| self.faces.contains_key(id));
+        self.reference_images.retain(|id, _| self.faces.contains_key(id));
         self.edges.retain(|id, _| !ids.contains(id));
         let used: std::collections::HashSet<_> = self
             .edges
@@ -510,6 +517,7 @@ impl Model {
         self.validate_objects()?;
         self.validate_dimensions()?;
         self.validate_texts()?;
+        self.validate_reference_images()?;
         if self
             .face_colors
             .keys()
@@ -688,6 +696,8 @@ mod legacy_json_map_tests {
             "edges",
             "faces",
             "face_colors",
+            "reference_images",
+            "image_assets",
             "dimensions",
             "texts",
             "objects",
@@ -706,6 +716,8 @@ mod legacy_json_map_tests {
             "edges",
             "faces",
             "face_colors",
+            "reference_images",
+            "image_assets",
             "dimensions",
             "texts",
             "objects",

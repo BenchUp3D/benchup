@@ -1,5 +1,7 @@
 #[macro_use]
 mod i18n;
+pub mod reference_images;
+pub use reference_images::{ImageAsset, ImageFit, ImageSettings, ReferenceImage};
 
 pub mod connections;
 pub mod joinery;
@@ -72,6 +74,7 @@ pub enum Tool {
     Select,
     Line,
     Rectangle,
+    Image,
     Circle,
     Polygon,
     Freehand,
@@ -119,6 +122,15 @@ impl Tool {
     pub fn is_measuring(self) -> bool {
         Self::MEASURING.contains(&self)
     }
+    // Menu placement is separate from interaction: Image uses rectangle
+    // inference, while appearing with Text and the measurement tools.
+    pub const MEASUREMENT_MENU: [Self; 5] = [
+        Self::Dimensions,
+        Self::TapeMeasure,
+        Self::Protractor,
+        Self::Text,
+        Self::Image,
+    ];
     pub const DRAWING: [Self; 5] = [
         Self::Line,
         Self::Rectangle,
@@ -127,9 +139,9 @@ impl Tool {
         Self::Freehand,
     ];
     pub fn is_drawing(self) -> bool {
-        Self::DRAWING.contains(&self)
+        self == Self::Image || Self::DRAWING.contains(&self)
     }
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::Select,
         Self::Line,
         Self::Rectangle,
@@ -151,6 +163,7 @@ impl Tool {
         Self::TapeMeasure,
         Self::Protractor,
         Self::Text,
+        Self::Image,
         Self::Dimensions,
         Self::Erase,
         Self::Orbit,
@@ -176,6 +189,7 @@ impl Tool {
             Self::Select => tr!("tools.select"),
             Self::Line => tr!("tools.line"),
             Self::Rectangle => tr!("tools.rectangle"),
+            Self::Image => "Image",
             Self::Circle => tr!("tools.circle"),
             Self::Polygon => tr!("tools.polygon"),
             Self::Freehand => tr!("tools.freehand"),
@@ -206,6 +220,7 @@ impl Tool {
             Self::Select => "Space",
             Self::Line => "L",
             Self::Rectangle => "R",
+            Self::Image => "J",
             Self::Circle => "C",
             Self::Polygon => "G",
             Self::Freehand => "D",
@@ -236,6 +251,7 @@ impl Tool {
                 tr!("tools.click_to_start_a_line_arrow_keys_lock")
             }
             Self::Rectangle => tr!("tools.click_two_opposite_corners_arrow_keys_lock_the"),
+            Self::Image => "Click two opposite corners, then choose a local image. Arrow keys lock the drawing plane; enter width, height for precise placement.",
             Self::Circle => {
                 tr!("tools.click_the_center_then_a_point_on_the")
             }

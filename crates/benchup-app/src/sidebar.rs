@@ -39,6 +39,7 @@ pub(super) struct InspectorPreferences {
     component_filter: String,
     outliner_filter: String,
     shortcut_filter: String,
+    image: image_tools::Preferences,
     paint_color: [u8; 3],
     paint_target: PaintTarget,
     tools: ToolPreferences,
@@ -78,6 +79,7 @@ impl Default for InspectorPreferences {
             component_filter: String::new(),
             outliner_filter: String::new(),
             shortcut_filter: String::new(),
+            image: Default::default(),
             paint_color: [195, 96, 67],
             paint_target: PaintTarget::default(),
             tools: ToolPreferences::default(),
@@ -135,6 +137,60 @@ mod guide_preference_tests {
         fn set_string(&mut self, key: &str, value: String) { self.values.insert(key.into(), value); }
         fn remove_string(&mut self, key: &str) { self.values.remove(key); }
         fn flush(&mut self) { self.flushed = true; }
+    }
+
+    #[test]
+    fn image_defaults_tool_and_sections_persist_without_a_model_edit() {
+        let old: InspectorPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.image, image_tools::Preferences::default());
+        let ctx = egui::Context::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        let mut storage = Storage::default();
+        app.set_tool(Tool::Image);
+        app.images.preferences.appearance = benchup_core::ImageSettings {
+            fit: benchup_core::ImageFit::Cover, anchor: [0.2, 0.8], pan: [0.1, -0.3],
+            zoom: 1.5, rotation: 15., opacity: 0.6, brightness: 0.9, contrast: 1.2,
+            grayscale: true, flip_horizontal: true, flip_vertical: true,
+            smoothing: false, double_sided: false,
+        };
+        app.images.preferences.offset = DVec3::new(1., 2., 3.);
+        for key in ["reference_image_defaults", "reference_image_appearance"] {
+            set_section_open(&ctx, key, false);
+        }
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        assert!(storage.flushed);
+        assert!(!app.project.modified);
+        assert!(app.dirty_since.is_none());
+        let restored_ctx = egui::Context::default();
+        let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+        restored.restore_inspector_preferences(&restored_ctx, Some(&storage));
+        assert_eq!(restored.tool, Tool::Image);
+        assert_eq!(restored.measurement_tool, Tool::Image);
+        assert_eq!(restored.drawing_tool, Tool::Line);
+        assert_eq!(restored.images.preferences, app.images.preferences);
+        for key in ["reference_image_defaults", "reference_image_appearance"] {
+            let id = egui::Id::new(("test/image-section", key));
+            restore_section(&restored_ctx, id, key, true);
+            assert!(!egui::collapsing_header::CollapsingState::load_with_default_open(&restored_ctx, id, true).is_open());
+        }
+        restored.replace_project(Document::default(), None, &restored_ctx);
+        assert_eq!(restored.images.preferences, app.images.preferences);
+        assert!(restored.doc.model.reference_images.is_empty());
+    }
+
+    #[test]
+    fn legacy_image_choice_moves_to_the_text_menu_on_restore() {
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        let legacy = ToolPreferences { drawing: Tool::Image, ..Default::default() };
+        legacy.restore(&mut app);
+        assert_eq!(app.tool, Tool::Select);
+        assert_eq!(app.drawing_tool, Tool::Line);
+        assert_eq!(app.measurement_tool, Tool::Image);
+        let captured = ToolPreferences::capture(&app);
+        let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+        captured.restore(&mut restored);
+        assert_eq!(restored.measurement_tool, Tool::Image);
+        assert_eq!(restored.drawing_tool, Tool::Line);
     }
 
     #[test]
@@ -312,12 +368,15 @@ impl ToolPreferences {
 
     fn restore(&self, app: &mut BenchUpApp) {
         let defaults = Self::default();
-        app.drawing_tool = if self.drawing.is_drawing() {
+        app.drawing_tool = if Tool::DRAWING.contains(&self.drawing) {
             self.drawing
         } else {
             defaults.drawing
         };
-        app.measurement_tool = if self.measurement.is_measuring() {
+        app.measurement_tool = if self.drawing == Tool::Image {
+            // Migrate the Image choice saved before it moved below Text.
+            Tool::Image
+        } else if Tool::MEASUREMENT_MENU.contains(&self.measurement) {
             self.measurement
         } else {
             defaults.measurement
@@ -632,6 +691,8 @@ impl BenchUpApp {
         self.component_filter = preferences.component_filter.clone();
         self.outliner_filter = preferences.outliner_filter.clone();
         self.shortcut_filter = preferences.shortcut_filter.clone();
+        self.images.preferences = preferences.image.clone();
+        self.images.preferences.sanitize();
         self.paint_color = preferences.paint_color;
         self.paint_target = preferences.paint_target;
         self.screenshot.settings = preferences.screenshot.clone();
@@ -713,6 +774,7 @@ impl BenchUpApp {
             component_filter: self.component_filter.clone(),
             outliner_filter: self.outliner_filter.clone(),
             shortcut_filter: self.shortcut_filter.clone(),
+            image: self.images.preferences.clone(),
             paint_color: self.paint_color,
             paint_target: self.paint_target,
             tools: ToolPreferences::capture(self),

@@ -10,7 +10,7 @@ license = "MIT"
 rust-version = "1.95"
 
 [workspace.dependencies]
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 glam = { version = "0.32", features = ["serde"] }
 

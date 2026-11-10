@@ -202,6 +202,8 @@ pub struct SceneKey {
 
 #[derive(Default)]
 pub struct SceneCache {
+    image_matrix: Option<glam::DMat4>,
+    image_depth: Option<[f32; 4]>,
     resident: resident::Cache,
     annotations: Option<(Rect, [usize; 2], Vec<egui::Shape>)>,
     joint_surfaces: JointSurfaceCache,
@@ -218,6 +220,9 @@ pub struct SceneCache {
 }
 
 impl SceneCache {
+    pub(crate) fn image_projection(&self) -> (glam::DMat4, [f32; 4]) {
+        (self.image_matrix.unwrap_or(glam::DMat4::IDENTITY), self.image_depth.unwrap_or([0.; 4]))
+    }
     pub fn repaint(&self, key: &SceneKey, painter: &egui::Painter, rect: Rect) -> bool {
         if self.key.as_ref() == Some(key)
             && self
@@ -320,6 +325,7 @@ pub struct Mesh {
     size: DVec2,
     pixels_per_point: f64,
     parallel: bool,
+    image_depth_bounds: Option<(f64, f64)>,
     view: CameraView,
     display: benchup_core::DisplaySettings,
     buffer_pool: Option<BufferPool>,
@@ -376,6 +382,7 @@ impl Mesh {
             size,
             pixels_per_point: 1.,
             parallel: camera.projection == benchup_core::Projection::Parallel,
+            image_depth_bounds: None,
             view: camera.view(size),
             display: benchup_core::DisplaySettings::default(),
             buffer_pool: None,
@@ -420,6 +427,33 @@ impl Mesh {
             surfaces.clear();
         }
         mesh
+    }
+    pub(crate) fn reference_image_depth_bounds(&mut self, model: &Model) {
+        if !self.parallel { return; }
+        // The legacy orthographic mesh path normalizes quantized CPU depths.
+        // Four scalar depth samples per image keep its GPU quad in that range;
+        // all image projection, UV transforms and clipping remain on the GPU.
+        let matrix = self.view.matrix();
+        let mut lo = f64::INFINITY;
+        let mut hi = f64::NEG_INFINITY;
+        for image in model.reference_images.values() {
+            if let Some(points) = image.points(model) {
+                for point in points {
+                    let p = matrix * point.extend(1.);
+                    let z = f64::from((p.z / p.w) as f32);
+                    if z > 0. && z < 1. { lo = lo.min(z); hi = hi.max(z); }
+                }
+            }
+        }
+        self.image_depth_bounds = lo.is_finite().then_some((lo, hi));
+    }
+    fn parallel_depth_range(&self) -> Option<(f64, f64)> {
+        let (mut lo, mut hi) = self.image_depth_bounds.unwrap_or((f64::INFINITY, f64::NEG_INFINITY));
+        for vertex in self.vertices.iter().chain(&self.shadow_vertices) {
+            let depth = f64::from(vertex.position[2]);
+            if depth > 0. && depth < 1. { lo = lo.min(depth); hi = hi.max(depth); }
+        }
+        lo.is_finite().then_some((lo, hi))
     }
     pub fn enable_gpu_edge_occlusion(&mut self) {
         self.gpu_edge_occlusion = true;
@@ -2024,6 +2058,14 @@ impl Mesh {
             .retain(|owner, _| used.contains(owner));
         self.joint_surfaces.used.clear();
         cache.joint_surfaces = std::mem::take(&mut self.joint_surfaces);
+        // Keep the orthographic remap separate from the projection matrix.
+        // Combining them in f32 loses depth to cancellation on flat frames.
+        cache.image_matrix = Some(self.view.matrix());
+        cache.image_depth = None;
+        if self.parallel && let Some((lo, hi)) = self.parallel_depth_range() {
+            cache.image_depth = Some([lo as f32, (hi - lo).max(f64::EPSILON) as f32,
+                if hi == lo { 0.5 } else { 0.1 }, 1.]);
+        }
         self.normalize_parallel_depth();
         let candidate = Arc::new(self.into_callback());
         if let Some(previous) = &cache.retained {
@@ -2050,18 +2092,7 @@ impl Mesh {
         // conversion from [0, 1] to [-1, 1] otherwise rounds nearby faces to
         // the same depth, letting rear faces overwrite visible surfaces.
         // Remap only GPU depths; CPU occlusion keeps its original precision.
-        let mut lo = f64::INFINITY;
-        let mut hi = f64::NEG_INFINITY;
-        for vertex in self.vertices.iter().chain(&self.shadow_vertices) {
-            let depth = f64::from(vertex.position[2]);
-            if depth > 0. && depth < 1. {
-                lo = lo.min(depth);
-                hi = hi.max(depth);
-            }
-        }
-        if !lo.is_finite() {
-            return;
-        }
+        let Some((lo, hi)) = self.parallel_depth_range() else { return; };
         let center = (lo + hi) * 0.5;
         let span = (hi - lo).max(f64::EPSILON);
         for vertex in self.vertices.iter_mut().chain(&mut self.shadow_vertices) {
@@ -3192,6 +3223,7 @@ pub(crate) fn install_resources(
         shadow_faces,
     });
     resident::install(device, format, renderer);
+    crate::reference_image_gpu::install(device, format, renderer);
 }
 #[derive(Clone, Copy, PartialEq)]
 enum PipelinePass {
@@ -3574,6 +3606,7 @@ pub struct FaceCache {
 }
 #[derive(Clone)]
 pub struct CachedFace {
+    pub reference_image: bool,
     boundary: Face,
     positions: Vec<DVec3>,
     pub normal: DVec3,
@@ -3617,6 +3650,8 @@ impl FaceCache {
             self.faces.iter().map(|(&id, face)| (id, &face.boundary)),
             model.faces.iter().map(|(&id, face)| (id, face)),
         );
+        dirty.extend(self.faces.iter().filter_map(|(&id, face)|
+            (face.reference_image != model.reference_images.contains_key(&id)).then_some(id)));
         #[cfg(test)]
         let topology_changed = !dirty.is_empty();
         for vertex in &vertices {
@@ -3702,6 +3737,7 @@ impl FaceCache {
             self.faces.insert(
                 face.id,
                 CachedFace {
+                    reference_image: model.reference_images.contains_key(&face.id),
                     boundary: face.clone(),
                     positions: points,
                     normal: plane.map_or(DVec3::Z, |plane| plane.normal),
@@ -7733,5 +7769,38 @@ mod reference_axis_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod reference_image_depth_tests {
+    use super::*;
+    #[test]
+    fn orthographic_image_depth_range_includes_surface_and_frame_edges() {
+        let mut camera = Camera::default();
+        camera.projection = benchup_core::Projection::Parallel;
+        camera.set_standard_view(benchup_core::StandardView::Top);
+        let mut model = Model::default();
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(2, 1).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        let image = benchup_core::ReferenceImage { name: "Plan".into(),
+            asset: benchup_core::reference_images::ImageAssetId::new_v4(), vertices: [0; 4],
+            settings: Default::default(), placement_offset: DVec3::ZERO };
+        let points = [DVec3::ZERO, DVec3::X * 2., DVec3::new(2., 1., 0.), DVec3::Y];
+        model.add_reference_image(points, image, benchup_core::ImageAsset { png: bytes.into_inner().into(), pixels: [2, 1] }).unwrap();
+        let size = DVec2::new(800., 600.);
+        let mut mesh = Mesh::new(&camera, size);
+        mesh.reference_image_depth_bounds(&model);
+        for edge in model.edges.values() {
+            let (a, b) = model.points(edge);
+            mesh.world_line(&camera, a, b, 1., Color32::WHITE);
+        }
+        let raw = (camera.matrix(size) * points[0].extend(1.)).z as f32;
+        let mut cache = SceneCache::default();
+        let _callback = mesh.retain(&mut cache);
+        let (_, depth) = cache.image_projection();
+        let mapped = depth[2] + 0.8 * ((raw - depth[0]) / depth[1]);
+        assert!(mapped.is_finite() && (0. ..=1.).contains(&mapped));
+        assert_eq!(depth[3], 1.);
     }
 }

@@ -117,6 +117,10 @@ pub(crate) struct ModelChange {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     face_colors: Changes<u64, [u8; 3]>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    reference_images: Changes<u64, crate::ReferenceImage>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    image_assets: Changes<crate::reference_images::ImageAssetId, crate::ImageAsset>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     dimensions: Changes<u64, crate::Dimension>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     texts: Changes<u64, crate::TextAnnotation>,
@@ -147,6 +151,8 @@ impl ModelChange {
             edges: difference(&before.edges, &after.edges),
             faces: difference(&before.faces, &after.faces),
             face_colors: difference(&before.face_colors, &after.face_colors),
+            reference_images: difference(&before.reference_images, &after.reference_images),
+            image_assets: difference(&before.image_assets, &after.image_assets),
             dimensions: difference(&before.dimensions, &after.dimensions),
             texts: difference(&before.texts, &after.texts),
             guides: difference(&before.guides, &after.guides),
@@ -166,6 +172,8 @@ impl ModelChange {
             && self.vertices.is_empty()
             && self.edges.is_empty()
             && self.faces.is_empty()
+            && self.image_assets.is_empty()
+            && self.reference_images.is_empty()
             && self.face_colors.is_empty()
             && self.dimensions.is_empty()
             && self.texts.is_empty()
@@ -184,6 +192,8 @@ impl ModelChange {
             && matches(&self.vertices, &model.vertices, forward)
             && matches(&self.edges, &model.edges, forward)
             && matches(&self.faces, &model.faces, forward)
+            && matches(&self.image_assets, &model.image_assets, forward)
+            && matches(&self.reference_images, &model.reference_images, forward)
             && matches(&self.face_colors, &model.face_colors, forward)
             && matches(&self.dimensions, &model.dimensions, forward)
             && matches(&self.texts, &model.texts, forward)
@@ -205,6 +215,8 @@ impl ModelChange {
         apply(&self.edges, &mut model.edges, forward);
         apply(&self.faces, &mut model.faces, forward);
         apply(&self.face_colors, &mut model.face_colors, forward);
+        apply(&self.reference_images, &mut model.reference_images, forward);
+        apply(&self.image_assets, &mut model.image_assets, forward);
         apply(&self.dimensions, &mut model.dimensions, forward);
         apply(&self.texts, &mut model.texts, forward);
         apply(&self.guides, &mut model.guides, forward);

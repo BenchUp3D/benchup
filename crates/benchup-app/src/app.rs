@@ -108,6 +108,8 @@ mod selection_measurements;
 mod solid_tools;
 #[path = "stock_settings.rs"]
 mod stock_settings;
+#[path = "image_tools.rs"]
+mod image_tools;
 #[path = "text_tools.rs"]
 mod text_tools;
 #[path = "tag_menu.rs"]
@@ -182,6 +184,7 @@ enum GestureKind {
     },
     Line,
     Shape,
+    Image { started: bool },
     Freehand {
         paused: bool,
     },
@@ -340,6 +343,7 @@ pub struct BenchUpApp {
     selection_measurements: selection_measurements::Cache,
     flip_hover: Option<Axis>,
     drawing: Option<Drawing>,
+    images: image_tools::State,
     polygon_sides: usize,
     selected: BTreeSet<u64>,
     hover: Option<u64>,
@@ -521,6 +525,7 @@ impl BenchUpApp {
             selection_measurements:Default::default(),
             flip_hover: None,
             drawing: None,
+            images: Default::default(),
             polygon_sides: 6,
             selected,
             hover: None,
@@ -690,10 +695,10 @@ impl BenchUpApp {
         self.measurement = None;
         self.text_editor = None;
         self.tool = tool;
-        if tool.is_drawing() {
+        if Tool::DRAWING.contains(&tool) {
             self.drawing_tool = tool;
         }
-        if tool.is_measuring() {
+        if Tool::MEASUREMENT_MENU.contains(&tool) {
             self.measurement_tool = tool;
         }
         self.drawing = None;
@@ -1245,8 +1250,12 @@ impl BenchUpApp {
         }
     }
     fn drawing_points(&self) -> Vec<DVec3> {
-        self.precise_drawing_points()
-            .unwrap_or_else(|_| self.raw_drawing_points())
+        let mut points = self.precise_drawing_points()
+            .unwrap_or_else(|_| self.raw_drawing_points());
+        if self.tool == Tool::Image {
+            for point in &mut points { *point += self.images.preferences.offset; }
+        }
+        points
     }
     fn raw_drawing_points(&self) -> Vec<DVec3> {
         let Some(drawing) = &self.drawing else {
@@ -1258,7 +1267,7 @@ impl BenchUpApp {
         let origin = drawing.origin;
         let delta = snap.point - origin;
         match self.tool {
-            Tool::Rectangle => {
+            Tool::Rectangle | Tool::Image => {
                 let a = drawing.u * delta.dot(drawing.u);
                 let b = drawing.v * delta.dot(drawing.v);
                 vec![origin, origin + a, origin + a + b, origin + b, origin]
@@ -1320,7 +1329,7 @@ impl BenchUpApp {
                 return;
             }
         };
-        let flat_rectangle = self.tool == Tool::Rectangle
+        let flat_rectangle = matches!(self.tool, Tool::Rectangle | Tool::Image)
             && self.length_input.trim().is_empty()
             && points.windows(2).any(|pair| {
                 self.doc
@@ -1336,6 +1345,12 @@ impl BenchUpApp {
                 self.drawing = None;
             } else {
                 self.say(ctx, tr!("app.move_the_pointer_to_give_the_shape_some"));
+            }
+            return;
+        }
+        if self.tool == Tool::Image {
+            if self.choose_reference_image(ctx, points[..4].try_into().unwrap(), None) {
+                self.stop_drawing();
             }
             return;
         }
@@ -2679,7 +2694,7 @@ impl BenchUpApp {
                     ui.add(egui::Separator::default().vertical().spacing(16.));
                     let (text, color) = if self.save_error.is_some() {
                         (tr!("app.unsaved"), Color32::from_rgb(243, 177, 145))
-                    } else if self.dirty_since.is_some() {
+                    } else if self.dirty_since.is_some() || storage::is_pending() {
                         (tr!("app.saving"), Color32::from_rgb(190, 202, 188))
                     } else if self.storage_recovery {
                         (tr!("app.new_workspace"), Color32::from_rgb(190, 202, 188))
@@ -3002,7 +3017,7 @@ impl BenchUpApp {
                         tr!("grain_direction.click_to_confirm")
                     } else if self.tool == Tool::Line && self.line_start.is_some() {
                         tr!("app.click_to_finish_type_length_enter_esc_to")
-                    } else if self.drawing.is_some() && self.tool == Tool::Rectangle {
+                    } else if self.drawing.is_some() && matches!(self.tool, Tool::Rectangle | Tool::Image) {
                         tr!("app.click_the_opposite_corner_type_width_height_5m")
                     } else if self.drawing.is_some()
                         && matches!(self.tool, Tool::Circle | Tool::Polygon)
@@ -3051,7 +3066,7 @@ impl BenchUpApp {
                             if self.tool == Tool::Scale { format!("{:.3}", edit.value) } else if self.tool == Tool::Rotate { self.doc.display.units.format_angle(edit.value) } else { self.doc.display.units.format_length(edit.value) }
                         } else if self.last_move_copy.is_some() {
                             "/3 or 3x".into()
-                        } else if self.drawing.is_some() && self.tool == Tool::Rectangle {
+                        } else if self.drawing.is_some() && matches!(self.tool, Tool::Rectangle | Tool::Image) {
                             "5m,50mm".into()
                         } else if self.drawing.is_some() {
                             "5cm".into()
@@ -3063,7 +3078,7 @@ impl BenchUpApp {
                         let field = ui.add_enabled(
                             available,
                             egui::TextEdit::singleline(&mut self.length_input)
-                                .desired_width(if self.tool == Tool::Rectangle { 300. } else { 212. })
+                                .desired_width(if matches!(self.tool, Tool::Rectangle | Tool::Image) { 300. } else { 212. })
                                 .font(egui::TextStyle::Monospace)
                                 .hint_text(hint)
                                 .char_limit(precision::MAX_INPUT_LEN)
@@ -3097,7 +3112,7 @@ impl BenchUpApp {
                                 Tool::Offset => tr!("app.offset"),
                                 Tool::Move if self.last_move_copy.is_some() => tr!("app.copies"),
                                 Tool::Move => tr!("app.distance"),
-                                Tool::Rectangle => tr!("app.width_height"),
+                                Tool::Rectangle | Tool::Image => tr!("app.width_height"),
                                 Tool::Circle | Tool::Polygon => tr!("app.radius"),
                                 _ => tr!("app.length"),
                             })
@@ -3306,7 +3321,7 @@ impl BenchUpApp {
                                 .show(|ui| {
                                     let options: &[Tool] = match rail_tool {
                                         Tool::Line => &Tool::DRAWING,
-                                        Tool::Dimensions => &Tool::MEASURING,
+                                        Tool::Dimensions => &Tool::MEASUREMENT_MENU,
                                         Tool::Union => &Tool::SOLID,
                                         _ => unreachable!(),
                                     };
@@ -3333,7 +3348,7 @@ impl BenchUpApp {
                         Tool::Union
                     } else if Tool::DRAWING.contains(&self.tool) {
                         Tool::Line
-                    } else if Tool::MEASURING.contains(&self.tool) {
+                    } else if Tool::MEASUREMENT_MENU.contains(&self.tool) {
                         Tool::Dimensions
                     } else {
                         self.tool
@@ -3394,8 +3409,8 @@ impl BenchUpApp {
                     if wheel != 0. {
                         let current = Tool::RAIL.iter().position(|tool| {
                             *tool == self.tool
-                                || (*tool == Tool::Line && self.tool.is_drawing())
-                                || (*tool == Tool::Dimensions && self.tool.is_measuring())
+                                || (*tool == Tool::Line && Tool::DRAWING.contains(&self.tool))
+                                || (*tool == Tool::Dimensions && Tool::MEASUREMENT_MENU.contains(&self.tool))
                                 || (*tool == Tool::Union && self.tool.is_solid())
                         }).unwrap_or(0);
                         let next = if wheel > 0. {
@@ -3501,6 +3516,7 @@ impl BenchUpApp {
     }
 
     fn entity_info_contents(&mut self, ui: &mut egui::Ui) {
+        if self.image_properties(ui) { return; }
         let revision = self.document_revision(ui.ctx());
         let background = if !self.selected.is_empty()
             && self.doc.model.faces.len() >= 1024
@@ -4548,6 +4564,11 @@ impl BenchUpApp {
                                 | Tool::Trim
                                 | Tool::Split => GestureKind::Solid,
                                 Tool::Line => GestureKind::Line,
+                                Tool::Image => {
+                                    let started = self.drawing.is_none();
+                                    if started { self.begin_drawing(pos); }
+                                    GestureKind::Image { started }
+                                }
                                 Tool::Rectangle | Tool::Circle | Tool::Polygon => {
                                     GestureKind::Shape
                                 }
@@ -4770,6 +4791,10 @@ impl BenchUpApp {
                                     self.update_pointer(pos);
                                 }
                             }
+                            GestureKind::Image { started } if self.viewport.contains(pos) => {
+                                self.update_pointer(pos);
+                                if !started || gesture.start.distance(pos) >= 5. { self.commit_drawing(ctx); }
+                            }
                             GestureKind::Shape
                                 if self.viewport.contains(pos)
                                     && gesture.start.distance(pos) < 5. =>
@@ -4986,6 +5011,10 @@ impl BenchUpApp {
                 .unwrap_or(colors.ink);
             mesh.world_line(camera, start, snap.point, 2.2, color);
         }
+        if self.tool == Tool::Image && self.images.preferences.offset != DVec3::ZERO
+            && let Some(drawing) = &self.drawing {
+            mesh.world_line(camera, drawing.origin, drawing.origin + self.images.preferences.offset, 1.2, ACCENT);
+        }
         for pair in self.drawing_points().windows(2) {
             mesh.world_line(
                 camera,
@@ -5190,6 +5219,7 @@ impl BenchUpApp {
             // Derive this every frame so selecting after entering Move works too.
             let move_x_ray = self.tool == Tool::Move && !selected_entities.is_empty();
             let mut mesh = renderer::Mesh::cached(camera, size, &mut self.scene_cache);
+            mesh.reference_image_depth_bounds(model);
             mesh.set_pixels_per_point(ui.ctx().pixels_per_point());
             mesh.set_display(display);
             mesh.enable_gpu_edge_occlusion();
@@ -5292,6 +5322,8 @@ impl BenchUpApp {
                 .into_iter()
                 .filter(|_| display.face_style != benchup_core::FaceStyle::Wireframe)
             {
+                // The image callback supplies this face; keep the frame edges selectable.
+                if model.reference_images.contains_key(&face.id) { continue; }
                 let entity = entities.get(face.id);
                 let cached = self.face_cache.get(face.id);
                 let normal = cached.normal;
@@ -5537,6 +5569,8 @@ impl BenchUpApp {
         }
         #[cfg(target_arch = "wasm32")]
         web_viewport_benchmark::record_view(camera, ui.ctx(), resident_active,selected.len(),model.edit_context);
+        crate::reference_image_gpu::paint(&p, rect, model, entities,
+            self.scene_cache.image_projection(), display, &self.images.gpu);
         self.paint_fasteners(&p,rect,model);
         self.paint_joinery(&p, rect);
         let screen = |point: DVec3| view.project(point).map(|v| rect.min + pv(v));
@@ -6396,8 +6430,10 @@ impl BenchUpApp {
         match storage::save_edits(&self.doc) {
             Ok(()) => {
                 self.dirty_since = None;
-                self.save_error = None;
-                self.storage_recovery = false;
+                if !storage::is_pending() {
+                    self.save_error = None;
+                    self.storage_recovery = false;
+                }
             }
             Err(error) => {
                 self.save_error = Some(error);
@@ -6411,8 +6447,10 @@ impl BenchUpApp {
         match storage::save(&self.doc) {
             Ok(()) => {
                 self.dirty_since = None;
-                self.save_error = None;
-                self.storage_recovery = false;
+                if !storage::is_pending() {
+                    self.save_error = None;
+                    self.storage_recovery = false;
+                }
             }
             Err(e) => {
                 self.save_error = Some(e);
@@ -6439,6 +6477,7 @@ impl eframe::App for BenchUpApp {
         self.history_preview = None;
         self.account.poll(&ctx);
         self.poll_project(&ctx);
+        self.poll_reference_image(&ctx);
         self.poll_sharing(&ctx);
         self.sharing_before_frame(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
@@ -6515,6 +6554,24 @@ impl eframe::App for BenchUpApp {
                 ctx.request_repaint();
             } else {
                 ctx.request_repaint_after(Duration::from_millis(550));
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(result) = storage::poll_save() {
+                match result {
+                    Ok(()) => {
+                        self.save_error = None;
+                        self.storage_recovery = false;
+                    }
+                    Err(error) => {
+                        self.save_error = Some(error);
+                    }
+                }
+                ctx.request_repaint();
+            }
+            if storage::is_pending() {
+                ctx.request_repaint_after(Duration::from_millis(50));
             }
         }
         self.ui_frame=None;

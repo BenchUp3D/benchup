@@ -289,6 +289,8 @@ impl Model {
         self.texts.extend(contents.texts.clone());
         self.guides.extend(contents.guides.clone());
         self.face_colors.extend(contents.face_colors.clone());
+        self.reference_images.extend(contents.reference_images.clone());
+        self.image_assets.extend(contents.image_assets.clone());
         self.objects.extend(contents.objects.clone());
         self.tags.extend(contents.tags.clone());
         self.entity_tags.extend(contents.entity_tags.clone());

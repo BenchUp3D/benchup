@@ -370,6 +370,7 @@ impl Model {
     pub(crate) fn clean_entity_state(&mut self) {
         self.sync_dimensions();
         self.face_colors.retain(|id, _| self.faces.contains_key(id));
+        self.reference_images.retain(|id, _| self.faces.contains_key(id));
         let entities: BTreeSet<_> = self
             .edges
             .keys()
@@ -408,6 +409,7 @@ impl Model {
             texts: subset(&self.texts, &ids),
             guides: subset(&self.guides, &ids),
             face_colors: subset(&self.face_colors, &ids),
+            reference_images: subset(&self.reference_images, &ids),
             entity_tags: subset(&self.entity_tags, &ids),
             hidden: self.hidden.intersection(&ids).copied().collect(),
             locked: self.locked.intersection(&ids).copied().collect(),
@@ -416,6 +418,8 @@ impl Model {
             next_id: self.next_id,
             ..Default::default()
         };
+        copy.image_assets = copy.reference_images.values().filter_map(|image|
+            self.image_assets.get(&image.asset).map(|asset| (image.asset, asset.clone()))).collect();
         let used: BTreeSet<_> = copy.edges.values().flat_map(|e| [e.a, e.b]).collect();
         copy.vertices = subset(&self.vertices, &used);
         // Resolve attached positions against the complete source before the
@@ -548,6 +552,12 @@ impl Model {
             guide.origin += offset;
             self.guides.insert(ids[id], guide);
         }
+        self.image_assets.extend(source.image_assets.clone());
+        for (id, image) in &source.reference_images {
+            let mut image = image.clone();
+            image.vertices = image.vertices.map(|id| ids[&id]);
+            self.reference_images.insert(ids[id], image);
+        }
         for (id, color) in &source.face_colors {
             self.face_colors.insert(ids[id], *color);
         }
@@ -676,6 +686,7 @@ impl Model {
         self.texts.retain(|id, _| !ids.contains(id));
         self.guides.retain(|id, _| !ids.contains(id));
         self.face_colors.retain(|id, _| self.faces.contains_key(id));
+        self.reference_images.retain(|id, _| self.faces.contains_key(id));
         self.edges
             .retain(|id, _| !ids.contains(id) || outside_edges.contains(id));
         self.objects.retain(|id, _| !ids.contains(id));

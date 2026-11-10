@@ -6587,3 +6587,6 @@ fn web_physical_control_keys_toggle_move_copy_and_allow_arrays() {
         assert_copy_positions(&h, &[0., 6., 12., 18., 24., 30.]);
     }
 }
+
+#[path = "image_tool_tests.rs"]
+mod image_tool_tests;
