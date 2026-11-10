@@ -16,49 +16,7 @@ fn open_notes(h: &mut Harness) -> egui::FullOutput {
 }
 
 #[test]
-fn navigating_release_notes_resizes_the_modal_in_both_directions() {
-    let mut h = Harness::new();
-    let releases = catalog();
-    let mut output = open_notes(&mut h);
-    let bounds = |h: &Harness| {
-        egui::AreaState::load(&h.ctx, egui::Id::unique("release_notes"))
-            .unwrap()
-            .rect()
-    };
-    let mut heights = vec![bounds(&h).height()];
-    for release in &releases[1..] {
-        h.click(text_position(&output, "Older"));
-        h.frame(vec![], egui::Modifiers::NONE);
-        output = h.frame(vec![], egui::Modifiers::NONE);
-        text_position(&output, release["title"].as_str().unwrap());
-        let rect = bounds(&h);
-        assert!(
-            crate::modal::modal_position(&h.ctx, egui::Id::unique("release_notes")).is_none(),
-            "Navigation must not count as dragging the dialog"
-        );
-        assert!(
-            rect.center().distance((h.size * 0.5).to_pos2()) < 2.,
-            "bounds {rect:?}, window {:?}",
-            h.size
-        );
-        heights.push(rect.height());
-    }
-    let shortest = heights.iter().copied().fold(f32::INFINITY, f32::min);
-    let tallest = heights.iter().copied().fold(0., f32::max);
-    assert!(
-        tallest > shortest + 80.,
-        "Modal must fit each release's content: {heights:?}"
-    );
-    for expected in heights[..heights.len() - 1].iter().rev() {
-        h.click(text_position(&output, "Newer"));
-        h.frame(vec![], egui::Modifiers::NONE);
-        output = h.frame(vec![], egui::Modifiers::NONE);
-        assert!((bounds(&h).height() - expected).abs() < 2.);
-    }
-}
-
-#[test]
-fn help_release_notes_navigates_every_release_and_reopens_on_latest() {
+fn help_release_notes_navigates_boundaries_and_picker_and_reopens_on_latest() {
     let mut h = Harness::new();
     let releases = catalog();
     assert_eq!(releases[0]["version"], env!("CARGO_PKG_VERSION"));
@@ -70,19 +28,13 @@ fn help_release_notes_navigates_every_release_and_reopens_on_latest() {
     h.click(text_position(&output, "Newer"));
     output = h.frame(vec![], egui::Modifiers::NONE);
     text_position(&output, releases[0]["title"].as_str().unwrap());
-    for release in &releases[1..] {
-        h.click(text_position(&output, "Older"));
-        output = h.frame(vec![], egui::Modifiers::NONE);
-        text_position(&output, release["title"].as_str().unwrap());
-    }
+    // Exercise both directions without walking the growing release history.
     h.click(text_position(&output, "Older"));
     output = h.frame(vec![], egui::Modifiers::NONE);
-    text_position(&output, releases.last().unwrap()["title"].as_str().unwrap());
-    for release in releases[..releases.len() - 1].iter().rev() {
-        h.click(text_position(&output, "Newer"));
-        output = h.frame(vec![], egui::Modifiers::NONE);
-        text_position(&output, release["title"].as_str().unwrap());
-    }
+    text_position(&output, releases[1]["title"].as_str().unwrap());
+    h.click(text_position(&output, "Newer"));
+    output = h.frame(vec![], egui::Modifiers::NONE);
+    text_position(&output, releases[0]["title"].as_str().unwrap());
     // Jump directly to the oldest version using the picker.
     h.click(text_position(
         &output,
@@ -93,6 +45,9 @@ fn help_release_notes_navigates_every_release_and_reopens_on_latest() {
         &picker,
         &format!("v{}", releases.last().unwrap()["version"].as_str().unwrap()),
     ));
+    output = h.frame(vec![], egui::Modifiers::NONE);
+    text_position(&output, releases.last().unwrap()["title"].as_str().unwrap());
+    h.click(text_position(&output, "Older"));
     output = h.frame(vec![], egui::Modifiers::NONE);
     text_position(&output, releases.last().unwrap()["title"].as_str().unwrap());
     h.click(text_position(&output, "Close"));

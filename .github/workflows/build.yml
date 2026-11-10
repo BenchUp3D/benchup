@@ -130,17 +130,10 @@ jobs:
       - name: Build release executable
         run: cargo build -p benchup-app --bin benchup-app --release --locked --target "${{ matrix.target }}"
 
-      - name: Test update and restart behavior
+      - name: Test updates, identity migration, and project compatibility
         run: |
-          cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" updates::
-
-      - name: Test identity migration and project compatibility
-        run: |
-          cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" update_repository::
-          cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" identity::
-          cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" storage::
-          cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" project_files::
-          cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" server_config::
+          cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" -- \
+            updates:: update_repository:: identity:: storage:: project_files:: server_config::
 
       - name: Stage distribution
         run: |
