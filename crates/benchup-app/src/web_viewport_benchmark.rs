@@ -20,6 +20,9 @@ struct Benchmark {
     number: u64,
     seconds: f64,
     samples: Vec<f64>,
+    selected_samples: Vec<f64>,
+    unselected_samples: Vec<f64>,
+    last_selected: bool,
     finished: bool,
     draw_frame: u64,
     draws: usize,
@@ -49,7 +52,8 @@ pub(super) fn tick(app: &mut BenchUpApp, ctx: &egui::Context) {
                 let child = root.and_then(|root|app.doc.model.objects[&root].entities.iter().copied().find(|id|app.doc.model.objects.contains_key(id)));
                 state.1 = Some(Benchmark { camera, mode, action: None, actions: 0, action_frames: Vec::new(), acted: false, root, child, start: now,
                     last: now, number: u64::MAX, seconds: seconds.clamp(4., 120.),
-                    samples: Vec::new(), finished: false, draw_frame: u64::MAX,
+                    samples: Vec::new(), selected_samples: Vec::new(), unselected_samples: Vec::new(),
+                    last_selected: !app.selected.is_empty(), finished: false, draw_frame: u64::MAX,
                     draws: 0, resident_frames: 0, selected_frames:0,group_frames:0,scopes:BTreeSet::new(), yaw_range: [f64::INFINITY,f64::NEG_INFINITY],
                     pitch_range: [f64::INFINITY,f64::NEG_INFINITY] });
             }
@@ -65,6 +69,8 @@ pub(super) fn tick(app: &mut BenchUpApp, ctx: &egui::Context) {
         if elapsed >= 5. {
             let interval = (now - bench.last) * 1000.;
             bench.samples.push(interval);
+            if bench.last_selected { bench.selected_samples.push(interval); }
+            else { bench.unselected_samples.push(interval); }
             if bench.acted { bench.action_frames.push(interval); }
         }
         bench.acted = false;
@@ -119,6 +125,7 @@ pub(super) fn tick(app: &mut BenchUpApp, ctx: &egui::Context) {
                 }
             }
         }
+        bench.last_selected = !app.selected.is_empty();
         if elapsed >= bench.seconds + 5. {
             bench.finished = true;
             // Leave a deterministic real editor state for screenshot/reload QA.
@@ -132,7 +139,15 @@ pub(super) fn tick(app: &mut BenchUpApp, ctx: &egui::Context) {
             let mean = bench.samples.iter().sum::<f64>() / n.max(1) as f64;
             bench.samples.sort_by(f64::total_cmp);
             bench.action_frames.sort_by(f64::total_cmp);
+            let stats = |samples: &mut Vec<f64>| {
+                samples.sort_by(f64::total_cmp);
+                let mean = samples.iter().sum::<f64>() / samples.len().max(1) as f64;
+                serde_json::json!({"frames": samples.len(), "mean_ms": mean,
+                    "fps": if mean > 0. { 1000. / mean } else { 0. },
+                    "p95_ms": samples.get(samples.len() * 95 / 100)})
+            };
             let result = serde_json::json!({ "mode": bench.mode, "actions": bench.actions,
+                "selected": stats(&mut bench.selected_samples), "unselected": stats(&mut bench.unselected_samples),
                 "final_selection": app.selected, "final_context": app.doc.model.edit_context,
                 "gpu_scaling": app.modeling.as_ref().is_some_and(|edit| edit.gpu_scale.is_some()),
                 "action_frame_p95_ms": bench.action_frames.get(bench.action_frames.len()*95/100), "frames": n, "fps": 1000. / mean,

@@ -10,7 +10,7 @@ import {fileURLToPath} from 'node:url';
 const args=process.argv.slice(2);
 const option=(key, fallback)=>{const i=args.indexOf(key);return i<0?fallback:args[i+1]};
 const project=option('--project');
-const usage='Usage: node scripts/benchmark_viewport_web.mjs --project FILE [--mode orbit|sun|select|scale|box-select|groups|draw-line|draw-rectangle|measure-tape|walk|erase-edge|erase-face|erase-object] [--scope root|group|leaf] [--repeat-actions] [--flatten] [--reverse-box] [--seconds 20] [--url http://127.0.0.1:8080] [--output /tmp/viewport.json] [--browser PATH] [--headed] [--unsafe-webgpu] [--x11] [--preferences FILE] [--legacy] [--profile] [--min-fps FPS] [--validate-shader] [--validate-shadows] [--validate-markers] [--require-shadows] [--validate-state] [--validate-snapping] [--after-walk] [--require-pointer-lock] [--erase-with-key]';
+const usage='Usage: node scripts/benchmark_viewport_web.mjs --project FILE [--mode orbit|sun|select|scale|box-select|groups|draw-line|draw-rectangle|measure-tape|walk|erase-edge|erase-face|erase-object] [--scope root|group|leaf] [--repeat-actions] [--flatten] [--reverse-box] [--seconds 20] [--url http://127.0.0.1:8080] [--output /tmp/viewport.json] [--browser PATH] [--headed] [--unsafe-webgpu] [--x11] [--preferences FILE] [--legacy] [--profile] [--min-fps FPS] [--min-selected-fps FPS] [--validate-shader] [--validate-shadows] [--validate-markers] [--require-shadows] [--validate-state] [--validate-snapping] [--after-walk] [--require-pointer-lock] [--erase-with-key]';
 if(args.includes('--help')){console.log(usage);process.exit(0)}
 if(!project)throw Error(usage);
 const mode=option('--mode','orbit');
@@ -165,6 +165,15 @@ if d.property(d.root,'_NET_ACTIVE_WINDOW') != [window]: raise RuntimeError('The 
  window.benchupBenchmarkDocument=()=>(${reconstructAutosave.toString()})(value,edits);
  if(globalThis.Element?.prototype.requestPointerLock){const lock=Element.prototype.requestPointerLock;Element.prototype.requestPointerLock=function(...args){try{const result=lock.apply(this,args);return result?.catch?result.catch(error=>{window.benchupPointerLockError=String(error);throw error}):result}catch(error){window.benchupPointerLockError=String(error);throw error}}}
  window.benchupStorageWrites={document:0,selection:0,edits:0};
+ const recordRecovery=(k,v)=>{if(k==='benchup.document.v1'){window.benchupStorageWrites.document++;value=v;edits=null}else if(k==='benchup.edits.v1'){window.benchupStorageWrites.edits++;edits=v}else if(k==='benchup.selection.v1')window.benchupStorageWrites.selection++};
+ // Recovery moved to IndexedDB. Seed its document read while retaining real
+ // transactions and saved overlays, so reload checks exercise durable saves.
+ if(globalThis.IDBObjectStore){
+  const get=IDBObjectStore.prototype.get,put=IDBObjectStore.prototype.put;
+  const recovery=store=>store.name==='recovery'&&store.transaction.db.name==='benchup-workspace';
+  IDBObjectStore.prototype.get=function(k){const request=get.call(this,k);if(recovery(this)&&k==='benchup.document.v1')request.addEventListener('success',()=>Object.defineProperty(request,'result',{value,configurable:true}));return request};
+  IDBObjectStore.prototype.put=function(v,k){const request=put.call(this,v,k);if(recovery(this))recordRecovery(k,v);return request};
+ }
  {let frame=0,last=-1;const probe=window.benchupDrawingProbe={samples:[],record:false,walkMutations:0};
  const submitted=()=>{if(probe.record&&last!==frame){probe.samples.push(performance.now());last=frame}};
  const raf=()=>{frame++;requestAnimationFrame(raf)};requestAnimationFrame(raf);
@@ -173,7 +182,7 @@ if d.property(d.root,'_NET_ACTIVE_WINDOW') != [window]: raise RuntimeError('The 
  if(globalThis.WebGL2RenderingContext){for(const method of ['drawArrays','drawElements','drawArraysInstanced','drawElementsInstanced']){const draw=WebGL2RenderingContext.prototype[method];if(draw)WebGL2RenderingContext.prototype[method]=function(...args){if(this.canvas.id==='benchup-canvas')submitted();return draw.apply(this,args)}}}
  const getContext=HTMLCanvasElement.prototype.getContext;
  HTMLCanvasElement.prototype.getContext=function(kind,...args){const context=getContext.call(this,kind,...args);if(context&&kind==='webgl2'&&this.id==='benchup-canvas'){const info=context.getExtension('WEBGL_debug_renderer_info');const renderer=context.getParameter(info?info.UNMASKED_RENDERER_WEBGL:context.RENDERER);window.benchupViewportAdapter={backend:'webgl2',vendor:context.getParameter(info?info.UNMASKED_VENDOR_WEBGL:context.VENDOR),renderer,isFallbackAdapter:/swiftshader|llvmpipe|software/i.test(renderer)}}return context};}
- const get=Storage.prototype.getItem, set=Storage.prototype.setItem; Storage.prototype.getItem=function(k){return k==='benchup.document.v1'?value:k==='benchup.inspector.v1'&&${JSON.stringify(inspectorPreferences)}!==null?${JSON.stringify(inspectorPreferences)}:get.call(this,k)}; Storage.prototype.setItem=function(k,v){if(k==='benchup.document.v1'){window.benchupStorageWrites.document++;value=v;edits=null}else{if(k==='benchup.edits.v1'){window.benchupStorageWrites.edits++;edits=v}if(k==='benchup.selection.v1')window.benchupStorageWrites.selection++;set.call(this,k,v)}}; if(navigator.gpu){const prototype=Object.getPrototypeOf(navigator.gpu), request=prototype.requestAdapter; prototype.requestAdapter=async function(...args){const adapter=await request.apply(this,args);if(adapter)window.benchupViewportAdapter={backend:'webgpu',...Object.fromEntries(['vendor','architecture','device','description','isFallbackAdapter'].map(k=>[k,adapter.info[k]]))};return adapter;}} window.benchupViewportBenchmarkMode=${JSON.stringify(mode)}; window.benchupViewportBenchmarkCamera=${JSON.stringify(projectData.camera)}; window.benchupViewportBenchmark=${seconds}; window.benchupViewportBenchmarkLegacy=${args.includes("--legacy")};}`});
+ const get=Storage.prototype.getItem, set=Storage.prototype.setItem; Storage.prototype.getItem=function(k){return k==='benchup.document.v1'?value:k==='benchup.inspector.v1'&&${JSON.stringify(inspectorPreferences)}!==null?${JSON.stringify(inspectorPreferences)}:get.call(this,k)}; Storage.prototype.setItem=function(k,v){recordRecovery(k,v);if(k!=='benchup.document.v1')set.call(this,k,v)}; if(navigator.gpu){const prototype=Object.getPrototypeOf(navigator.gpu), request=prototype.requestAdapter; prototype.requestAdapter=async function(...args){const adapter=await request.apply(this,args);if(adapter)window.benchupViewportAdapter={backend:'webgpu',...Object.fromEntries(['vendor','architecture','device','description','isFallbackAdapter'].map(k=>[k,adapter.info[k]]))};return adapter;}} window.benchupViewportBenchmarkMode=${JSON.stringify(mode)}; window.benchupViewportBenchmarkCamera=${JSON.stringify(projectData.camera)}; window.benchupViewportBenchmark=${seconds}; window.benchupViewportBenchmarkLegacy=${args.includes("--legacy")};}`});
  let seed=await installSeed(boxDocument?JSON.stringify(boxDocument):eraseSetup?JSON.stringify(eraseSetup.document):model,(mode==='box-select'||mode.startsWith('draw-')||mode==='measure-tape'||mode==='walk'||mode.startsWith('erase-'))?'observe':mode);
  await call('Page.navigate',{url:option('--url','http://127.0.0.1:8080/')});
  await call('Page.bringToFront');
@@ -273,6 +282,12 @@ if d.property(d.root,'_NET_ACTIVE_WINDOW') != [window]: raise RuntimeError('The 
  const minimum=Number(option('--min-fps','0'));
  if(!Number.isFinite(minimum)||minimum<0)throw Error('--min-fps must be a nonnegative number');
  if(result.fps<minimum)throw Error(`Measured ${result.fps.toFixed(2)} FPS, below ${minimum} FPS`);
+ const selectedMinimum=Number(option('--min-selected-fps','0'));
+ if(!Number.isFinite(selectedMinimum)||selectedMinimum<0)throw Error('--min-selected-fps must be a nonnegative number');
+ if(selectedMinimum>0){
+  if(!(result.selected?.frames>0))throw Error('The app did not report selected frame timings');
+  if(result.selected.fps<selectedMinimum)throw Error(`Selected objects measured ${result.selected.fps.toFixed(2)} FPS, below ${selectedMinimum} FPS`);
+ }
 } catch(error) {
  if(socket?.readyState===1) {
   try {

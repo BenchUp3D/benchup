@@ -226,24 +226,36 @@ impl BenchUpApp {
         }
     }
 
+    pub(super) fn selected_reference_image(&self) -> Option<u64> {
+        if self.selected.len() != 1 {
+            return None;
+        }
+        let selected = *self.selected.first()?;
+        let model = &self.doc.model;
+        // Inspect only image ancestry. Expanding a selected assembly here
+        // rebuilt a set of its entire mesh on every inspector redraw, even
+        // for projects without any images.
+        let mut images = model.reference_images.keys().copied().filter(|&id| {
+            let mut ancestor = id;
+            loop {
+                if ancestor == selected {
+                    return true;
+                }
+                let Some(parent) = model.parent(ancestor) else {
+                    return false;
+                };
+                ancestor = parent;
+            }
+        });
+        let image = images.next()?;
+        if images.next().is_some() {
+            return None;
+        }
+        (image == selected || model.parent(image) == Some(selected)).then_some(image)
+    }
+
     pub(super) fn image_properties(&mut self, ui: &mut egui::Ui) -> bool {
-        let faces = self.doc.model.expand_entities(&self.selected);
-        let images: Vec<_> = self
-            .doc
-            .model
-            .reference_images
-            .keys()
-            .filter(|id| faces.contains(id))
-            .copied()
-            .collect();
-        if images.len() == 1
-            && self.selected.len() == 1
-            && self
-                .selected
-                .iter()
-                .any(|id| *id == images[0] || Some(*id) == self.doc.model.parent(images[0]))
-        {
-            let id = images[0];
+        if let Some(id) = self.selected_reference_image() {
             let source = self.doc.model.reference_images[&id].clone();
             let mut edited = source.clone();
             let locked = self.doc.model.is_locked(id);

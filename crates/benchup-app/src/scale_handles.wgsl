@@ -42,8 +42,8 @@ struct Output {
         let other = (axis + 1u) % 3u;
         let third = (axis + 2u) % 3u;
         var a = u.lo.xyz;
-        a[other] = select(u.lo[other], u.hi[other], (edge % 4u & 1u) != 0u);
-        a[third] = select(u.lo[third], u.hi[third], (edge % 4u & 2u) != 0u);
+        a[other] = select(u.lo[other], u.hi[other], ((edge % 4u) & 1u) != 0u);
+        a[third] = select(u.lo[third], u.hi[third], ((edge % 4u) & 2u) != 0u);
         var b = a;
         b[axis] = u.hi[axis];
         let ca = u.matrix * vec4<f32>(a, 1.);

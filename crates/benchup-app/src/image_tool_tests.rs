@@ -1,5 +1,86 @@
 use super::*;
 
+fn inspector_image(model: &mut Model, offset: DVec3) -> (u64, u64) {
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgba8(1, 1)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let group = model
+        .add_reference_image(
+            [DVec3::ZERO, DVec3::X, DVec3::X + DVec3::Y, DVec3::Y].map(|p| p + offset),
+            benchup_core::ReferenceImage {
+                name: "Plan.png".into(),
+                asset: benchup_core::reference_images::ImageAssetId::new_v4(),
+                vertices: [0; 4],
+                settings: Default::default(),
+                placement_offset: DVec3::ZERO,
+            },
+            benchup_core::ImageAsset {
+                png: png.into_inner().into(),
+                pixels: [1, 1],
+            },
+        )
+        .unwrap();
+    let face = model.objects[&group]
+        .entities
+        .iter()
+        .find(|id| model.reference_images.contains_key(id))
+        .copied()
+        .unwrap();
+    (group, face)
+}
+
+#[test]
+fn reference_image_inspector_preserves_direct_parent_and_ambiguous_assembly_rules() {
+    let mut h = Harness::new();
+    let edge = h.app.doc.model.add_edge(DVec3::ZERO, DVec3::Z).unwrap();
+    h.app.selected = BTreeSet::from([edge]);
+    assert_eq!(h.app.selected_reference_image(), None);
+    let (group, face) = inspector_image(&mut h.app.doc.model, DVec3::X * 2.);
+    for id in [face, group] {
+        h.app.selected = BTreeSet::from([id]);
+        assert_eq!(h.app.selected_reference_image(), Some(face));
+    }
+    h.app.selected = BTreeSet::from([edge, group]);
+    assert_eq!(h.app.selected_reference_image(), None);
+    let outer = h
+        .app
+        .doc
+        .model
+        .make_object(&BTreeSet::from([group]), false, "Assembly")
+        .unwrap();
+    h.app.selected = BTreeSet::from([outer]);
+    assert_eq!(
+        h.app.selected_reference_image(),
+        None,
+        "A nested image is not the selected assembly's image"
+    );
+    let nested = *h.app.doc.model.reference_images.keys().next().unwrap();
+    let direct_parent = h.app.doc.model.parent(nested).unwrap();
+    h.app.selected = BTreeSet::from([direct_parent]);
+    assert_eq!(h.app.selected_reference_image(), Some(nested));
+    let (other_group, other_face) = inspector_image(&mut h.app.doc.model, DVec3::X * 4.);
+    // One direct image plus another nested image must remain ambiguous.
+    h.app
+        .doc
+        .model
+        .objects
+        .get_mut(&other_group)
+        .unwrap()
+        .entities
+        .insert(outer);
+    h.app.selected = BTreeSet::from([other_group]);
+    assert_eq!(h.app.selected_reference_image(), None);
+    h.app.selected = BTreeSet::from([other_face]);
+    assert_eq!(h.app.selected_reference_image(), Some(other_face));
+    h.app.doc.model.reference_images.clear();
+    assert_eq!(
+        h.app.selected_reference_image(),
+        None,
+        "Document changes cannot retain an old image result"
+    );
+}
+
 #[test]
 fn image_rectangle_uses_geometry_snapping_and_axis_locked_precision() {
     let mut h = Harness::new();
