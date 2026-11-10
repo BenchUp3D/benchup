@@ -1,11 +1,15 @@
 //! 3Dconnexion SpaceMouse navigation in object mode: pushing the cap moves the
 //! model. Desktop builds read the device on a background thread: through the
 //! 3DxWare driver on macOS and spacenavd on Linux when they are running, and
-//! over USB HID otherwise. The browser build keeps the settings but never
-//! detects a device.
+//! over USB HID otherwise. Browser builds use WebHID with an explicit device
+//! permission prompt, then reconnect to previously granted devices.
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 use super::*;
 use std::sync::{Arc, Mutex};
+
+#[cfg(target_arch = "wasm32")]
+#[path = "space_mouse_web.rs"]
+mod browser;
 
 /// Fit button on SpaceMouse Compact, Wireless, and Pro button reports.
 const FIT_BUTTON: u32 = 1 << 1;
@@ -75,6 +79,13 @@ struct Shared {
 }
 
 impl Shared {
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn clear_input(&mut self) {
+        self.axes = Axes::default();
+        self.buttons = 0;
+        self.pressed = 0;
+    }
+
     fn report(&mut self, report: &[u8]) -> bool {
         let Some((&id, data)) = report.split_first() else {
             return false;
@@ -236,6 +247,8 @@ pub(super) struct SpaceMouse {
     shared: Arc<Mutex<Shared>>,
     #[cfg(not(target_arch = "wasm32"))]
     worker: Option<worker::Worker>,
+    #[cfg(target_arch = "wasm32")]
+    browser: Option<browser::Browser>,
     /// Orbit pivot locked for one continuous push of the cap.
     pub pivot: Option<DVec3>,
     pub last_time: Option<f64>,
@@ -243,13 +256,13 @@ pub(super) struct SpaceMouse {
 
 impl SpaceMouse {
     /// Start or stop the device reader to match the setting.
-    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
     pub fn sync(&mut self, ctx: &egui::Context, enabled: bool) {
         // Tests inject axes and must not read a real device.
         #[cfg(not(target_arch = "wasm32"))]
         if !cfg!(test) {
             if enabled != self.worker.is_some() {
-                self.worker = enabled.then(|| worker::Worker::start(ctx.clone(), self.shared.clone()));
+                self.worker =
+                    enabled.then(|| worker::Worker::start(ctx.clone(), self.shared.clone()));
                 if !enabled {
                     *self.lock() = Shared::default();
                 }
@@ -258,6 +271,36 @@ impl SpaceMouse {
                 worker.focus(ctx.input(|i| i.focused));
             }
         }
+        #[cfg(target_arch = "wasm32")]
+        if !cfg!(test) {
+            let shared = self.shared.clone();
+            let browser = self
+                .browser
+                .get_or_insert_with(|| browser::Browser::new(ctx.clone(), shared));
+            browser.sync(enabled, ctx.input(|i| i.focused));
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn connect_browser(&self) {
+        if let Some(browser) = &self.browser {
+            browser.connect();
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn browser_can_connect(&self) -> bool {
+        self.browser
+            .as_ref()
+            .is_some_and(browser::Browser::can_connect)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn browser_status(&self) -> String {
+        self.browser.as_ref().map_or_else(
+            || "Select Connect 3D Mouse to grant access to your device.".to_owned(),
+            browser::Browser::status,
+        )
     }
 
     /// The current deflection and the buttons pressed since the last call.
@@ -267,7 +310,14 @@ impl SpaceMouse {
     }
 
     pub fn device(&self) -> Option<String> {
-        self.lock().device.clone()
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.browser.as_ref().and_then(browser::Browser::device)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.lock().device.clone()
+        }
     }
 
     #[cfg(test)]
@@ -774,6 +824,19 @@ mod tests {
         assert_eq!(shared.axes.rotation, DVec3::new(1., 0., 0.));
         assert!(!shared.report(&[7, 1, 2]));
         assert!(!shared.report(&[]));
+    }
+
+    #[test]
+    fn clearing_browser_input_discards_held_axes_and_latched_buttons() {
+        let mut shared = Shared::default();
+        assert!(shared.report(&report(1, &[350, -350, 0, 350, 0, 0])));
+        assert!(shared.report(&[3, 0b10]));
+        assert!(!shared.axes.idle());
+        assert_eq!(shared.pressed, FIT_BUTTON);
+        shared.clear_input();
+        assert!(shared.axes.idle());
+        assert_eq!(shared.buttons, 0);
+        assert_eq!(shared.pressed, 0);
     }
 
     #[test]

@@ -341,10 +341,32 @@ impl BenchUpApp {
         if navigation_type == NavigationType::SpaceMouse {
             let space_mouse = &mut self.general_settings.space_mouse;
             ui.checkbox(&mut space_mouse.enabled, "Enable 3D Mouse");
-            let status = match (space_mouse.enabled, self.space_mouse.device()) {
-                (false, _) => "Disabled".to_owned(),
-                (true, Some(device)) => format!("Connected: {device}"),
-                (true, None) => "No device detected".to_owned(),
+            #[cfg(target_arch = "wasm32")]
+            ui.add_enabled_ui(space_mouse.enabled, |ui| {
+                if ui
+                    .add_enabled(
+                        self.space_mouse.browser_can_connect(),
+                        egui::Button::new("Connect 3D Mouse"),
+                    )
+                    .clicked()
+                {
+                    self.space_mouse.connect_browser();
+                }
+            });
+            let status = if !space_mouse.enabled {
+                "Disabled".to_owned()
+            } else {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.space_mouse.browser_status()
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    match self.space_mouse.device() {
+                        Some(device) => format!("Connected: {device}"),
+                        None => "No device detected".to_owned(),
+                    }
+                }
             };
             ui.text_weak(status);
             ui.text_weak("Tilt or twist the cap to orbit, slide it to pan, and push or pull it to zoom. The Fit button frames the model.");
