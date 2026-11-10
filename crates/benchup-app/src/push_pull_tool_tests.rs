@@ -232,3 +232,27 @@ fn ctrl_pressed_in_a_dialog_does_not_toggle_when_the_dialog_closes() {
     h.frame(vec![], egui::Modifiers::CTRL);
     assert!(h.app.push_pull_new_faces);
 }
+
+#[test]
+fn pull_readout_includes_existing_depth_and_signed_difference() {
+    let (mut h, _) = block();
+    h.click(h.at(DVec3::new(2., 2., 2.)));
+    let edit = h.app.modeling.as_ref().unwrap();
+    assert!((edit.pull_depth - 2.).abs() < 1e-7);
+    let units = h.app.doc.display.units;
+    for (difference, total) in [(1., 3.), (-0.5, 1.5), (0., 2.)] {
+        assert_eq!(
+            h.app.push_pull_readout(edit, difference),
+            format!("Difference: {} · Total: {}", units.format_length(difference), units.format_length(total)),
+        );
+    }
+    assert!(!h.app.project.modified);
+}
+
+#[test]
+fn flat_face_starts_with_zero_pull_depth() {
+    let mut h = Harness::new();
+    let face = modeling_rectangle(&mut h);
+    let plane = benchup_core::faces::plane(&h.app.doc.model, &h.app.doc.model.faces[&face].vertices).unwrap();
+    assert!(BenchUpApp::push_pull_depth(&h.app.doc.model, face, plane.origin, plane.normal).abs() < 1e-7);
+}

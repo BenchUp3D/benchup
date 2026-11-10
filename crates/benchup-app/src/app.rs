@@ -224,6 +224,7 @@ struct Modeling {
     direction: DVec3,
     // Keep Push/Pull's original normal when switching or clearing axis locks.
     unlocked_direction: DVec3,
+    pull_depth: f64,
     guides: Vec<AxisGuide>,
     value: f64,
     copy: bool,
@@ -1358,6 +1359,37 @@ impl BenchUpApp {
         self.prompt_drawn_group_name(ctx, group);
     }
     // A selected single-face group can be edited without opening its context.
+    // Compute once at the start of a pull, rather than scanning geometry per frame.
+    // Shared vertices identify the edited shell without including unrelated objects.
+    fn push_pull_depth(model: &Model, face: u64, anchor: DVec3, normal: DVec3) -> f64 {
+        let mut neighbors = std::collections::BTreeMap::<u64, Vec<u64>>::new();
+        for (&id, face) in &model.faces {
+            for vertex in face.vertices.iter().chain(face.holes.iter().flatten()) {
+                neighbors.entry(*vertex).or_default().push(id);
+            }
+        }
+        let mut pending = vec![face];
+        let mut visited = BTreeSet::new();
+        let mut vertices = BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) { continue; }
+            let face = &model.faces[&id];
+            for &vertex in face.vertices.iter().chain(face.holes.iter().flatten()) {
+                if vertices.insert(vertex) {
+                    pending.extend(neighbors[&vertex].iter().copied());
+                }
+            }
+        }
+        vertices.into_iter().map(|id| (anchor - model.vertices[&id].position).dot(normal))
+            .fold(0., f64::max)
+    }
+
+    fn push_pull_readout(&self, edit: &Modeling, value: f64) -> String {
+        let units = self.doc.display.units;
+        let total = (edit.pull_depth + value * edit.direction.dot(edit.unlocked_direction)).abs();
+        format!("Difference: {} · Total: {}", units.format_length(value), units.format_length(total))
+    }
+
     fn selected_modeling_face(&self) -> Option<u64> {
         if !matches!(self.tool, Tool::PushPull | Tool::Offset) || self.selected.len() != 1 {
             return None;
@@ -1593,6 +1625,8 @@ impl BenchUpApp {
                 direction
             },
             unlocked_direction: direction,
+            pull_depth: face_id.filter(|_| self.tool == Tool::PushPull)
+                .map_or(0., |face| Self::push_pull_depth(&self.doc.model, face, anchor, direction)),
             guides: vec![],
             value: if self.tool == Tool::Scale { 1. } else { 0. },
             copy: self.tool == Tool::Move && self.move_copy,
@@ -3003,6 +3037,12 @@ impl BenchUpApp {
                         }
                         if self.tool == Tool::Scale {
                             ui.text_label(RichText::new(tr!("app.scale_factor_symbol")).color(colors.muted));
+                        }
+                        if self.tool == Tool::PushPull && let Some(edit) = &self.modeling {
+                            let value = precision::modeling_value_with_units(
+                                self.tool, &self.length_input, self.doc.display.units,
+                            ).unwrap_or(edit.value);
+                            ui.text_label(RichText::new(self.push_pull_readout(edit, value)).monospace());
                         }
                         let available = self.precision_available();
                         let hint = if self.measurement_precision_available() {
@@ -5867,7 +5907,11 @@ impl BenchUpApp {
                         } else {
                             ""
                         },
-                        self.doc.display.units.format_length(value),
+                        if self.tool == Tool::PushPull {
+                            self.push_pull_readout(edit, value)
+                        } else {
+                            self.doc.display.units.format_length(value)
+                        },
                         alignment = alignment,
                     )
                 }
