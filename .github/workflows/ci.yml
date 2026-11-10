@@ -47,6 +47,22 @@ jobs:
       - name: Test geometry core
         run: cargo test -p benchup-core --locked
 
+      - name: Test shared tool layer and MCP server
+        # Loopback and temp directories only; no outside network.
+        run: |
+          cargo test -p benchup-tools --locked
+          cargo test -p benchup-mcp --locked
+
+      - name: Test agent connection
+        run: cargo test -p benchup-app --lib --locked 'agent'
+
+      - name: Check add-on feature combinations
+        # Each add-on must build with the other compiled out.
+        run: |
+          cargo check -p benchup-app --locked --no-default-features
+          cargo check -p benchup-app --locked --no-default-features --features assistant
+          cargo check -p benchup-app --locked --no-default-features --features agent-link
+
       - name: Test assistant
         # The substring filters also select the assistant_ui tests, the docking
         # test and the sharing test for the running MIRA turn, which a
@@ -80,3 +96,9 @@ jobs:
 
       - name: Check browser build
         run: cargo check -p benchup-app --locked --target wasm32-unknown-unknown
+
+      - name: Check browser build without add-ons
+        run: cargo check -p benchup-app --locked --target wasm32-unknown-unknown --no-default-features
+
+      - name: Check the tool layer for the browser
+        run: cargo check -p benchup-tools --locked --target wasm32-unknown-unknown

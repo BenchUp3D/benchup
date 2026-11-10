@@ -3,7 +3,7 @@
 [Docs index](README.md) · [User guide](../assistant.md) · [Architecture](architecture.md) · [Module reference](module-reference.md) · [Tool catalog](tools.md) · LLM protocol · [UI/UX](ui-ux.md) · [Persistence and security](persistence-and-security.md) · [Testing](testing.md) · [Contributing](contributing.md) · [Development history](development-history.md) · [Roadmap](roadmap.md)
 
 
-**Citation convention.** `path:line` is relative to `crates/benchup-app/src/` unless it starts with `benchup-core/`. Lines are for branch `feature/build-with-mira` after the commit "Fix issues found while documenting MIRA" (parent `44a7cc9`). `client.rs`, `turn.rs`, `scene.rs`, `tools.rs` mean the files under `assistant/`.
+**Citation convention.** `path:line` is relative to `crates/benchup-app/src/` unless it starts with `benchup-core/` or `benchup-tools/` (those are `crates/<name>/src/`). The scene summary and tool schemas now live in `benchup-tools`; their lines are for branch `feature/agent-tools` at commit `91c017f`. Lines are for branch `feature/build-with-mira` after the commit "Fix issues found while documenting MIRA" (parent `44a7cc9`). `client.rs`, `turn.rs`, `scene.rs`, `tools.rs` mean the files under `assistant/`.
 
 Contents: [Endpoints and transport](#endpoints-and-transport) · [Request](#request) · [Response parsing and the tool loop](#response-parsing-and-the-tool-loop) · [System prompt](#system-prompt) · [Scene summary](#scene-summary) · [References](#references) · [History](#conversation-history) · [Fallback parser](#fallback-tool-call-parser) · [Error mapping](#error-mapping) · [URL guard](#url-guard) · [Providers](#provider-compatibility) · [Gaps](#gaps--unclear)
 
@@ -40,7 +40,7 @@ Other facts: no streaming (`stream: false`), no retry or back-off, no cancellati
 |---|---|
 | `model` | the selected model id (`Preferences.model`) |
 | `messages` | see below |
-| `tools` | the 27 schemas from `tools::definitions()` (`tools.rs:175`), omitted if empty |
+| `tools` | the 27 schemas from `tools::definitions()`, which is `benchup_tools::openai_tools` (`benchup-tools/src/ops.rs:208`), omitted if empty |
 | `tool_choice` | the string `"auto"` (`turn.rs:193`) |
 | `stream` | `false` |
 
@@ -116,7 +116,7 @@ When the work is complete, answer with one short sentence summarising what you d
 
 ## Scene summary
 
-Built by `scene::summary(model, selection, catalog, budget)` (`scene.rs:129`). All lengths in mm, rounded to 0.1 mm (`scene.rs:15`).
+Built by `scene::summary(model, selection, catalog, budget)` (`benchup-tools/src/scene.rs:129`). All lengths in mm, rounded to 0.1 mm (`benchup-tools/src/scene.rs:15`).
 
 | Key | Content | Cap |
 |---|---|---|
@@ -132,7 +132,7 @@ Built by `scene::summary(model, selection, catalog, budget)` (`scene.rs:129`). A
 | `objects` | `object_entry` list (below), selection first, then in-scope, then the rest | by budget |
 | `omitted`, `hint` | present only when objects were cut; hint: "Scene truncated: use find_objects{query} or get_object{id} to inspect omitted objects." | |
 
-`object_entry` (`scene.rs:71`): `id`, `name`, `kind` (`group`/`component`), `parent`, `tag`, `bounds_mm {min,max}`, `size_mm`, `material {id,name}`, `grain`, `hidden`, `locked` (optional keys appear only when applicable).
+`object_entry` (`benchup-tools/src/scene.rs:71`): `id`, `name`, `kind` (`group`/`component`), `parent`, `tag`, `bounds_mm {min,max}`, `size_mm`, `material {id,name}`, `grain`, `hidden`, `locked` (optional keys appear only when applicable).
 
 Example (pretty-printed; real output is compact):
 
@@ -159,24 +159,24 @@ Example (pretty-printed; real output is compact):
 
 **Budgets** (characters of JSON text, not tokens):
 
-* `SCENE_BUDGET = 24_000` for scene + references together (`scene.rs:9`).
+* `SCENE_BUDGET = 24_000` for scene + references together (`benchup-tools/src/scene.rs:9`).
 * References get at most a third: `REFERENCE_BUDGET = SCENE_BUDGET / 3 = 8000` (`turn.rs:25`). The scene gets `SCENE_BUDGET - references.to_string().len()` (`turn.rs:146`).
-* In `summary`, `used` starts at the length of the fixed part (selection, tags, stock, joints, counts) plus 160 reserved for `omitted`/`hint`; objects are appended in order until the next entry would exceed `budget` (`scene.rs:156-166`). The fixed part itself is not budgeted, only count-capped; if it already exceeds the budget no objects are listed and all are `omitted`.
-* The `get_scene` tool calls `summary` with the whole 24 000 and no references (`tools.rs:869`).
+* In `summary`, `used` starts at the length of the fixed part (selection, tags, stock, joints, counts) plus 160 reserved for `omitted`/`hint`; objects are appended in order until the next entry would exceed `budget` (`benchup-tools/src/scene.rs:156-166`). The fixed part itself is not budgeted, only count-capped; if it already exceeds the budget no objects are listed and all are `omitted`.
+* The `get_scene` tool calls `summary` with the whole 24 000 and no references (`benchup-tools/src/ops.rs:918`).
 * Tool results are capped separately at 8000 chars (`turn.rs:19`).
 
-Face detail (`describe`, `scene.rs:217`): object entries add `children` and `faces` (max 80, `faces_omitted`); each face: `id`, outward `normal` (3 decimals), `area_mm2`, `center_mm`, `facing`. See [tools.md](tools.md#outward-normals-and-push_pull).
+Face detail (`describe`, `benchup-tools/src/scene.rs:217`): object entries add `children` and `faces` (max 80, `faces_omitted`); each face: `id`, outward `normal` (3 decimals), `area_mm2`, `center_mm`, `facing`. See [tools.md](tools.md#outward-normals-and-push_pull).
 
 ## References
 
 * **Rendering in the prompt.** `rewrite_prompt` (`assistant/panel.rs:105`) rewrites a typed `@Name` that equals a chip label (longest labels first, not followed by an alphanumeric, preceded by start/whitespace) into `@Name [#id]`. Chips never typed into the text are appended: `"\n\nAlso referenced: @A [#1], @B [#2]"` (`assistant.prompt.also_referenced`).
-* **Attached data.** The set of all chip ids is `Prompt.references`. `Turn::start` adds the editor selection when `include_selection` is on (`turn.rs:139-142`); when it is off the selection is also omitted from the scene summary and `get_selection` answers `{"selection":[],"note":"The designer has turned off sharing their selection."}` and renders `scene::references(model, ids, 8000)` (`scene.rs:257`): a JSON map `"<id>": describe(id)` (so objects with faces, faces, joints, other entities), `{"id":N,"kind":"missing"}` for vanished ids. Entries are added in ascending id order; the first is always kept, and when the running size (entry length + 8) exceeds the budget the rest are counted in `"omitted": <n>` (`scene.rs:260-267`). The `omitted` key sits in the same map as the id keys.
+* **Attached data.** The set of all chip ids is `Prompt.references`. `Turn::start` adds the editor selection when `include_selection` is on (`turn.rs:139-142`); when it is off the selection is also omitted from the scene summary and `get_selection` answers `{"selection":[],"note":"The designer has turned off sharing their selection."}` and renders `scene::references(model, ids, 8000)` (`benchup-tools/src/scene.rs:257`): a JSON map `"<id>": describe(id)` (so objects with faces, faces, joints, other entities), `{"id":N,"kind":"missing"}` for vanished ids. Entries are added in ascending id order; the first is always kept, and when the running size (entry length + 8) exceeds the budget the rest are counted in `"omitted": <n>` (`benchup-tools/src/scene.rs:260-267`). The `omitted` key sits in the same map as the id keys.
 * References are by id, so renaming after attaching does not break them (test `references_describe_entities_by_id_even_after_a_rename`, `tests.rs:432`).
 * Chips can only be objects (groups/components): `assistant_add_chips` ignores other ids (`panel.rs:154`); the *selection* may contain any entity type.
 
 ## Conversation history
 
-* `Assistant.history: Vec<Message>` holds only text: after each turn `record` pushes the (rewritten) user prompt and then the assistant summary or, when there is none, a placeholder, each clipped to `HISTORY_CHARS = 2000` chars, and keeps the last `HISTORY_MESSAGES = 20` messages (`assistant/mod.rs:32-33,413-427`).
+* `Assistant.history: Vec<Message>` holds only text: after each turn `record` pushes the (rewritten) user prompt and then the assistant summary or, when there is none, a placeholder, each clipped to `HISTORY_CHARS = 2000` chars, and keeps the last `HISTORY_MESSAGES = 20` messages (`assistant/mod.rs:32-33,391-405`).
 * Tool calls and tool results of earlier turns are not kept; the scene is rebuilt fresh each turn.
 * A stopped or failed turn adds the user prompt and an assistant placeholder, `(stopped)` or `(error: <message>)` (`(no reply)` as a last resort), so `user` and `assistant` messages always alternate.
 * `New chat` clears transcript and history (`mod.rs:227`). History is memory only.
@@ -184,7 +184,7 @@ Face detail (`describe`, `scene.rs:217`): object entries add `children` and `fac
 
 ## Fallback tool-call parser
 
-`fallback_tool_call(content)` (`tools.rs:1088`) is tried only when the reply has no structured `tool_calls`. Accepted shapes, after trimming the whole content:
+`fallback_tool_call(content)` (`assistant/tools.rs:16`) is tried only when the reply has no structured `tool_calls`. Accepted shapes, after trimming the whole content:
 
 1. Exactly one fenced block: content starts with ```` ``` ```` and ends with ```` ``` ````, with no further ```` ``` ```` inside. An optional leading `json` label (case-insensitive) is stripped.
 2. A bare object: content starts with `{` and ends with `}`.
@@ -220,7 +220,7 @@ Inside, the JSON is either a call object or `{"function": {...}}` (the `function
 * contains none of `?`, `#`, `@`, space;
 * either starts with `https://` and has a non-empty authority, or starts with `http://` and the authority (text before the next `/`) is exactly `localhost`, `127.0.0.1`, or those followed by `:port` (`starts_with("localhost:")` / `"127.0.0.1:"`).
 
-So rejected: plain `http://` to other hosts, `http://localhost.evil.com`, credentials in the URL, query strings, other schemes, `https://` with nothing after. `[::1]` and `0.0.0.0` are not accepted (inference from the code; `client.rs:31-36`). The guard runs when saving preferences (`Preferences::sanitized`, `assistant/mod.rs:77-80`), in the Connect dialog (`panel.rs:422`), in `Assistant::send` (`mod.rs:315`) and again inside `spawn` (`client.rs:278`). Tests: `client.rs:421-444`.
+So rejected: plain `http://` to other hosts, `http://localhost.evil.com`, credentials in the URL, query strings, other schemes, `https://` with nothing after. `[::1]` and `0.0.0.0` are not accepted (inference from the code; `client.rs:31-36`). The guard runs when saving preferences (`Preferences::sanitized`, `assistant/mod.rs:49-52`), in the Connect dialog (`panel.rs:422`), in `Assistant::send` (`mod.rs:315`) and again inside `spawn` (`client.rs:278`). Tests: `client.rs:421-444`.
 
 ## Provider compatibility
 
@@ -231,13 +231,13 @@ The client speaks the OpenAI Chat Completions shape (`/models`, `/chat/completio
 * Base `https://api.endlesstokens.ai/v1` and key portal `https://portal.endlesstokens.ai/key` are in code (`client.rs:9-10`).
 * CORS is `*`, verified with a preflight whose HTTP `Date` header was Mon, 09 Nov 2026 04:15:31 GMT *(supplied)*. That is the evening of 2026-11-08 in US Pacific time, the same period as the commit times in [development-history.md](development-history.md), so the two dates agree. This is why the web build must not send cookies: see `credentials: 'omit'` (`client.rs:319-329`).
 * Two parallel sessions per key *(supplied; also in [../assistant.md](../assistant.md) troubleshooting)*. The code makes one request at a time per turn and has no cross-app throttling.
-* Model Qwen3.8-27B supports tool calling *(supplied)*. The code only prefers a model id containing `qwen` (case-insensitive) when the current one is missing from the list (`DEFAULT_MODEL_HINT`, `assistant/mod.rs:34,276-283`); the list is sorted alphabetically (`client.rs:216`), so the first match alphabetically wins.
+* Model Qwen3.8-27B supports tool calling *(supplied)*. The code only prefers a model id containing `qwen` (case-insensitive) when the current one is missing from the list (`DEFAULT_MODEL_HINT`, `assistant/mod.rs:34,238-245`); the list is sorted alphabetically (`client.rs:216`), so the first match alphabetically wins.
 * The `et:auto` router: tool support is undocumented *(supplied)*. The code treats it like any model id; if the router rejects tools with a 400 that matches the heuristic the user sees the "doesn't support tool calls" message.
 
 **Other servers.**
 
 * Hosted OpenAI-compatible services: set the base URL to the `/v1` root (the client appends `/models` and `/chat/completions`). The service must allow the browser origin via CORS for the web build; the native build is not subject to CORS.
-* Localhost (Ollama, llama.cpp server, LM Studio, vLLM, etc.): `http://localhost:11434/v1` style addresses pass the guard (`http` is allowed for `localhost` and `127.0.0.1` only). A key is still required by the UI (empty key is rejected, `assistant/mod.rs:204-207`); servers that ignore auth accept any non-empty string. From the hosted web build, calling `http://localhost` is subject to browser mixed-content/CORS rules (not verified here).
+* Localhost (Ollama, llama.cpp server, LM Studio, vLLM, etc.): `http://localhost:11434/v1` style addresses pass the guard (`http` is allowed for `localhost` and `127.0.0.1` only). A key is still required by the UI (empty key is rejected, `assistant/mod.rs:166-169`); servers that ignore auth accept any non-empty string. From the hosted web build, calling `http://localhost` is subject to browser mixed-content/CORS rules (not verified here).
 * The model must support function/tool calling; otherwise either a 400 (mapped to the tools message) or plain text answers that cannot edit the model. Models that print the call as JSON in the message body are handled by the [fallback parser](#fallback-tool-call-parser).
 * The server must accept `tool_choice: "auto"`, `stream: false`, assistant messages with `content: ""` plus `tool_calls`, and `role: "tool"` messages.
 * Unsupported by design: streaming responses, non-JSON bodies, replies over 4 MiB.
@@ -247,7 +247,7 @@ The client speaks the OpenAI Chat Completions shape (`/models`, `/chat/completio
 Fixed in "Fix issues found while documenting MIRA": the selection being sent with "Include selection" off, truncated tool results that were not valid JSON, and consecutive `user` messages in the history. Open or by design:
 
 1. **Scene is not refreshed between rounds** (`turn.rs:147-150`); only tool results update the model's view, and the model can call `get_scene`. A documented design choice.
-2. **Fixed part of the scene is count-capped rather than budgeted** (`scene.rs:136-156`): selection, tags, stock, joints are count-capped only, so the total can exceed 24 000 chars when they are large (not measured). A documented design choice.
+2. **Fixed part of the scene is count-capped rather than budgeted** (`benchup-tools/src/scene.rs:136-156`): selection, tags, stock, joints are count-capped only, so the total can exceed 24 000 chars when they are large (not measured). A documented design choice.
 3. **`Content-Length`/size check on the web is after reading the body** for chunked responses (`client.rs:332`), and counts UTF-16 units, not bytes.
 4. **No 429/5xx retry**, no `Retry-After` handling, no streaming, no cancellation of in-flight requests.
 5. **History stores the rewritten prompt**, so `[#id]` markers from an earlier turn persist, and may go stale after ids change (e.g. `group`).

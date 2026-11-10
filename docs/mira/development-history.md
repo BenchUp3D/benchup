@@ -73,10 +73,49 @@ All on branch `feature/build-with-mira`, author `aarvee11`, 2026-11-08 (`git log
 
 In total the branch changes 28 files (+6 146 / -15 lines up to `d8ec958`, `git diff --stat 64b2a44..d8ec958`).
 
+## 7. Pivot after upstream feedback: MCP and a shared tool layer
+
+The draft PR ([BenchUp3D/editor#3](https://github.com/BenchUp3D/editor/pull/3)) drew a reply from the maintainer. In short, he prefers an MCP server (tracked in [issue #13](https://github.com/BenchUp3D/editor/issues/13)) to an LLM client built into the app. Another commenter asked that an agent be able to do what a user can do. The proposal in #13 had three steps: a command line on `.bup` files built on a shared operations module, a local bridge that the app connects out to, and an opt-in "Allow agent control" switch in the app.
+
+The project owner chose to keep MIRA and also build what the maintainer asked for, by offering the tool layer from this branch as that shared operations module (comments on #3 and #13). The work moved to a new branch, `feature/agent-tools`, which starts from `feature/build-with-mira`.
+
+Decisions taken with the owner:
+
+| Decision | Alternative that was not chosen | Where it shows up |
+|---|---|---|
+| Move the tools, the scene summary and `.bup` reading/writing into a **shared crate**, `benchup-tools`, with no UI or network dependency | Leave them in `assistant/` and have the MCP server copy or depend on the app | `crates/benchup-tools`; MIRA calls it through a thin adapter (`assistant/tools.rs`) |
+| MIRA and MCP are **two add-ons that work together**, not one feature | An MCP server that replaces MIRA | [architecture.md section 3.1](architecture.md#31-mira-and-mcp-as-two-add-ons-on-one-tool-layer) |
+| Live link follows the **bridge design from #13**: the app connects *out* to a loopback server and pairs with a token | The app listening for agents; a browser extension | `benchup-mcp/src/live.rs`, `agent_link/mod.rs`. Connecting out is what lets the browser build take part |
+| Separate the add-ons with **Cargo features plus persisted runtime toggles** in Settings > Add-ons | Features only, or toggles only | `assistant` and `agent-link` features; "Build with MIRA" on and "Agent connection" off by default |
+| **One tool call from an agent is one undo step**, and calls **queue** behind a MIRA turn | Merge an agent session into one step; interleave with MIRA | `agent_host::run_agent_call`, `poll_agent_link` |
+| The first commit only **adds** the crate, so it can be cherry-picked onto `main` as a stand-alone PR for #13 | One large change | commit `c5c7099` |
+
+Commits on `feature/agent-tools` (author `aarvee11`, 2026-11-09):
+
+| Hash | Title | What it contains |
+|---|---|---|
+| `c5c7099` | Add benchup-tools, a shared operation layer for agents | New crate: `ops.rs` (the tools, with a neutral `Call` and `definitions()` / `openai_tools()` / `mcp_tools()`), `scene.rs`, `files.rs`, tests. Only new files plus the workspace member |
+| `db67f28` | Use benchup-tools for MIRA and project files | Deletes the app copies of `tools.rs`, `scene.rs` and `tools_tests.rs`; `assistant/tools.rs` keeps the OpenAI adapter and the text fallback; `project_files.rs` delegates to `benchup_tools::files`; a fixture test pins the wire format sent to the model |
+| `be5cd5e` | Add benchup-mcp, an MCP server for BenchUp projects | stdio MCP, file mode, and the live bridge, with 13 integration tests |
+| `91c017f` | Add the Agent connection add-on and a shared agent host | `agent_host.rs`, `agent_link/`, shared `credentials.rs`, the Settings section, the "Agent activity" card |
+| `ee89dd3` | Generate the agent pairing token with uuid v4 | The token comes from the `uuid` crate (OS or browser crypto). Generation can fail: with no token the add-on shows the error and does not connect |
+| `a58cbb9` | Make MIRA and Agent connection optional add-ons | `assistant` and `agent-link` features, stub modules (`assistant/stub.rs`, `agent_link/stub.rs`), always-compiled `addons.rs` for saved preferences, runtime toggles in Settings > Add-ons |
+| `dd59d55` | Harden the agent bridge, lease checks and file mode after review | See below |
+| (docs commit) | Docs and CI | [../mcp.md](../mcp.md), these documents, `ci.yml` |
+
+**Review.** A read-only review of the MCP work found one P1 and a number of P2/P3 issues. The P1 was a lease gap in shared projects that already existed in MIRA: a creating tool could write into a group the designer did not hold, `enter_object` did not check the lease, and some core operations changed entities the call did not name. `dd59d55` fixes it in the shared tool layer, so MIRA and MCP both benefit. The other fixes:
+
+* *Bridge:* protocol v2 (the token is never sent; each side proves it with HMAC-SHA256, so the app no longer trusts whatever listens on the port); calls carry a deadline and the bridge cancels on timeout; size limits before and after authentication, a hard 5 s authentication window, and a cap on unauthenticated connections.
+* *App:* queued calls are tied to the project that was open when they arrived and are refused if it changed; every result names the open document; client names are stripped of invisible characters; the suggested Claude Code command passes the token in an environment variable; credential files are written atomically with `0600` from the start.
+* *File mode:* refuses to save over a file that changed on disk; `save_atomic` keeps symlinks and permissions and syncs the directory.
+
+Nothing from this section has been pushed or posted. How the maintainers react is not known.
+
 ## Gaps / unclear
 
 * The review report itself, the approved plan and the per-finding severities are not in the repository; the mapping of Q01-Q14 to the 14 findings (2 P1, 4 P2, 8 P3) is as supplied.
 * The CORS check date: the preflight `Date` header (Mon, 09 Nov 2026 04:15:31 GMT) is 2026-11-08 in the evening in US Pacific time, which is the time zone of the commit log, so it falls in the same period as the commits. Resolved.
 * The content of issue #1 beyond its title, the PR number and the approval status of the upstream CI run were taken from the project owner and not verified online.
 * The design proposal text is kept outside the repository.
+* Section 7 paraphrases the upstream feedback as supplied by the project owner; I did not re-read the threads. The comment links are on #3 and #13.
 * I could not tell which commits ran the diff-of-failing-sets check; the owner reports it was done after every phase and after `d8ec958`. The documentation-fix commit ran it: the failing set is identical to `main`'s 31 tests.

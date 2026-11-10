@@ -2,7 +2,7 @@
 
 [Contributor docs](README.md) · [Architecture](architecture.md) · [Module reference](module-reference.md) · [Tools](tools.md) · [Contributing](contributing.md)
 
-Paths are under `crates/benchup-app/src/` unless noted; line numbers refer to branch `feature/build-with-mira` after the commit "Fix issues found while documenting MIRA" (parent `44a7cc9`).
+Paths are under `crates/benchup-app/src/` unless noted (`benchup-tools/` and `benchup-mcp/` are `crates/<name>/src/`). Line numbers refer to branch `feature/build-with-mira` after the commit "Fix issues found while documenting MIRA" (parent `44a7cc9`), except for the tool, MCP and agent tests, which are for branch `feature/agent-tools` at commit `dd59d55` ([section 13](#13-tools-mcp-and-agent-link-tests)). The per-test inventory in section 4 was written before the tool layer moved; use the counts in section 1 and `-- --list` for current numbers.
 
 Rules that apply to every test in this feature (taken from the comments in the test files and AGENTS.md):
 
@@ -16,12 +16,17 @@ All commands run from the repository root.
 
 | Goal | Command | Notes |
 |---|---|---|
-| Assistant tests (everything whose path contains `assistant`) | `cargo test -p benchup-app assistant` | 81 tests (list in [section 4](#4-test-inventory)). Includes `app::tests::assistant_ui::*` and the docking test, which have `assistant` in their path but not `assistant::`. |
+| Assistant tests (everything whose path contains `assistant`) | `cargo test -p benchup-app assistant` | 66 tests with default features (inventory in [section 4](#4-test-inventory), written when there were 81).  Includes `app::tests::assistant_ui::*` and the docking test, which have `assistant` in their path but not `assistant::`. |
 | Same, listing only | `cargo test -p benchup-app assistant -- --list` | Compiles the test binary but runs nothing. |
-| Tests whose path contains `mira` | `cargo test -p benchup-app --lib mira` | 5 tests; 4 of them are also in the `assistant` set, the fifth is the sharing test `a_remote_replacement_discards_the_running_mira_turn`. CI runs both filters. |
+| Tests whose path contains `mira` | `cargo test -p benchup-app --lib mira` | 10 tests with default features; they include the sharing test `a_remote_replacement_discards_the_running_mira_turn`. CI runs both filters. |
 | One test | `cargo test -p benchup-app --lib -- --exact app::assistant::tests::a_turn_is_exactly_one_undo_step --nocapture` | `--exact` needs the full path from the list. |
+| Tool layer | `cargo test -p benchup-tools` | 31 tests (24 in `ops_tests.rs`, 4 in `files.rs`, 3 in `pairing.rs`). No network, no UI. See [section 13](#13-tools-mcp-and-agent-link-tests). |
+| MCP server | `cargo test -p benchup-mcp` | 19 integration tests; loopback port 0 and temp directories only. |
+| Agent connection | `cargo test -p benchup-app --lib agent` | 32 tests (the filter also selects other tests with `agent` in their path). |
+| Settings and credentials | `cargo test -p benchup-app --lib settings` / `credentials` | 37 and 5 tests. |
+| Feature combinations | `cargo check -p benchup-app --no-default-features` (also `--features assistant`, `--features agent-link`) | Compile check that each add-on builds alone. |
 | Geometry core | `cargo test -p benchup-core` | The assistant does not change `benchup-core`; this guards against regressions. |
-| Full app suite | `cargo test -p benchup-app --lib` | **Expect 31 failures that exist without this feature** ([section 2](#2-the-31-pre-existing-failures-on-main)). |
+| Full app suite | `cargo test -p benchup-app --lib` | **Expect 31 failures that exist without this feature** (at `dd59d55` the full run reports 986 passed, 31 failed, 16 ignored; all 31 failures are the known ones on `main`) ([section 2](#2-the-31-pre-existing-failures-on-main)). |
 | Whole workspace | `cargo test --workspace` | Same caveat. |
 | Browser compile check | see [section 9](#9-local-wasm32-check) | Compile only; no tests run on wasm. |
 
@@ -99,12 +104,15 @@ If it shows up as a new failure in your diff, re-run it alone with `cargo test -
 | File | Contents | Compiled from |
 |---|---|---|
 | `assistant/tests.rs` | Turn loop, app integration, preferences, scene summary, panel logic, shared-project behaviour, bounded input, connect flow | `#[cfg(test)] #[path = "tests.rs"] mod tests;` in `assistant/mod.rs:25-27` |
-| `assistant/tools_tests.rs` | Every tool, validation, lease, bounds, fallback parser | `#[cfg(test)] #[path = "tools_tests.rs"] pub(super) mod tests;` at the bottom of `assistant/tools.rs:1118-1120` |
+| `benchup-tools/src/ops_tests.rs` | Every tool, validation, lease, bounds, the OpenAI and MCP adapters (moved from `assistant/tools_tests.rs`) | `#[cfg(test)] #[path = "ops_tests.rs"] mod tests;` at the bottom of `benchup-tools/src/ops.rs:1220-1222` |
+| `assistant/tools.rs` `mod tests` | Fallback parser (Q06) and the wire-format fixture | inline (`assistant/tools.rs:47-92`) |
+| `benchup-mcp/tests/mcp.rs` | MCP protocol, file mode, live bridge | a Cargo integration test of the `benchup-mcp` crate |
+| `agent_link/tests.rs`, `agent_link/ui_tests.rs` | Frames, reconnect, queueing, lease, token | `#[path = "tests.rs"] mod tests;` in `agent_link/mod.rs:31-33` |
 | `assistant/ui_tests.rs` | Real egui frames through the shared `Harness` | `#[path = "assistant/ui_tests.rs"] mod assistant_ui;` in `app_tests.rs:494-495` (module path `app::tests::assistant_ui`) |
 | `assistant/client.rs` `mod tests` | URL guard, status mapping, parsing, wire format | inline (`client.rs:417-528`) |
-| `assistant/credentials.rs` `mod tests` | Key file round trip and permissions | inline (`credentials.rs:104-145`) |
-| `inspector_docking.rs` `mod tests` | Saved layouts gain the Assistant section | `inspector_docking.rs:943-967` |
-| `sharing.rs` `mod tests` | A remote replacement discards the running turn | `sharing.rs:1202-1233` |
+| `assistant/credentials.rs` `mod tests` | Key file round trip and permissions | inline (`assistant/credentials.rs:57-97`) |
+| `inspector_docking.rs` `mod tests` | Saved layouts gain the Assistant section | `inspector_docking.rs:946-970` |
+| `sharing.rs` `mod tests` | A remote replacement discards the running turn | `sharing.rs:1205-1236` |
 
 ## 4. Test inventory
 
@@ -171,34 +179,36 @@ If it shows up as a new failure in your diff, re-run it alone with `cargo test -
 | `a_new_server_address_is_kept_only_after_a_successful_connect` (`:1068`, child) | `connect_to` with a rejected key leaves the base URL, key and stored key alone; a successful one adopts the address, key and a default model and saves the key under the new server. |
 | `bring_to_front_raises_the_embedded_window_layer` (`:1097`) | On the embedded (web) path `assistant_reveal` lifts the window layer above another layer and requests prompt focus. |
 
-### 4.4 `assistant/tools_tests.rs` (22)
+### 4.4 `benchup-tools/src/ops_tests.rs` (22)
+
+Moved from `assistant/tools_tests.rs` in the commit "Use benchup-tools for MIRA and project files". The two fallback-parser tests stayed with the code they test, in `assistant/tools.rs` (`fenced_json_fallback_is_parsed` `:54`, `json_quoted_in_prose_is_never_executed` `:71`, plus `tool_definitions_sent_to_the_server_are_unchanged` `:87`). Two adapter tests are new.
 
 | Test | Proves |
 |---|---|
-| `create_board_converts_millimetres_to_metres` (`:36`) | Origin and size in mm produce the expected metre bounds. |
-| `create_board_applies_material_grain_and_tag` (`:55`) | Optional material, grain and tag arguments are applied. |
-| `argument_and_id_errors_are_structured_and_harmless` (`:75`) | Bad JSON, unknown ids and unknown tools return `ok:false` with hint and leave the model unchanged. |
-| `locked_hidden_and_read_only_are_refused` (`:96`) | Locked/hidden entities and read-only mode are refused. |
-| `read_tools_report_scene_objects_and_faces` (`:118`) | `get_scene`, `find_objects`, `get_object`, `get_selection` report objects, faces, totals. |
-| `transform_tools_move_rotate_scale_and_resize` (`:148`) | The four transform tools produce the expected geometry. |
-| `push_pull_extrudes_a_face_of_a_board` (`:171`) | `push_pull` extends along the outward normal. |
-| `naming_material_grain_tag_paint_and_erase` (`:185`) | The attribute tools and `erase`. |
-| `copy_group_ungroup_and_selection_scope` (`:219`) | `create_copy`, `group`, `ungroup`, `select`, `enter_object`, `exit_to_root`. |
-| `drawing_and_annotation_tools` (`:251`) | `draw_polyline`, `add_dimension`, `add_text`. |
-| `joints_connect_two_boards` (`:267`) | `add_joint` creates a connection. |
-| `failed_calls_do_not_set_the_turn_snapshot` (`:293`) | A failing mutating call leaves `env.before` unset and the model unchanged. |
-| `tool_definitions_are_strict_and_match_the_executor` (`:305`) | Every schema has `additionalProperties: false`, required fields exist, names are known to the executor, and each tool rejects an unexpected field. |
-| `fenced_json_fallback_is_parsed` (`:327`) | Fenced and bare JSON replies become tool calls (Q06). |
-| `json_quoted_in_prose_is_never_executed` (`:344`) | JSON inside prose is ignored (Q06). |
-| `shared_lease_refuses_entities_outside_it` (`:364`) | Six tools refuse an unleased entity with `not-leased`; leased entities, reads, newly created entities, copies and groups of new entities work (Q01). |
-| `model_output_is_bounded` (`:404`) | Too many points/ids, out-of-range scale factors, coordinates and sizes, overlong strings, and a move chain that leaves the 1 km range are rejected or rolled back (Q03, Q04). |
-| `push_pull_requires_the_whole_owner_chain_to_be_editable` (`:436`) | A locked ancestor, or a face outside the open scope, blocks `push_pull` (Q05). |
-| `hidden_selection_is_not_revealed_by_get_scene_or_get_selection` (`:456`) | `ToolEnv.hide_selection` empties `selection` in `get_scene` and makes `get_selection` return the note. |
-| `tag_names_follow_the_core_limit_in_the_tool_and_the_schema` (`:472`) | 128 bytes pass, 129 bytes (and 65 two-byte characters) fail with `tag name too long` in `tag` and `create_board`; both schemas say `maxLength: 128`. |
-| `the_scale_schema_states_the_range_the_executor_enforces` (`:491`) | The `scale` schema has `minimum` 0.001 and `maximum` 1000 and no `exclusiveMinimum`; the executor accepts the minimum and refuses twice the maximum. |
-| `select_is_limited_to_the_lease_in_shared_projects` (`:505`) | With a lease, `select` of an unleased id fails and changes nothing; leased and turn-created ids work; without a lease it is unchanged. |
+| `create_board_converts_millimetres_to_metres` (`:35`) | Origin and size in mm produce the expected metre bounds. |
+| `create_board_applies_material_grain_and_tag` (`:54`) | Optional material, grain and tag arguments are applied. |
+| `argument_and_id_errors_are_structured_and_harmless` (`:74`) | Bad JSON, unknown ids and unknown tools return `ok:false` with hint and leave the model unchanged. |
+| `locked_hidden_and_read_only_are_refused` (`:95`) | Locked/hidden entities and read-only mode are refused. |
+| `read_tools_report_scene_objects_and_faces` (`:117`) | `get_scene`, `find_objects`, `get_object`, `get_selection` report objects, faces, totals. |
+| `transform_tools_move_rotate_scale_and_resize` (`:147`) | The four transform tools produce the expected geometry. |
+| `push_pull_extrudes_a_face_of_a_board` (`:170`) | `push_pull` extends along the outward normal. |
+| `naming_material_grain_tag_paint_and_erase` (`:184`) | The attribute tools and `erase`. |
+| `copy_group_ungroup_and_selection_scope` (`:218`) | `create_copy`, `group`, `ungroup`, `select`, `enter_object`, `exit_to_root`. |
+| `drawing_and_annotation_tools` (`:250`) | `draw_polyline`, `add_dimension`, `add_text`. |
+| `joints_connect_two_boards` (`:266`) | `add_joint` creates a connection. |
+| `failed_calls_do_not_set_the_turn_snapshot` (`:292`) | A failing mutating call leaves `env.before` unset and the model unchanged. |
+| `tool_definitions_are_strict_and_match_the_executor` (`:304`) | Every schema has `additionalProperties: false`, required fields exist, names are known to the executor, and each tool rejects an unexpected field. |
+| `shared_lease_refuses_entities_outside_it` (`:329`) | Six tools refuse an unleased entity with `not-leased`; leased entities, reads, newly created entities, copies and groups of new entities work (Q01). |
+| `model_output_is_bounded` (`:369`) | Too many points/ids, out-of-range scale factors, coordinates and sizes, overlong strings, and a move chain that leaves the 1 km range are rejected or rolled back (Q03, Q04). |
+| `push_pull_requires_the_whole_owner_chain_to_be_editable` (`:401`) | A locked ancestor, or a face outside the open scope, blocks `push_pull` (Q05). |
+| `hidden_selection_is_not_revealed_by_get_scene_or_get_selection` (`:421`) | `ToolEnv.hide_selection` empties `selection` in `get_scene` and makes `get_selection` return the note. |
+| `tag_names_follow_the_core_limit_in_the_tool_and_the_schema` (`:437`) | 128 bytes pass, 129 bytes (and 65 two-byte characters) fail with `tag name too long` in `tag` and `create_board`; both schemas say `maxLength: 128`. |
+| `the_scale_schema_states_the_range_the_executor_enforces` (`:456`) | The `scale` schema has `minimum` 0.001 and `maximum` 1000 and no `exclusiveMinimum`; the executor accepts the minimum and refuses twice the maximum. |
+| `select_is_limited_to_the_lease_in_shared_projects` (`:470`) | With a lease, `select` of an unleased id fails and changes nothing; leased and turn-created ids work; without a lease it is unchanged. |
+| `openai_and_mcp_adapters_keep_the_wire_shapes` (`:489`) | `openai_tools()` and `mcp_tools()` list the same 27 tools as `definitions()`, each in its wire shape (`function.parameters` versus `inputSchema`). |
+| `text_arguments_behave_like_the_app_did` (`:507`) | `Call::from_text` treats blank arguments as `{}` and reports bad JSON as `invalid arguments`. |
 
-The two helpers `board` and `run` are `pub(crate)` and reused by `tests.rs` (`tools_tests.rs:5-27`).
+The two helpers `board` and `run` are `pub` and reused by `benchup-mcp` and `assistant/tests.rs` (`benchup-tools/src/ops_tests.rs:4-26`).
 
 ### 4.5 `assistant/ui_tests.rs` (12)
 
@@ -221,8 +231,8 @@ The two helpers `board` and `run` are `pub(crate)` and reused by `tests.rs` (`to
 
 | Test | Proves |
 |---|---|
-| `saved_layouts_without_the_assistant_section_gain_it_at_the_end` (`inspector_docking.rs:944`) | `InspectorSection::ALL` ends with `Assistant`; an old split layout keeps both areas and its ratio and gains the section. |
-| `a_remote_replacement_discards_the_running_mira_turn` (`sharing.rs:1201`) | Applying a remote project while a turn waits for a reply stops the turn, records "The shared project changed; MIRA stopped", leaves no change card and no history step (Q02). **Not matched by `assistant` filters**: run it with `cargo test -p benchup-app a_remote_replacement`. |
+| `saved_layouts_without_the_assistant_section_gain_it_at_the_end` (`inspector_docking.rs:947`) | `InspectorSection::ALL` ends with `Assistant`; an old split layout keeps both areas and its ratio and gains the section. |
+| `a_remote_replacement_discards_the_running_mira_turn` (`sharing.rs:1204`) | Applying a remote project while a turn waits for a reply stops the turn, records "The shared project changed; MIRA stopped", leaves no change card and no history step (Q02). **Not matched by `assistant` filters**: run it with `cargo test -p benchup-app a_remote_replacement`. |
 | Existing preference/order tests in `sidebar.rs` | Updated to expect `Assistant` as the last section (hunks near `sidebar.rs:1052`, `3414`, `3538`, `3794`) and `app_tests.rs:5580`. They are not new tests. |
 
 ### 4.7 CI coverage
@@ -272,8 +282,8 @@ Rules when you add a test: if it calls `app.finish_edit`, `assistant_commit_turn
 
 Shared-project behaviour is tested without a server using two test-only methods on `BenchUpApp` in `sharing.rs`:
 
-* `test_share_with_lease(ctx, ids)` (`sharing.rs:757-776`) turns the document into a shared project whose confirmed and desired lease is `ids`, with role `owner`, reachable server and a fresh acknowledgement time.
-* `test_expire_lease()` (`sharing.rs:777-780`) sets the last acknowledgement to negative infinity so `shared_edit_allowed` becomes false (used by `losing_edit_access_between_rounds_stops_the_turn`).
+* `test_share_with_lease(ctx, ids)` (`sharing.rs:757-777`) turns the document into a shared project whose confirmed and desired lease is `ids`, with role `owner`, reachable server and a fresh acknowledgement time.
+* `test_expire_lease()` (`sharing.rs:778-782`) sets the last acknowledgement to negative infinity so `shared_edit_allowed` becomes false (used by `losing_edit_access_between_rounds_stops_the_turn`).
 
 Other test hooks: `Assistant::with_transport` is `pub(super)` and used from `sharing.rs` and `assistant/tests.rs`; `FakeTransport` is `#[cfg(test)]`.
 
@@ -297,8 +307,8 @@ The separate `CARGO_TARGET_DIR` avoids mixing artefacts with a Homebrew or syste
 `.github/workflows/ci.yml` (named **CI**):
 
 * Triggers: `pull_request`, `push` to any branch except `main` (`branches-ignore: main`), and `workflow_dispatch`. Concurrency group `ci-${{ github.ref }}` cancels superseded runs. Permissions are read-only.
-* Job **native** ("Desktop check and tests (Linux)", `ubuntu-24.04`): installs Linux dev libraries, stable Rust, cache; then `cargo check --workspace --all-targets --locked`, `cargo test -p benchup-core --locked`, `cargo test -p benchup-app --lib --locked 'assistant'` and `... 'mira'` (substring filters that also select the `assistant_ui` tests, the docking test and the sharing test), and release-critical modules `updates::`, `identity::`, `storage::`, `project_files::`.
-* Job **web** ("Browser check (wasm32)"): stable Rust with the `wasm32-unknown-unknown` target; `cargo check -p benchup-app --locked --target wasm32-unknown-unknown`.
+* Job **native** ("Desktop check and tests (Linux)", `ubuntu-24.04`): installs Linux dev libraries, stable Rust, cache; then `cargo check --workspace --all-targets --locked`, `cargo test -p benchup-core --locked`, `cargo test -p benchup-tools --locked`, `cargo test -p benchup-mcp --locked`, `cargo test -p benchup-app --lib --locked 'agent'`, a feature-combination check (`cargo check -p benchup-app --locked --no-default-features`, then `--no-default-features --features assistant` and `--no-default-features --features agent-link`), `cargo test -p benchup-app --lib --locked 'assistant'` and `... 'mira'` (substring filters that also select the `assistant_ui` tests, the docking test and the sharing test), and release-critical modules `updates::`, `identity::`, `storage::`, `project_files::`.
+* Job **web** ("Browser check (wasm32)"): stable Rust with the `wasm32-unknown-unknown` target; `cargo check -p benchup-app --locked --target wasm32-unknown-unknown`, then the same check with `--no-default-features`, and `cargo check -p benchup-tools --locked --target wasm32-unknown-unknown` (the tool crate must keep building for the browser).
 * Release builds, packaging and publishing stay in `build.yml` (tags) and `pages.yml`; the CI workflow does not run the full app suite, which is why the 31 failures on main do not turn it red.
 
 Operational notes (from the development history, [development-history.md](development-history.md); GitHub behaviour is stated from experience on this fork and not verifiable from the repository):
@@ -345,6 +355,105 @@ There is **no test that talks to a real server**. The plan:
 * One `#[test] #[ignore]` that reads `ENDLESSTOKENS_API_KEY` from the environment, connects to `https://api.endlesstokens.ai/v1` with `HttpTransport` (`client.rs:244`), lists models, sends one tiny prompt ("create a 100 x 100 x 18 mm board named Test") against an empty `Model`, and asserts that a board exists and the turn finished without error. It must run in a temp `BENCHUP_DATA_DIR` using `in_temp_data_dir`, skip silently when the variable is missing, and never print the key.
 * Run it manually: `ENDLESSTOKENS_API_KEY=... cargo test -p benchup-app -- --ignored live_smoke`. It must not be part of CI.
 * Keep the key in a gitignored `.env.local`. `/.env.local` is in `.gitignore` (added in the commit "Fix issues found while documenting MIRA", next to `/.env`, `/.local/`, `/target/` and `/dist/`).
+
+## 13. Tools, MCP and agent-link tests
+
+Added on `feature/agent-tools`. Citations are for commit `dd59d55`; test lines in `agent_link/tests.rs` come from the working tree and move as tests are added, so search by name.
+
+### 13.1 `benchup-tools` (31)
+
+* `ops_tests.rs` (24): section 4.4, plus `lease_blocks_entering_and_creating_inside_foreign_groups` and `lease_rolls_back_calls_that_alter_foreign_loose_geometry` for the lease checks added in `dd59d55`.
+* `files.rs` (4): compressed and plain round trip, corrupt input is an error and not a panic, `save_atomic` replaces the file, and keeps symlinks and permissions.
+* `pairing.rs` (3): `rfc4231_vectors` (HMAC-SHA256 against the RFC test vectors), `proofs_are_role_separated`, `nonce_validation`.
+* Run: `cargo test -p benchup-tools --locked`. Also compile-check it for the browser: `cargo check -p benchup-tools --locked --target wasm32-unknown-unknown`.
+
+### 13.2 `benchup-mcp` (19, `benchup-mcp/tests/mcp.rs`)
+
+| Test | Proves |
+|---|---|
+| `initialize_negotiates_version` (`:35`) | The server echoes a supported protocol version, else the latest. |
+| `notifications_get_no_reply_and_errors_are_coded` (`:48`) | Notifications get no reply; unknown methods return -32601; bad JSON -32700. |
+| `tools_list_has_every_tool_with_schema` (`:70`) | `tools/list` returns all 27 definitions, each with an object `inputSchema`. |
+| `tools_call_wraps_result` (`:81`) | A result becomes `content` plus `structuredContent`, with `isError` set on failure. |
+| `file_mode_persists_one_undo_step_per_mutation` (`:102`) | A mutating call is saved with one `Agent: <tool>` history step; a read call in the same session adds none. |
+| `file_mode_failed_call_leaves_file_untouched` (`:117`) | A failed call does not rewrite the file. |
+| `file_mode_save_failure_rolls_back_and_errors` (`:132`) | If the save fails, the in-memory change is rolled back and the call returns an error. |
+| `file_mode_refuses_to_overwrite_a_file_changed_on_disk` (`:146`) | A file changed on disk since load is not overwritten; the call is rolled back with the "changed on disk" message. |
+| `file_mode_refuses_shared_projects_without_flag` (`:165`) | A shared project is refused unless `--allow-shared`. |
+| `live_round_trip` (`:229`) | A fake app completes the v2 handshake; a call is forwarded and the result returned. |
+| `live_wrong_token_origin_and_accepted_origins` (`:256`) | Wrong proof and bad Origin are rejected; absent, hosted, `localhost` and `127.0.0.1` origins pass. |
+| `live_extra_origin_and_short_token` (`:276`) | `--allow-origin` values pass; a token under 16 characters is refused. |
+| `live_not_connected_and_timeout` (`:286`) | The agent gets an `isError` hint when BenchUp is not connected or does not answer in time. |
+| `live_newer_connection_replaces_older_and_disconnect_fails_call` (`:300`) | One app at a time; a drop mid-call fails that call. |
+| `live_timeout_sends_cancel_and_ignores_the_late_result` (`:323`) | On timeout the bridge sends `cancel`; a late result is ignored. |
+| `live_pairing_rejects_bad_proofs_nonces_and_extra_frames` (`:354`) | Bad proofs, malformed nonces and extra frames end the connection. |
+| `live_oversize_pre_auth_frames_are_dropped_but_authenticated_apps_may_send_large_results` (`:379`) | 1 MiB / 64 KiB limits before pairing; large results after. |
+| `live_caps_unauthenticated_connections` (`:408`) | At most 8 unpaired connections; extra ones are closed. |
+| `live_authentication_window_is_not_extended_by_traffic` (`:431`) | The 5 s window holds even if the client keeps sending. |
+
+Run: `cargo test -p benchup-mcp --locked`. The tests bind `127.0.0.1` port 0 only and use temp directories; they make no outside connection. Do not add tests that bind a fixed port.
+
+### 13.3 `agent_link/` (32)
+
+`agent_link/tests.rs` drives `AgentLink` and a `BenchUpApp` with a `FakeBridge` (a scripted `Connector`/`Link`), so no socket is needed except in the tests that say "real". `agent_link/ui_tests.rs` (2) renders the settings section and the status bar. Tests that commit edits use `in_temp_data_dir`, the same child-process pattern as [section 6](#6-the-child-process-pattern).
+
+| Test | Proves |
+|---|---|
+| `frames_are_parsed_strictly` (`:127`) | Unknown types, non-objects and calls without a string id are ignored. |
+| `malformed_calls_are_answered_not_dropped_and_calls_before_ready_are_ignored` (`:186`) | A bad call gets an error result; calls before a verified `ready` are not trusted. |
+| `off_by_default_and_connects_with_the_token_on_localhost_only` (`:210`) | Nothing connects while disabled; enabling connects to `ws://127.0.0.1:<port>`. |
+| `reconnect_backs_off_from_one_to_ten_seconds_and_resets_after_ready` (`:236`) | Backoff 1 s doubling to 10 s, reset by `ready`. |
+| `bridge_errors_timeouts_and_setting_changes_reconnect` (`:267`) | An `error` frame, a missing `ready`, a new port or token each cause a reconnect. |
+| `disabling_answers_waiting_calls_and_a_lost_link_drops_them` (`:303`) | Switching it off answers queued calls; a lost link drops them. |
+| `calls_that_wait_longer_than_the_bridge_does_are_refused` (`:337`) | After 100 s a queued call gets the "busy, retry" error. |
+| `a_full_queue_refuses_more_calls` (`:358`) | With MIRA busy, calls beyond 64 are refused with "Too many agent calls are waiting, retry". |
+| `an_external_call_is_one_undo_step_with_an_agent_activity_card` (`:377`) | One call is one history step labelled `Agent: ...`, plus an "Agent activity" card. |
+| `agent_calls_wait_for_a_running_mira_turn_and_then_run_in_order` (`:420`) | Calls queue during a MIRA turn and run in order after it. |
+| `the_edit_lease_is_enforced_for_agent_calls` (`:483`) | An unleased entity is refused. |
+| `a_shared_project_without_edit_access_refuses_agent_edits_but_allows_reads` (`:500`) | Read-only shared project: edits refused, reads work. |
+| `an_edit_refused_at_commit_time_is_rolled_back_with_the_reason` (`:519`) | Access that lapses before commit rolls the call back with the reason. |
+| `settings_default_off_round_trip_and_load_from_older_data` (`:555`) | Preferences default to off/47615, round-trip, and old data loads. |
+| `the_pairing_token_never_reaches_preferences_storage_or_the_project` (`:582`) | The token is absent from settings, eframe storage and the project. |
+| `tokens_are_version_4_uuids_and_snippets_carry_the_token_and_port` (`:597`) | Token format; the Claude command (environment variable, no token in argv) and the JSON include the token and any non-default port. |
+| `the_token_is_saved_privately_once_and_regenerated_on_request` (`:620`) | One token per device, `0600`, regenerate replaces it. |
+| `the_real_socket_completes_the_v2_handshake_with_a_loopback_bridge` (`:647`) | The real `realtime::Socket` completes the v2 handshake with a loopback listener opened on port 0. |
+| `the_agent_link_works_with_mira_off_and_records_no_transcript` (`:711`) | With MIRA off the link still works and records no transcript. |
+| `no_secure_randomness_means_no_token_no_connection_and_a_clear_error` (`:728`) | No randomness: no token, no connection, an error is shown; regenerate cannot replace a good token with nothing. |
+| `the_handshake_proves_both_sides_and_never_sends_the_raw_token` (`:755`) | The app sends only a proof, and verifies the bridge's. |
+| `a_bad_bridge_proof_is_an_error_and_no_call_runs` (`:773`) | A wrong bridge proof is an error and no call runs. |
+| `calls_before_a_verified_ready_are_ignored` (`:792`) | Calls that arrive before a verified `ready` are dropped. |
+| `a_repeated_or_late_challenge_or_an_unchallenged_ready_disconnects` (`:806`) | Out-of-order handshake frames disconnect. |
+| `a_protocol_mismatch_tells_the_user_to_update_the_bridge` (`:838`) | An incompatible protocol version shows the update message. |
+| `no_randomness_for_the_app_nonce_is_an_error` (`:849`) | If the app cannot make a nonce, pairing fails with an error. |
+| `a_call_past_its_deadline_is_dropped_silently_and_a_missing_deadline_still_runs` (`:861`) | Expired calls are dropped unanswered; a call without a deadline gets the default cap. |
+| `cancel_removes_a_queued_call_before_it_runs` (`:883`) | A `cancel` frame removes the queued call. |
+| `a_call_queued_for_another_project_is_refused_and_results_name_the_document` (`:895`) | A queued call is refused if the open project changed; results carry `document {name, epoch}`. |
+| `client_names_drop_invisible_and_bidi_characters` (`:926`) | Client names lose control and format characters and are cut to 64 characters. |
+
+End-to-end tests with the real bridge and the app (the real `Bridge` from `benchup-mcp` and the app's `AgentLink`, both on loopback):
+
+| Test | Proves |
+|---|---|
+| `end_to_end_an_mcp_call_edits_the_open_project_through_the_real_bridge` | `tools/call create_board` through `benchup_mcp::serve` and the real `Bridge` returns `isError: false`; the app's model has the board, history has exactly one `Agent:` step, and undo empties the model. |
+| `end_to_end_a_call_waits_for_a_running_mira_turn` (needs `assistant`) | With a MIRA turn in flight (`FakeTransport`), the call stays queued and the model is unchanged; after the turn commits, the call completes as one `Agent:` step. |
+| `end_to_end_a_wrong_token_is_refused_and_nothing_is_edited` | The bridge refuses the app's proof; the app shows "The bridge refused the connection: pairing token does not match", the MCP call returns `isError: true`, and nothing is edited. |
+
+All three run inside `in_temp_data_dir`, use the app's real `SocketConnector` and the v2 handshake, and bound every wait at 10 s. `benchup-mcp` is a native-only dev-dependency of `benchup-app`, so it never reaches the browser build.
+
+Run: `cargo test -p benchup-app --lib --locked agent`. The name filter also selects any other test whose path contains `agent`.
+
+### 13.4 Feature combinations
+
+`benchup-app` has the Cargo features `assistant` and `agent-link` (both default). CI checks that the app compiles with neither, either, and both, plus the browser target without default features. Run the same locally:
+
+```sh
+cargo check -p benchup-app --locked --no-default-features
+cargo check -p benchup-app --locked --no-default-features --features assistant
+cargo check -p benchup-app --locked --no-default-features --features agent-link
+cargo check -p benchup-app --locked --target wasm32-unknown-unknown --no-default-features
+```
+
+When you add code that uses `assistant::` or `agent_link::` from outside those modules, call only what the stub module also provides, or these checks will fail.
 
 ## Gaps / unclear
 

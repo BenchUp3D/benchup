@@ -3,11 +3,11 @@
 [Docs index](../README.md) · [User guide](../assistant.md) · [Architecture](architecture.md) · Module reference · [Tool catalog](tools.md) · [LLM protocol](llm-protocol.md) · [UI/UX](ui-ux.md) · [Persistence and security](persistence-and-security.md) · [Testing](testing.md) · [Contributing](contributing.md) · [Development history](development-history.md) · [Roadmap](roadmap.md)
 
 
-**Citation convention.** `path:line` is relative to `crates/benchup-app/src/` unless it starts with `benchup-core/` (`crates/benchup-core/src/`). Lines are for branch `feature/build-with-mira` after the commit "Fix issues found while documenting MIRA" (parent `44a7cc9`). Visibility: `pub(crate)` and `pub(super)` are written as in the source; "private" means no modifier. In `assistant/mod.rs` the module items are `pub(super)` i.e. visible to `app`, and sub-modules are `pub(crate)`.
+**Citation convention.** `path:line` is relative to `crates/benchup-app/src/` unless it starts with `benchup-core/`, `benchup-tools/` or `benchup-mcp/` (those are `crates/<name>/src/`). Lines are for branch `feature/build-with-mira` after the commit "Fix issues found while documenting MIRA" (parent `44a7cc9`). Citations of `benchup-tools`, `benchup-mcp`, `agent_host.rs`, `agent_link/` and `credentials.rs` are for commit `91c017f`. Lines in `assistant/mod.rs`, `assistant/panel.rs` and `settings.rs` were taken before the agent commits and may be off by a few lines; search for the symbol. Visibility: `pub(crate)` and `pub(super)` are written as in the source; "private" means no modifier. In `assistant/mod.rs` the module items are `pub(super)` i.e. visible to `app`, and sub-modules are `pub(crate)`.
 
-Contents: [mod.rs](#assistantmodrs) · [client.rs](#assistantclientrs) · [credentials.rs](#assistantcredentialsrs) · [scene.rs](#assistantsceners) · [tools.rs](#assistanttoolsrs) · [turn.rs](#assistantturnrs) · [panel.rs](#assistantpanelrs) · [window.rs](#assistantwindowrs) · [tests](#test-files) · [Touchpoints outside the module](#touchpoints-outside-the-module) · [Gaps](#gaps--unclear)
+Contents: [mod.rs](#assistantmodrs) · [client.rs](#assistantclientrs) · [credentials.rs](#assistantcredentialsrs) · [tools.rs](#assistanttoolsrs) · [turn.rs](#assistantturnrs) · [panel.rs](#assistantpanelrs) · [window.rs](#assistantwindowrs) · [benchup-tools](#benchup-tools) · [benchup-mcp](#benchup-mcp) · [agent_host.rs](#agent_hostrs) · [credentials.rs (shared)](#credentialsrs-shared) · [agent_link/](#agent_link) · [tests](#test-files) · [Touchpoints outside the module](#touchpoints-outside-the-module) · [Gaps](#gaps--unclear)
 
-Module declaration: `app.rs:88-89` (`#[path = "assistant/mod.rs"] mod assistant;`). Why `#[path]`: [architecture.md section 2](architecture.md#why-the-module-is-declared-from-apprs-via-path).
+Module declaration: `app.rs:99-100` (`#[path = "assistant/mod.rs"] mod assistant;`). Why `#[path]`: [architecture.md section 2](architecture.md#why-the-module-is-declared-from-apprs-via-path).
 
 ---
 
@@ -71,7 +71,7 @@ Sub-module declarations `:11-27`: `client`, `credentials`, `panel`, `scene`, `to
 
 | Signature | Line | Description |
 |---|---|---|
-| `pub(super) fn poll_assistant(&mut self, ctx)` | `:440` | Per frame (`app.rs:6433`). When busy builds a `Gate` (block, lease, per-call `recheck`), moving the assistant and the model out of `self` with `mem::take` while the recheck closure borrows `&self`; polls, calls `self.changed(ctx)` on `mutated`, commits a finished turn |
+| `pub(super) fn poll_assistant(&mut self, ctx)` | `:440` | Per frame (`app.rs:6455`). When busy builds a `Gate` (block, lease, per-call `recheck`), moving the assistant and the model out of `self` with `mem::take` while the recheck closure borrows `&self`; polls, calls `self.changed(ctx)` on `mutated`, commits a finished turn |
 | `pub(super) fn assistant_send(&mut self, ctx, request: Prompt) -> Result<(), String>` | `:468` | Collects the stock catalog, `read_only`, `lease`; calls `Assistant::send` |
 | `pub(super) fn assistant_stop(&mut self, ctx)` | `:481` | Stop + commit |
 | `pub(super) fn assistant_commit_turn(&mut self, mut result: TurnResult, ctx)` | `:488` | Restores the edit scope, one `commit_edit` (drops the card and adds an error entry if the step was refused and rolled back), selection, `record`, and the card position and erased names only when `record` added a card |
@@ -137,116 +137,226 @@ Responsibility: the OpenAI-compatible HTTP client, the wire types, the URL guard
 
 ## assistant/credentials.rs
 
-Responsibility: per-server API key storage. Native: a private file in the data dir. Web: `localStorage`. Never goes to eframe storage, preferences, or project files (doc `:1-3`).
+Responsibility: per-server API key storage. It names the slot (`assistant-{hash}.key` natively, `benchup.assistant.key.{base}` on the web) and delegates the file and `localStorage` work to the shared [`credentials.rs`](#credentialsrs-shared). Never goes to eframe storage, preferences, or project files (doc `:1-3`).
 
 | Signature | Line | Description |
 |---|---|---|
-| `fn base_hash(base: &str) -> u64` | `:10` | FNV-1a over the normalised base URL; `cfg(not wasm32 or test)` |
-| `fn key_file(dir: &Path, base: &str) -> PathBuf` | `:19` | `assistant-{hash:016x}.key` |
-| `fn storage_name(base: &str) -> String` | `:23` | `benchup.assistant.key.{normalised base}`; `cfg(wasm32 or test)` |
-| `fn save_in(dir, base, key) -> Result<(), String>` | `:28` | Creates dir; file mode `0o600` on unix, also tightened when the file exists; writes the trimmed key |
-| `fn load_in(dir, base) -> Option<String>` | `:49` | Trimmed, non-empty |
-| `fn forget_in(dir, base) -> Result<(), String>` | `:55` | Missing file is success |
-| `pub(crate) fn load(base: &str) -> Option<String>` | native `:64`, wasm `:86` | Uses `crate::storage::data_dir()` natively |
-| `pub(crate) fn save(base: &str, key: &str) -> Result<(), String>` | native `:68`, wasm `:92` | |
-| `pub(crate) fn forget(base: &str) -> Result<(), String>` | native `:72`, wasm `:98` | |
-| `fn local_storage() -> Result<web_sys::Storage, String>` | `:77` | wasm only; errors via `tr!` |
-| `mod tests` | `:105` | Round-trip per server, trailing-slash equivalence, `0o600`, tightening of an existing `0o644` file |
-
----
-
-## assistant/scene.rs
-
-Responsibility: render the `Model` as compact JSON in millimetres for the LLM (doc `:3-4`). Schema and budgets: [llm-protocol.md](llm-protocol.md).
-
-| Item | Line | Description |
-|---|---|---|
-| `pub(crate) const SCENE_BUDGET: usize = 24_000` | `:9` | Characters for scene + references |
-| `const MAX_FACES: usize = 80` | `:10` | Faces listed by `describe` |
-| `const MAX_LISTED_SELECTION: usize = 200` | `:11` | |
-| `const MAX_LISTED_TAGS: usize = 100` | `:12` | |
-| `pub(crate) fn mm(metres: f64) -> f64` | `:15` | Metres to mm, rounded to 0.1 mm |
-| `pub(crate) fn from_mm(millimetres: f64) -> f64` | `:18` | mm to metres |
-| `pub(crate) fn point_mm(p: DVec3) -> Value` | `:21` | `[x,y,z]` in mm |
-| `fn unit(v: DVec3) -> Value` | `:24` | Direction, rounded to 0.001 |
-| `pub(crate) fn kind_of(model, id) -> &'static str` | `:29` | `group`, `component`, `face`, `edge`, `dimension`, `text`, `guide`, `joint`, or `missing` |
-| `pub(crate) fn bounds_json(model, ids: &BTreeSet<u64>) -> Option<Value>` | `:52` | `{min, max, size}` in mm via `Model::selection_bounds` |
-| `fn axis_name(v: DVec3) -> Value` | `:57` | `"x"/"y"/"z"` if within 0.999 of an axis, else the vector |
-| `fn material_json(model, object) -> Option<Value>` | `:66` | `{id, name}` |
-| `pub(crate) fn object_entry(model, id) -> Option<Value>` | `:71` | One object: id, name, kind, parent, tag, `bounds_mm`, `size_mm`, material, grain, hidden, locked |
-| `pub(crate) fn stock_list(model, catalog) -> Vec<Value>` | `:104` | Model stock materials overlaid with the purchasing catalog; dimensions in tenths of mm to mm |
-| `fn joint_json(model, id) -> Option<Value>` | `:118` | `{id, a, b, kind}` |
-| `pub(crate) fn summary(model, selection, catalog, budget: usize) -> Value` | `:129` | Whole-scene summary, objects ordered selection, in-scope, rest; truncates with `omitted` and `hint` |
-| `pub(crate) fn outward_sign(model, face_id) -> f64` | `:183` | `+1` or `-1` mapping the stored face normal to the outward one |
-| `fn face_json(model, id) -> Option<Value>` | `:195` | id, outward `normal`, `area_mm2`, `center_mm`, `facing` |
-| `pub(crate) fn describe(model, id) -> Option<Value>` | `:217` | Object (with children and up to 80 faces), face, joint, or other entity |
-| `pub(crate) fn references(model, ids, budget: usize) -> Value` | `:257` | Map id -> `describe`, within budget, with `omitted` count |
+| `fn base_hash(base: &str) -> u64` | `:9` | FNV-1a over the normalised base URL; `cfg(not wasm32 or test)` |
+| `fn key_file_name(base: &str) -> String` | `:18` (wasm `:22`) | `assistant-{hash:016x}.key`; empty on wasm32 |
+| `fn key_file(dir: &Path, base: &str) -> PathBuf` | `:26` | Test only |
+| `fn storage_name(base: &str) -> String` | `:29` | `benchup.assistant.key.{normalised base}` |
+| `save_in`, `load_in`, `forget_in` | `:34`, `:38`, `:42` | Test-only wrappers over `credentials::save_in` / `load_in` / `forget_in` |
+| `pub(crate) fn load(base: &str) -> Option<String>` | `:46` | Calls `credentials::load(&key_file_name, &storage_name)` |
+| `pub(crate) fn save(base: &str, key: &str) -> Result<(), String>` | `:49` | |
+| `pub(crate) fn forget(base: &str) -> Result<(), String>` | `:52` | |
+| `mod tests` | `:57` | Round-trip per server, trailing-slash equivalence, `0o600`, tightening of an existing `0o644` file |
 
 ---
 
 ## assistant/tools.rs
 
-Responsibility: the tool catalog (schemas) and the executor that applies a tool call to a `Model` with validation, lease checks, rollback and bounded results (doc `:1-4`). Per-tool behaviour: [tools.md](tools.md).
+Responsibility: what is left of the tool layer after the move to `benchup-tools`: the OpenAI-specific plumbing (109 lines). Per-tool behaviour: [tools.md](tools.md).
+
+| Item | Line | Description |
+|---|---|---|
+| `pub(crate) use benchup_tools::{ToolEnv, ToolOutcome, is_mutating, openai_tools as definitions}` | `:5` | Re-exports, so `turn.rs` and the tests keep their names |
+| `pub(crate) fn execute(model, call: &ToolCall, env) -> ToolOutcome` | `:8` | Converts the OpenAI `ToolCall` to a `benchup_tools::Call` (`Call::from_text`) and runs it |
+| `pub(crate) fn fallback_tool_call(content: &str) -> Option<ToolCall>` | `:16` | Fenced-JSON / bare-JSON tool call. LLM-specific, so it stays here |
+| `mod tests` | `:47` | Fallback parser tests and the wire-format fixture test (`tools_wire_fixture.json`) |
+| `pub(crate) mod test_support` | `:95` | `run` and `board` helpers for `assistant/tests.rs` |
+
+---
+
+## benchup-tools
+
+A library with no UI or network dependencies; it also builds for `wasm32` because the app depends on it. Overview in `benchup-tools/src/lib.rs:1-21`.
+
+### benchup-tools/src/ops.rs
+
+Responsibility: the tool catalog (schemas) and the executor that applies a tool call to a `Model` with validation, lease checks, rollback and bounded results. This is the file the old `assistant/tools.rs` became. Both add-ons call it. Per-tool behaviour: [tools.md](tools.md).
 
 ### Constants
 
 | Item | Line | Value |
 |---|---|---|
-| `MAX_IDS` | `:20` | `500` ids per call |
-| `MAX_POINTS` | `:21` | `1000` polyline points |
-| `MAX_TEXT_CHARS` | `:22` | `500` (tag names, text notes) |
-| `MAX_COORDINATE_MM` | `:24` | `1.0e5` (100 m) |
-| `MAX_RESULT_M` | `:26` | `1000.` (1 km) |
-| `MIN_SCALE` / `MAX_SCALE` | `:29` / `:30` | `1.0e-3` / `1.0e3`; also the `minimum` / `maximum` of the `scale` schema |
-| `MAX_TAG_BYTES` | `:28` | `128`; core's tag-name limit, also `maxLength` of the `tag` schema properties |
-| `TOOLS: &[(&str, bool)]` | `:99` | Names and mutating flag, 27 entries |
-| `CREATING: &[&str]` | `:961` | Pure-creator tools exempt from the lease |
+| `MAX_IDS` | `:17` | `500` ids per call |
+| `MAX_POINTS` | `:18` | `1000` polyline points |
+| `MAX_TEXT_CHARS` | `:19` | `500` (tag names, text notes) |
+| `MAX_COORDINATE_MM` | `:21` | `1.0e5` (100 m) |
+| `MAX_RESULT_M` | `:23` | `1000.` (1 km) |
+| `MIN_SCALE` / `MAX_SCALE` | `:26` / `:27` | `1.0e-3` / `1.0e3`; also the `minimum` / `maximum` of the `scale` schema |
+| `MAX_TAG_BYTES` | `:25` | `128`; core's tag-name limit, also `maxLength` of the `tag` schema properties |
+| `TOOLS: &[(&str, bool)]` | `:96` | Names and mutating flag, 27 entries |
+| `CREATING: &[&str]` | `:1015` | Pure-creator tools exempt from the lease |
 
 ### Types
 
 | Item | Line | Description |
 |---|---|---|
-| `pub(crate) struct ToolEnv` | `:34` | Per-turn state: `read_only`, `selection`, `hide_selection` (the designer turned off "Include selection": `get_scene` and `get_selection` do not reveal `selection`), `catalog`, `before: Option<Model>`, `lease: Option<BTreeSet<u64>>`, `created: BTreeSet<u64>`. `#[derive(Default)]` |
-| `pub(crate) struct ToolOutcome` | `:54` | `result: Value`, `ok`, `mutated`, `created`, `modified`, `erased`, `joints` |
-| `struct Fail { error: String, hint: Option<String> }` | `:66` | `From<&str>` `:70`, `From<String>` `:75` |
-| `fn fail(error, hint) -> Fail` | `:80` | |
-| `struct Done` + `type Res = Result<Done, Fail>` | `:85`, `:92` | Tool return: id lists plus `extra: Map` |
-| `enum AxisArg {X,Y,Z}` + `fn axis(&self) -> Axis` | `:240`, `:246` | |
-| `enum JointArg {...}` + `fn kind(&self) -> JointKind` | `:256`, `:265` | |
-| `type V3 = [f64; 3]` | `:277` | |
-| Argument structs (all `#[serde(deny_unknown_fields)]`) | `:279-423` | `Empty`, `FindArgs`, `IdArg`, `IdsArg`, `CreateBoardArgs`, `CopyArgs`, `PolylineArgs`, `MoveArgs`, `RotateArgs`, `ScaleArgs`, `ResizeArgs`, `PushPullArgs`, `RenameArgs`, `MaterialArgs`, `GrainArgs`, `GroupArgs`, `TagArgs`, `PaintArgs`, `JointParams`, `JointArgs`, `DimensionArgs`, `TextArgs` |
+| `pub struct ToolDefinition` | `:174` | Neutral definition: `name`, `description`, `input_schema` |
+| `pub struct Call` | `:183` | `{ id, name, arguments: Value }`; `Call::new` `:192`, `Call::from_text` `:198` (text arguments, blank means `{}`) |
+| `pub struct ToolEnv` | `:31` | Per-turn state: `read_only`, `selection`, `hide_selection` (the designer turned off "Include selection": `get_scene` and `get_selection` do not reveal `selection`), `catalog`, `before: Option<Model>`, `lease: Option<BTreeSet<u64>>`, `created: BTreeSet<u64>`. `#[derive(Default)]` |
+| `pub struct ToolOutcome` | `:51` | `result: Value`, `ok`, `mutated`, `created`, `modified`, `erased`, `joints` |
+| `struct Fail { error: String, hint: Option<String> }` | `:63` | `From<&str>` `:67`, `From<String>` `:72` |
+| `fn fail(error, hint) -> Fail` | `:77` | |
+| `struct Done` + `type Res = Result<Done, Fail>` | `:82`, `:89` | Tool return: id lists plus `extra: Map` |
+| `enum AxisArg {X,Y,Z}` + `fn axis(&self) -> Axis` | `:289`, `:295` | |
+| `enum JointArg {...}` + `fn kind(&self) -> JointKind` | `:305`, `:314` | |
+| `type V3 = [f64; 3]` | `:326` | |
+| Argument structs (all `#[serde(deny_unknown_fields)]`) | `:328-472` | `Empty`, `FindArgs`, `IdArg`, `IdsArg`, `CreateBoardArgs`, `CopyArgs`, `PolylineArgs`, `MoveArgs`, `RotateArgs`, `ScaleArgs`, `ResizeArgs`, `PushPullArgs`, `RenameArgs`, `MaterialArgs`, `GrainArgs`, `GroupArgs`, `TagArgs`, `PaintArgs`, `JointParams`, `JointArgs`, `DimensionArgs`, `TextArgs` |
 
 ### Functions
 
 | Signature | Line | Description |
 |---|---|---|
-| `fn modified(ids: &BTreeSet<u64>) -> Done` | `:94` | |
-| `pub(crate) fn is_mutating(name: &str) -> bool` | `:129` | |
-| `pub(crate) fn is_known(name: &str) -> bool` | `:132` | |
-| `fn vec3()`, `ids()`, `id()`, `text()`, `number()`, `axis_enum()` | `:138-161` | JSON-Schema fragments |
-| `fn def(name, description, properties, required) -> Value` | `:162` | Builds a function tool with `additionalProperties:false` |
-| `pub(crate) fn definitions() -> Vec<Value>` | `:175` | The 27 tool schemas sent to the model |
-| `fn parse<T: DeserializeOwned>(arguments: &str) -> Result<T, Fail>` | `:425` | Empty text -> `{}`; error "invalid arguments: ..." |
-| `fn point(v: V3) -> Result<DVec3, Fail>` | `:435` | The mm to metre conversion with the 100 m bound |
-| `fn finite(value: f64, what: &str) -> Result<f64, Fail>` | `:441` | |
-| `fn unreachable_hint(model, id) -> String` | `:447` | Suggests `enter_object`/`exit_to_root` |
-| `fn entities(model, ids, mutating: bool) -> Result<BTreeSet<u64>, Fail>` | `:458` | Count, existence, hidden, and (mutating) locked + in-scope checks |
-| `fn objects(model, ids, mutating)` | `:483` | `entities` + must be group/component |
-| `fn one_object(model, id) -> Result<u64, Fail>` | `:490` | |
-| `fn find_material(model, env, id: MaterialId) -> Result<StockMaterial, Fail>` | `:494` | Catalog first, then model |
-| `fn assign_material(model, env, object, material: Option<MaterialId>)` | `:501` | Copies the definition into the model |
-| `fn tag_named(model, name) -> Result<u64, Fail>` | `:511` | Trims, rejects names over 128 *bytes* (`MAX_TAG_BYTES`, core's limit), then case-insensitive lookup or `add_tag` |
-| `fn checked_name(name) -> Result<String, Fail>` | `:522` | 1-128 chars, trimmed |
-| `fn read(value: Value) -> Res` | `:532` | Wrap a read result |
-| Tool functions | | `create_board` `:540`, `create_copy` `:579`, `draw_polyline` `:592`, `move_objects` `:612`, `rotate` `:617`, `scale` `:623`, `resize_board` `:632`, `push_pull` `:653`, `rename` `:697`, `set_material` `:703`, `set_grain` `:713`, `group` `:718`, `ungroup` `:737`, `tag` `:746`, `paint` `:757`, `erase` `:770`, `add_joint` `:779`, `add_dimension` `:832`, `add_text` `:836`, `find_objects` `:844` |
-| `fn run(model, env, name, arguments) -> Res` | `:865` | Dispatch; also inlines `get_scene`, `get_object`, `get_selection` (empty with a note when `hide_selection`), `list_stock_materials`, `select` (lease-restricted), `enter_object`, `exit_to_root` |
-| `fn error_outcome(error: String, hint: Option<String>) -> ToolOutcome` | `:943` | |
-| `fn target_ids(name, arguments) -> Vec<u64>` | `:964` | Existing ids named by a mutating call (`ids`, `id`, `face_id`, `a`, `b`) |
-| `fn leased(model, env, id) -> bool` | `:976` | Walks up to 256 ancestors |
-| `fn out_of_range(model, done: &Done) -> bool` | `:989` | Created/modified bounds non-finite or beyond 1 km |
-| `pub(crate) fn execute(model: &mut Model, call: &ToolCall, env: &mut ToolEnv) -> ToolOutcome` | `:998` | The executor |
-| `pub(crate) fn fallback_tool_call(content: &str) -> Option<ToolCall>` | `:1088` | Fenced-JSON / bare-JSON tool call |
-| `pub(super) mod tests` | `:1118-1120` | `#[path = "tools_tests.rs"]` |
+| `fn modified(ids: &BTreeSet<u64>) -> Done` | `:91` | |
+| `pub fn is_mutating(name: &str) -> bool` | `:126` | |
+| `pub fn is_known(name: &str) -> bool` | `:129` | |
+| `fn vec3()`, `ids()`, `id()`, `text()`, `number()`, `axis_enum()` | `:135-158` | JSON-Schema fragments |
+| `fn def(name, description, properties, required) -> Value` | `:159` | Builds a `ToolDefinition` with `additionalProperties:false` |
+| `pub fn definitions() -> Vec<ToolDefinition>` | `:224` | The 27 neutral tool definitions (`name`, `description`, `input_schema`) |
+| `pub fn openai_tools() -> Vec<Value>` | `:208` | Adapter: OpenAI `tools` wire shape (what MIRA sends) |
+| `pub fn mcp_tools() -> Vec<Value>` | `:217` | Adapter: MCP `tools/list` shape (`name`, `description`, `inputSchema`) |
+| `fn parse<T: DeserializeOwned>(arguments: &str) -> Result<T, Fail>` | `:474` | Empty text -> `{}`; error "invalid arguments: ..." |
+| `fn point(v: V3) -> Result<DVec3, Fail>` | `:484` | The mm to metre conversion with the 100 m bound |
+| `fn finite(value: f64, what: &str) -> Result<f64, Fail>` | `:490` | |
+| `fn unreachable_hint(model, id) -> String` | `:496` | Suggests `enter_object`/`exit_to_root` |
+| `fn entities(model, ids, mutating: bool) -> Result<BTreeSet<u64>, Fail>` | `:507` | Count, existence, hidden, and (mutating) locked + in-scope checks |
+| `fn objects(model, ids, mutating)` | `:532` | `entities` + must be group/component |
+| `fn one_object(model, id) -> Result<u64, Fail>` | `:539` | |
+| `fn find_material(model, env, id: MaterialId) -> Result<StockMaterial, Fail>` | `:543` | Catalog first, then model |
+| `fn assign_material(model, env, object, material: Option<MaterialId>)` | `:550` | Copies the definition into the model |
+| `fn tag_named(model, name) -> Result<u64, Fail>` | `:560` | Trims, rejects names over 128 *bytes* (`MAX_TAG_BYTES`, core's limit), then case-insensitive lookup or `add_tag` |
+| `fn checked_name(name) -> Result<String, Fail>` | `:571` | 1-128 chars, trimmed |
+| `fn read(value: Value) -> Res` | `:581` | Wrap a read result |
+| Tool functions | | `create_board` `:589`, `create_copy` `:628`, `draw_polyline` `:641`, `move_objects` `:661`, `rotate` `:666`, `scale` `:672`, `resize_board` `:681`, `push_pull` `:702`, `rename` `:746`, `set_material` `:752`, `set_grain` `:762`, `group` `:767`, `ungroup` `:786`, `tag` `:795`, `paint` `:806`, `erase` `:819`, `add_joint` `:828`, `add_dimension` `:881`, `add_text` `:885`, `find_objects` `:893` |
+| `fn run(model, env, name, arguments) -> Res` | `:914` | Dispatch; also inlines `get_scene`, `get_object`, `get_selection` (empty with a note when `hide_selection`), `list_stock_materials`, `select` (lease-restricted), `enter_object`, `exit_to_root` |
+| `fn error_outcome(error: String, hint: Option<String>) -> ToolOutcome` | `:997` | |
+| `fn target_ids(name, arguments) -> Vec<u64>` | `:1018` | Existing ids named by a mutating call (`ids`, `id`, `face_id`, `a`, `b`) |
+| `fn leased(model, env, id) -> bool` | `:1030` | Walks up to 256 ancestors |
+| `fn out_of_range(model, done: &Done) -> bool` | `:1111` | Created/modified bounds non-finite or beyond 1 km |
+| `pub fn execute(model: &mut Model, call: &Call, env: &mut ToolEnv) -> ToolOutcome` | `:1120` | The executor |
+| `mod tests` | `:1220-1222` | `#[path = "ops_tests.rs"]` |
+
+### benchup-tools/src/scene.rs
+
+Responsibility: render the `Model` as compact JSON in millimetres for an agent (doc `:3-4`). Moved unchanged from `assistant/scene.rs` (same line numbers; items are now `pub`). Schema and budgets: [llm-protocol.md](llm-protocol.md).
+
+| Item | Line | Description |
+|---|---|---|
+| `pub const SCENE_BUDGET: usize = 24_000` | `:9` | Characters for scene + references |
+| `const MAX_FACES: usize = 80` | `:10` | Faces listed by `describe` |
+| `const MAX_LISTED_SELECTION: usize = 200` | `:11` | |
+| `const MAX_LISTED_TAGS: usize = 100` | `:12` | |
+| `pub fn mm(metres: f64) -> f64` | `:15` | Metres to mm, rounded to 0.1 mm |
+| `pub fn from_mm(millimetres: f64) -> f64` | `:18` | mm to metres |
+| `pub fn point_mm(p: DVec3) -> Value` | `:21` | `[x,y,z]` in mm |
+| `fn unit(v: DVec3) -> Value` | `:24` | Direction, rounded to 0.001 |
+| `pub fn kind_of(model, id) -> &'static str` | `:29` | `group`, `component`, `face`, `edge`, `dimension`, `text`, `guide`, `joint`, or `missing` |
+| `pub fn bounds_json(model, ids: &BTreeSet<u64>) -> Option<Value>` | `:52` | `{min, max, size}` in mm via `Model::selection_bounds` |
+| `fn axis_name(v: DVec3) -> Value` | `:57` | `"x"/"y"/"z"` if within 0.999 of an axis, else the vector |
+| `fn material_json(model, object) -> Option<Value>` | `:66` | `{id, name}` |
+| `pub fn object_entry(model, id) -> Option<Value>` | `:71` | One object: id, name, kind, parent, tag, `bounds_mm`, `size_mm`, material, grain, hidden, locked |
+| `pub fn stock_list(model, catalog) -> Vec<Value>` | `:104` | Model stock materials overlaid with the purchasing catalog; dimensions in tenths of mm to mm |
+| `fn joint_json(model, id) -> Option<Value>` | `:118` | `{id, a, b, kind}` |
+| `pub fn summary(model, selection, catalog, budget: usize) -> Value` | `:129` | Whole-scene summary, objects ordered selection, in-scope, rest; truncates with `omitted` and `hint` |
+| `pub fn outward_sign(model, face_id) -> f64` | `:183` | `+1` or `-1` mapping the stored face normal to the outward one |
+| `fn face_json(model, id) -> Option<Value>` | `:195` | id, outward `normal`, `area_mm2`, `center_mm`, `facing` |
+| `pub fn describe(model, id) -> Option<Value>` | `:217` | Object (with children and up to 80 faces), face, joint, or other entity |
+| `pub fn references(model, ids, budget: usize) -> Value` | `:257` | Map id -> `describe`, within budget, with `omitted` count |
+
+### benchup-tools/src/files.rs
+
+Responsibility: `.bup` project files (gzip-compressed JSON), moved from `project_files.rs`, which now delegates to it.
+
+| Signature | Description |
+|---|---|
+| `pub fn encode_document(doc: &Document) -> Result<Vec<u8>, String>` | Serialise and compress |
+| `pub fn encode(json: &str) -> Result<Vec<u8>, String>` | Compress already-serialised JSON |
+| `pub fn decode(bytes: &[u8]) -> Result<Document, String>` | |
+| `pub fn save_atomic(path: &Path, bytes: &[u8]) -> Result<(), String>` | Temporary file next to the real file, fsync, then rename. A symlink is followed (the link stays, its target is replaced) and an existing file's permissions are kept; the directory is synced afterwards (Unix) |
+
+### benchup-tools/src/pairing.rs
+
+Responsibility: the challenge-response used by protocol v2, shared by the bridge and the app so they cannot drift. `PROTOCOL = 2`; `hmac_sha256` (RFC 2104, tested against RFC 4231 vectors); `app_proof` and `bridge_proof` (role-separated: the message is `benchup-agent-link/<role>\n<bridge nonce>\n<app nonce>`); `proofs_match` (constant time); `valid_nonce` (64 lowercase hex characters).
+
+---
+
+## benchup-mcp
+
+A binary (`benchup-mcp`) and a small library (`benchup-mcp/src/lib.rs`). Not part of the app. User guide: [../mcp.md](../mcp.md); wire protocol: `crates/benchup-mcp/README.md`. Line numbers are left out because this code changes often; search for the names.
+
+| File | Responsibility |
+|---|---|
+| `benchup-mcp/src/main.rs` | Argument parsing for `file <project.bup> [--allow-shared]` and `live [--port] [--token] [--allow-origin]...`; reads `BENCHUP_AGENT_TOKEN` when `--token` is absent |
+| `benchup-mcp/src/protocol.rs` | Newline-delimited JSON-RPC 2.0. `Backend` trait; `handle` (`initialize`, `ping`, `tools/list`, `tools/call`; anything else -32601); `serve` loop; supported protocol versions |
+| `benchup-mcp/src/file_mode.rs` | `FileBackend`: load, refuse shared projects without `--allow-shared`, record `Agent: <tool>`, save atomically, roll back on a failed save, and refuse to save when the file changed on disk (`Stamp`: modification time, length, hash; message `CHANGED_ON_DISK`) |
+| `benchup-mcp/src/live.rs` | `Bridge`: loopback WebSocket server. `LiveConfig`; `origin_allowed`; `constant_time_eq`; `Bridge::start` (binds `127.0.0.1` only, refuses to start without OS randomness); `forward` (sends `call` with `deadline_ms`, `cancel` on timeout); `handle_connection` (Origin check, the v2 handshake within the 5 s window, one app at a time); limits `PRE_AUTH_MAX_BYTES`, `MAX_MESSAGE_BYTES`, `MAX_UNAUTHENTICATED` |
+| `benchup-mcp/tests/mcp.rs` | 19 integration tests (see [testing.md](testing.md)) |
+
+---
+
+## addons.rs
+
+Responsibility: the saved preferences of both add-ons, always compiled so that a build without an add-on keeps what a full build saved (doc `:1-4`). `DEFAULT_BASE_URL` `:6`, `DEFAULT_PORT` `:7`, `WindowPreferences` `:12`, `AssistantPreferences` `:21`, `AgentPreferences` `:45`. The add-on modules re-export them as `Preferences`.
+
+---
+
+## agent_host.rs
+
+Responsibility: the app side of every agent that edits through `benchup_tools`, and the add-on on/off rules. Always compiled. Doc `:1-5`.
+
+| Signature | Line | Description |
+|---|---|---|
+| `pub(super) struct Changes` | `:15` | What a turn or agent call changed, for the change card (moved here from `assistant/mod.rs`) |
+| `pub(super) fn restore_scope(model, scope: Option<u64>)` | `:29` | Put the edit scope back, or the top level if the object is gone |
+| `BenchUpApp::assistant_available()` | `:35` | `cfg!(feature = "assistant") && general_settings.assistant_enabled` |
+| `BenchUpApp::section_hidden(section)` | `:40` | The Assistant inspector section is hidden, not removed, while MIRA is off |
+| `BenchUpApp::tool_env(&self, ctx) -> ToolEnv` | `:46` | Catalog from `general_settings.stock.wood`, `read_only = !shared_edit_allowed`, `lease = shared_lease()`, `selection`. Used by both add-ons |
+| `BenchUpApp::focus_touched(touched)` | `:65` | Select what an agent made or changed (top-level, visible) |
+| `BenchUpApp::apply_agent_selection(selection)` | `:76` | Follow a `select` call |
+| `BenchUpApp::run_agent_call(call, client, ctx) -> (bool, Value)` | `:86` | One external call as exactly one undo step `Agent: <summary>` (label `:118`, commit `:120`); rolls back and returns the reason if `commit_edit` refuses (`:121-129`); restores the edit scope (`:93`, `:103`); adds the "Agent activity" card (`:144`) |
+
+---
+
+## credentials.rs (shared)
+
+Responsibility: secrets that stay on this device: the MIRA API key and the agent pairing token. A `0600` file in the data directory natively, `localStorage` on the web. Moved from `assistant/credentials.rs`; callers pass a file name and a storage key.
+
+| Signature | Line | Description |
+|---|---|---|
+| `save_in(dir, file_name, value)` | `:11` | Atomic: a private temporary file (`create_new`, `0o600`), `sync_all`, then rename over the target; the temporary file is removed on failure |
+| `load_in(dir, file_name)`, `forget_in(dir, file_name)` | `:44`, `:50` | Trimmed non-empty value; a missing file is success |
+| `load`, `save`, `forget` (native) | `:59`, `:63`, `:67` | Use `crate::storage::data_dir()` |
+| `load`, `save`, `forget` (wasm32) | `:81`, `:87`, `:93` | `localStorage` |
+| tests | `:105`, `:119` | `saving_over_a_world_readable_file_leaves_a_private_intact_file`, `a_new_file_round_trips` |
+
+---
+
+## agent_link/
+
+Responsibility: the "Agent connection" add-on. The app connects out to the bridge, authenticates with the pairing token and runs the calls it receives through `agent_host`. Doc `agent_link/mod.rs:1-20`. With the `agent-link` feature off, `agent_link/stub.rs` (23 lines) replaces it: `Preferences` (re-exported from `addons.rs`, with `normalize`), an empty `AgentLink`, and no-op `poll_agent_link`, `agent_status_text` and `agent_link_settings`. `app.rs:108-114` picks one of the two.
+
+Line numbers are left out of this table because the file changes often; search for the names. The pump runs the v2 handshake (hello, `challenge`, `prove`, verified `ready`) and tracks the document epoch, call deadlines and `cancel`.
+
+| Item | Line | Description |
+|---|---|---|
+| Backoff 1 s to 10 s, `READY_TIMEOUT` 15 s, `QUEUE_TIMEOUT` 100 s, `QUEUE_LIMIT` 64, `CALLS_PER_FRAME` 8 | `mod.rs` | |
+| `TOKEN_FILE = "agent-link.token"`, `TOKEN_STORAGE = "benchup.agent_link.token"` | `mod.rs` | Slot names passed to `credentials` |
+| `pub(super) use addons::{AgentPreferences as Preferences, DEFAULT_PORT}` | `mod.rs` | `{ enabled, port }`, persisted in `GeneralSettings.agent_link`; default off, port 47615. The token is not here. `normalize` `:38` |
+| `enum Status`, `trait Link`, `trait Connector` | `mod.rs` | Connection state and a seam so tests need no bridge |
+| `SocketLink` / `SocketConnector` | `mod.rs` | Wrap `realtime::Socket` |
+| `enum Frame`, `parse_frame` | `mod.rs` | Strict parsing; a call with an id is always answered |
+| `new_token` | `mod.rs` | A random UUID v4 from the OS or the browser's crypto, through the `uuid` crate. Fallible: with no randomness there is no token and no connection |
+| `new_nonce`, `clean_client`, `now_ms` | `mod.rs` | The app's handshake nonce; client-name cleaning (control and format characters out, 64 characters); Unix time for call deadlines |
+| `AgentLink::result_frame` | `mod.rs` | Adds `"document": {name, epoch}` to every result |
+| `claude_command`, `mcp_json` | `mod.rs` | The text behind the two copy buttons |
+| `AgentLink::pump` | `mod.rs` | Connect/reconnect, run the v2 handshake, read frames, queue calls |
+| `AgentLink::expire`, `notify_waiting` | `mod.rs` | Refuse calls the bridge has given up on; tell the bridge a call is waiting |
+| `BenchUpApp::poll_agent_link` | `mod.rs` | Per frame: pump, expire, run queued calls unless MIRA is busy or a file operation is replacing the model |
+| `BenchUpApp::agent_status_text` | `mod.rs` | Status-bar text |
+| `agent_link_settings` | `ui.rs` | Settings > Add-ons > Agent connection |
+| `tests.rs`, `ui_tests.rs` | | Handshake, deadline/cancel, epoch, queueing, lease, token, end-to-end; see [testing.md](testing.md#133-agent_link-32) |
 
 ---
 
@@ -378,9 +488,12 @@ Run the module's tests with `cargo test -p benchup-app --lib assistant` and `...
 | File | Compiled from | Contents (selected helpers and tests) |
 |---|---|---|
 | `assistant/tests.rs` (1112 lines) | `assistant/mod.rs:25-27`, module `app::assistant::tests` | Helpers `in_temp_data_dir` `:11` (re-runs one test in a child process with `BENCHUP_DATA_DIR` set to a temp dir), `tool` `:32`, `new_board` `:35`, `connected_app` `:39`, `ask` `:46`, `finish` `:49`, `script_table` `:60`, `shared_app` `:696`, `x_of` `:704`, `Storage` mock `:340`. Tests cover full scripted turns, undo-step count, Stop, error handling, read-only, fenced fallback, round cap, `send` validation, connect/key flow, preference persistence and old-save defaults, scene units/truncation, references by id, chips/prompt rewrite, busy gate, remote replacement, undo-turn availability, lease, 32-call cap, shared budget, key-per-server, hidden selection, rolled-back turns, edit-scope restore, per-call access re-check, valid-JSON truncation, history roles, no-change turns, typed models, deferred base-URL save, Bring to front |
-| `assistant/tools_tests.rs` (521 lines) | `assistant/tools.rs:1118-1120` (`pub(super) mod tests`) | Helpers `call` `:5`, `run` `:8`, `ok` `:11`, `err` `:16`, `board` `:25`, `bounds` `:28`, `near` `:31`, `first_face` `:359`. Tests per tool family, structured errors, lock/hidden/read-only, schema-vs-executor consistency (`:305`), fallback parser (`:327,344`), lease (`:364`), bounded output (`:404`), push_pull owner chain (`:436`), selection hiding, tag-name and `scale` schema limits and lease-restricted `select` (`:456` to the end) |
+| `benchup-tools/src/ops_tests.rs` (519 lines) | `benchup-tools/src/ops.rs:1220-1222` (`mod tests`) | Moved from `assistant/tools_tests.rs`. Helpers `call` `:4`, `run` `:7`, `ok` `:10`, `err` `:15`, `board` `:24`, `bounds` `:27`, `near` `:30`. 22 tests: per tool family, structured errors, lock/hidden/read-only, schema-vs-executor consistency (`:304`), lease (`:329`), bounded output (`:369`), push_pull owner chain (`:401`), selection hiding, tag-name and `scale` schema limits, lease-restricted `select` (`:470`), the OpenAI and MCP adapters (`:489`), text arguments (`:507`) |
+| `assistant/tools.rs` `mod tests` | `assistant/tools.rs:47` | Fallback parser and the wire-format fixture |
 | `assistant/ui_tests.rs` (303 lines) | `app_tests.rs:493-495` as `mod assistant_ui` | Uses the shared UI `Harness`. Helpers `object` `:10`, `open_panel` `:19`. Tests: context-menu entry, disabled without selection, Connect modal button order, disconnected/connected panel, change cards and undo, Enter-to-send, Shift+Enter and blocked-send notice, the "+N more" card line, shortcut toggle, drop helpers, pointer tools paused while busy (`Stall` transport `:207`), shortcut key collisions |
-| Inline tests | `assistant/client.rs:418`, `assistant/credentials.rs:105`, `inspector_docking.rs:944`, `sharing.rs:1201`, `sidebar.rs` preference tests | See the sections above and the touchpoints below |
+| `benchup-mcp/tests/mcp.rs` (287 lines) | integration test of the crate | Protocol, file mode and live bridge; see [testing.md](testing.md) |
+| `agent_link/tests.rs`, `agent_link/ui_tests.rs` | `agent_link/mod.rs:31-33` | Frames, reconnect, queueing behind MIRA, lease, token handling; see [testing.md](testing.md) |
+| Inline tests | `assistant/client.rs:418`, `assistant/credentials.rs:57`, `inspector_docking.rs:947`, `sharing.rs:1204`, `sidebar.rs` preference tests | See the sections above and the touchpoints below |
 
 ---
 

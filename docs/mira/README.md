@@ -1,8 +1,10 @@
-# Build with MIRA: contributor documentation
+# Build with MIRA and MCP: contributor documentation
 
 **Build with MIRA** is an optional AI design assistant for BenchUp. A designer describes a change in plain language and can refer to parts of the design ("make **@Left leg** 40 mm thicker"). An OpenAI-compatible language model proposes **tool calls**, and the editor applies them to the model. **Each assistant turn is one undo step.**
 
 This folder is for people who want to understand, review or extend the assistant. If you only want to *use* it, read the user guide: [../assistant.md](../assistant.md).
+
+The tools that MIRA calls live in a shared crate, `benchup-tools`, and are also served to external agents by the `benchup-mcp` server. MIRA and MCP are two add-ons on that crate. The MCP user guide is [../mcp.md](../mcp.md); how the two fit together is in [architecture.md](architecture.md#31-mira-and-mcp-as-two-add-ons-on-one-tool-layer).
 
 > **Status:** proposed upstream in [BenchUp3D/editor#3](https://github.com/BenchUp3D/editor/pull/3) (draft), from the fork [aarvee11/editor](https://github.com/aarvee11/editor), branch `feature/build-with-mira`. The original proposal is [issue #1](https://github.com/BenchUp3D/editor/issues/1).
 
@@ -11,8 +13,11 @@ This folder is for people who want to understand, review or extend the assistant
 | If you want to… | Read |
 |---|---|
 | Understand the overall design and how one turn flows end to end | [architecture.md](architecture.md) |
+| Connect an external agent (Claude Code, Cursor, any MCP client) to BenchUp | [../mcp.md](../mcp.md) |
+| See how MIRA and the MCP server share one tool layer | [architecture.md section 3.1](architecture.md#31-mira-and-mcp-as-two-add-ons-on-one-tool-layer) |
+| Review the security of the agent bridge (token, Origin check, trust) | [persistence-and-security.md section 7.1](persistence-and-security.md#71-agent-bridge-threat-model) |
 | Find a specific type, function or file, or see what changed outside the module | [module-reference.md](module-reference.md) |
-| Look up or add a tool the model can call | [tools.md](tools.md) |
+| Look up or add a tool the model or an MCP agent can call | [tools.md](tools.md), [contributing.md](contributing.md#31-add-a-new-tool) |
 | See exactly what is sent to and received from the LLM, including the system prompt and scene summary | [llm-protocol.md](llm-protocol.md) |
 | Work on the panel, references, latch/unlatch window or busy gate | [ui-ux.md](ui-ux.md) |
 | Know what is saved, where the API key lives, and the threat model | [persistence-and-security.md](persistence-and-security.md) |
@@ -30,7 +35,7 @@ flowchart LR
     T -->|scene summary + tools| C[ChatTransport<br/>assistant/client.rs]
     C -->|HTTPS, OpenAI format| L[(LLM endpoint<br/>default: endlesstokens.ai)]
     L -->|tool_calls| T
-    T -->|validated calls| X[Tool executor<br/>assistant/tools.rs]
+    T -->|validated calls| X[Tool executor<br/>benchup-tools ops.rs]
     X -->|benchup-core ops| M[(Model)]
     T -->|once per turn| F[finish_edit<br/>one undo step]
     F --> M
@@ -52,13 +57,19 @@ Principles behind the design:
 |---|---|
 | Assistant state, preferences and app glue (`assistant_send`, `poll_assistant`, `assistant_commit_turn`) | `crates/benchup-app/src/assistant/mod.rs` |
 | HTTP transport (desktop ureq thread, web `fetch`), URL guard, error mapping, test fake | `crates/benchup-app/src/assistant/client.rs` |
-| API key storage | `crates/benchup-app/src/assistant/credentials.rs` |
-| Scene summary and references sent to the model | `crates/benchup-app/src/assistant/scene.rs` |
-| Tool schemas, executor, limits, lease checks, fallback parser | `crates/benchup-app/src/assistant/tools.rs` |
+| API key slot | `crates/benchup-app/src/assistant/credentials.rs` |
+| Secrets on the device (API key, agent pairing token) | `crates/benchup-app/src/credentials.rs` |
+| Scene summary and references sent to the model | `crates/benchup-tools/src/scene.rs` |
+| Tool schemas, executor, limits, lease checks (shared by MIRA and MCP) | `crates/benchup-tools/src/ops.rs` |
+| OpenAI adapter and text fallback parser | `crates/benchup-app/src/assistant/tools.rs` |
+| `.bup` encode/decode and atomic save | `crates/benchup-tools/src/files.rs` |
+| MCP server (stdio, file mode, live bridge) | `crates/benchup-mcp/src/` |
+| Agent connection add-on (WebSocket client, pairing token, Settings section) | `crates/benchup-app/src/agent_link/` |
+| Shared app-side host for agent calls (`tool_env`, `run_agent_call`) | `crates/benchup-app/src/agent_host.rs` |
 | Agent loop (rounds, Stop, gate, commit result) | `crates/benchup-app/src/assistant/turn.rs` |
 | Panel UI (connect modal, transcript, change cards, composer, `@` references) | `crates/benchup-app/src/assistant/panel.rs` |
 | Latch/unlatch hosting (OS window or in-canvas window) | `crates/benchup-app/src/assistant/window.rs` |
-| Tests | `crates/benchup-app/src/assistant/{tests,tools_tests,ui_tests}.rs` |
+| Tests | `crates/benchup-app/src/assistant/{tests,ui_tests}.rs`, `crates/benchup-tools/src/ops_tests.rs`, `crates/benchup-mcp/tests/mcp.rs`, `crates/benchup-app/src/agent_link/{tests,ui_tests}.rs` |
 | Module registration, busy gate, keyboard shortcut, View menu | `crates/benchup-app/src/app.rs` |
 | Inspector section and persisted preferences | `crates/benchup-app/src/sidebar.rs`, `inspector_docking.rs` |
 | Shared-project lease, remote replacement handling | `crates/benchup-app/src/sharing.rs` |
@@ -67,7 +78,7 @@ Principles behind the design:
 | Strings (`assistant.*`) | `assets/i18n/en.json` |
 | CI for pull requests and branch pushes | `.github/workflows/ci.yml` |
 
-`benchup-core` is **unchanged**: the assistant only calls its existing public API.
+`benchup-core` is **unchanged**: the assistant and the tool layer only call its existing public API.
 
 ## Five-minute tour for a new contributor
 

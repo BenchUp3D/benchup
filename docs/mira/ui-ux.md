@@ -17,15 +17,15 @@ Items marked **(likely bug)** or listed in [Gaps / unclear](#gaps--unclear) are 
 | Connect modal | `assistant_dialogs` | `assistant/panel.rs:408` |
 | Transcript + cards | `assistant_transcript`, `transcript_entry`, `change_card` | `assistant/panel.rs:514`, `:841`, `:892` |
 | Composer, `@` popup, chips, Stop | `assistant_composer` | `assistant/panel.rs:578` |
-| Busy banner over the viewport | `assistant_busy_banner` | `assistant/panel.rs:1000` |
+| Busy banner over the viewport | `assistant_busy_banner` | `assistant/panel.rs:1002` |
 | Latch/unlatch, window hosting, View menu item, shortcut | `assistant/window.rs` | whole file |
 | Host enum (`Docked`, `Window`) | `Host` | `assistant/panel.rs:22` |
 | Session-only UI state | `UiState` | `assistant/panel.rs:46` |
-| Persisted panel state | `Preferences`, `WindowPreferences` | `assistant/mod.rs:49`, `:40` |
+| Persisted panel state | `Preferences`, `WindowPreferences` | `assistant/mod.rs:40`, `:40` |
 
 ## 2. Panel anatomy
 
-The panel branches on whether an API key is held in memory (`self.assistant.key.is_none()`, `assistant/panel.rs:242`), not on the `Connection` enum (`assistant/mod.rs:87-92`). `Connection::Failed` can therefore be set while the connected layout is still shown (for example a failed model reload).
+The panel branches on whether an API key is held in memory (`self.assistant.key.is_none()`, `assistant/panel.rs:242`), not on the `Connection` enum (`assistant/mod.rs:59-64`). `Connection::Failed` can therefore be set while the connected layout is still shown (for example a failed model reload).
 
 ```mermaid
 stateDiagram-v2
@@ -63,33 +63,33 @@ Items are added right to left (`assistant/panel.rs:266-307`), so left to right o
 |---|---|---|
 | Latch / unlatch icon (28×24) | Docked shows "unlatch" (tooltip `assistant.unlatch`), window shows "latch" (`assistant.latch`). Calls `assistant_set_detached`. | `:267-273`, `:308-311` |
 | **⋯** menu (connected only) | "Change endpoint…" opens the connect modal with Advanced forced open; "Forget API key" calls `forget_key`. | `:274-293`, `:316-326` |
-| **New chat** | Enabled only when not busy and the transcript is non-empty. Clears transcript and model-facing history (`Assistant::new_chat`, `assistant/mod.rs:227-232`). Also clears `ui.notice`. | `:294-302`, `:312-315` |
+| **New chat** | Enabled only when not busy and the transcript is non-empty. Clears transcript and model-facing history (`Assistant::new_chat`, `assistant/mod.rs:189-194`). Also clears `ui.notice`. | `:294-302`, `:312-315` |
 | Model picker | See [section 7](#7-model-picker-and-forget-key). | `:303`, `:331` |
 
 ### 2.4 Transcript
 
 `assistant_transcript` (`assistant/panel.rs:514-553`) draws a framed vertical scroll area (id `assistant_transcript`) that sticks to the bottom. An empty transcript shows the hint `assistant.empty_transcript`.
 
-Each `Entry` (`assistant/mod.rs:114`) is a rounded frame whose colours depend on `EntryRole` (`assistant/panel.rs:850-854`):
+Each `Entry` (`assistant/mod.rs:76`) is a rounded frame whose colours depend on `EntryRole` (`assistant/panel.rs:850-855`):
 
 | Role | Label key | Notes |
 |---|---|---|
-| `User` | `assistant.you` | Text is the **rewritten** prompt, so mentions appear as `@Name [#id]` (see [section 4.4](#44-how-chips-are-rewritten)). The string pushed to the transcript is the rewritten, trimmed prompt (`assistant/mod.rs:308,332`). |
+| `User` | `assistant.you` | Text is the **rewritten** prompt, so mentions appear as `@Name [#id]` (see [section 4.4](#44-how-chips-are-rewritten)). The string pushed to the transcript is the rewritten, trimmed prompt (`assistant/mod.rs:270,294`). |
 | `Assistant` | `assistant.name` | Selectable text; the model's closing sentence, or "Done." (`assistant.default_summary`, `assistant/turn.rs:302-305`) when it said nothing. |
-| `Error` | `assistant.error_label` ("Problem") | Accent colours. Pushed by `record` when `result.error` is set (`assistant/mod.rs:410-412`). |
+| `Error` | `assistant.error_label` ("Problem") | Accent colours. Pushed by `record` when `result.error` is set (`assistant/mod.rs:388-390`). |
 
 ### 2.5 Change card and "Undo turn" rules
 
-A card is attached to an `Assistant` entry when the turn created, modified, erased or joined anything (`assistant/mod.rs:381-409`). Layout (`change_card`, `assistant/panel.rs:892-982`):
+A card is attached to an `Assistant` entry when the turn created, modified, erased or joined anything (`assistant/mod.rs:359-387`). Layout (`change_card`, `assistant/panel.rs:894-984`):
 
 * Summary line `assistant.card.summary` with four counts; ` · stopped` is appended for a Stopped turn.
 * One clickable row per created, then modified, then joint id, labelled `Created · Name`, `Modified · Name`, `Joint · Name`. Clicking pushes `CardAction::Focus(id)`, which selects the entity and calls `fit_selection` (`assistant_focus_entity`, `:169-175`). A row is disabled when the entity no longer exists (`:934-944`).
 * At most `CARD_ROWS = 12` rows are shown in total (`:64`), counted across all categories: created, modified and joint rows first (clickable), then erased rows as non-clickable weak text using `Changes::erased_names` (names captured from the pre-turn model, `erased_names` at `:991`), falling back to `#id`. If more rows exist than are shown, one weak line `assistant.card.more` reads "+N more", where N counts every category not shown, erased rows included (`:966`). Test `change_cards_count_every_row_they_do_not_show`.
 * **Undo turn** button.
 
-**Undo turn is enabled only when** `turn_undoable` is true (`assistant/panel.rs:986-988`): the card has a recorded `position`, that position equals the current history position, and the current position equals the number of history labels (so nothing is redoable after it). The disabled tooltip explains "Only the most recent change can be undone here. Use History for earlier ones." (`assistant.card.undo_turn_disabled`). Clicking calls the normal `undo(ctx, false)` (`:550`), so the turn can be redone. Tests: `undo_turn_is_offered_only_while_the_turn_is_the_latest_step` (`assistant/tests.rs:658`), `change_cards_list_rows_focus_entities_and_offer_undo_only_for_the_latest_turn` (`assistant/ui_tests.rs:121`).
+**Undo turn is enabled only when** `turn_undoable` is true (`assistant/panel.rs:988-990`): the card has a recorded `position`, that position equals the current history position, and the current position equals the number of history labels (so nothing is redoable after it). The disabled tooltip explains "Only the most recent change can be undone here. Use History for earlier ones." (`assistant.card.undo_turn_disabled`). Clicking calls the normal `undo(ctx, false)` (`:550`), so the turn can be redone. Tests: `undo_turn_is_offered_only_while_the_turn_is_the_latest_step` (`assistant/tests.rs:658`), `change_cards_list_rows_focus_entities_and_offer_undo_only_for_the_latest_turn` (`assistant/ui_tests.rs:121`).
 
-`position` is stamped in `assistant_commit_turn` (`assistant/mod.rs:538-551`): `Some(history.position())` only if the commit really recorded a step (`commit_edit` returned `true`, `:506`).
+`position` is stamped in `assistant_commit_turn` (`assistant/mod.rs:498-511`): `Some(history.position())` only if the commit really recorded a step (`commit_edit` returned `true`, `:506`).
 
 The stamping runs only when `Assistant::record` reports that it added a change card for this turn. A turn that changed nothing adds no card, so earlier cards keep their `position` and `erased_names` and their Undo turn button (fixed; test `a_turn_without_changes_leaves_the_earlier_undo_card_intact`).
 
@@ -110,22 +110,22 @@ A turn whose edits were refused at commit time (shared edit access lapsed) is ro
 | Up / Down | `@` popup open | Move highlight (wraps) | `:637-643` |
 | Enter / Tab | `@` popup open | Insert the highlighted entity | `:644-648` |
 | Esc | `@` popup open | Dismiss the popup for the current text (`mention_dismissed`) | `:647-649` |
-| Esc | a turn is running | Stop (handled in the root keyboard handler) | `app.rs:2159-2163` |
-| Ctrl/Cmd+Shift+M | anywhere | Toggle the panel ([section 10](#10-view-menu-item-and-shortcut)) | `app.rs:2156` |
+| Esc | a turn is running | Stop (handled in the root keyboard handler) | `app.rs:2178-2182` |
+| Ctrl/Cmd+Shift+M | anywhere | Toggle the panel ([section 10](#10-view-menu-item-and-shortcut)) | `app.rs:2175` |
 
 Send button: `primary_button` "Send", enabled when the composer text is non-empty after trim; tooltip `assistant.send_help` (`:780-787`). Submitting first calls `assistant_cancel_interactions` (`:195`), which clears any half-finished drawing/measure/gesture state (`:209-221`) **even if the send then fails** (for example not connected).
 
-On success the composer text and chips are cleared, the notice is cleared and focus returns to the prompt (`:197-204`). On failure the error is shown in `ui.notice` and the draft is kept (`:205`; test `send_enters_submit_and_a_blocked_send_reports_why`, `assistant/ui_tests.rs:145`). Validation order in `Assistant::send` (`assistant/mod.rs:298-321`): busy, empty prompt, invalid base URL, no key, no model.
+On success the composer text and chips are cleared, the notice is cleared and focus returns to the prompt (`:197-204`). On failure the error is shown in `ui.notice` and the draft is kept (`:205`; test `send_enters_submit_and_a_blocked_send_reports_why`, `assistant/ui_tests.rs:145`). Validation order in `Assistant::send` (`assistant/mod.rs:260-283`): busy, empty prompt, invalid base URL, no key, no model.
 
 ### 3.2 Progress, elapsed time and Stop
 
-While a turn runs the right side of the bottom row shows (`assistant/panel.rs:766-778`), right to left: **Stop** button, then the text `Working… N s` (`assistant.working`) with ` · <last tool name>` appended once any tool ran, then a spinner. `N` is `ctx time - turn.started_at` truncated to whole seconds (`:771`); tool names come from `Turn::activity` (`assistant/turn.rs:102,259`) and are the model's raw tool names, not translated. The loop repaints every 100 ms while a reply is pending (`assistant/mod.rs:351-354`).
+While a turn runs the right side of the bottom row shows (`assistant/panel.rs:766-778`), right to left: **Stop** button, then the text `Working… N s` (`assistant.working`) with ` · <last tool name>` appended once any tool ran, then a spinner. `N` is `ctx time - turn.started_at` truncated to whole seconds (`:771`); tool names come from `Turn::activity` (`assistant/turn.rs:102,259`) and are the model's raw tool names, not translated. The loop repaints every 100 ms while a reply is pending (`assistant/mod.rs:313-316`).
 
-Stop is available three ways: the button above, the button in the viewport banner (`:1013-1019`), and Esc (`app.rs:2159-2163`). All end in `Assistant::stop` (`assistant/mod.rs:359-362`) and `assistant_commit_turn`. Edits already applied are kept as one history step labelled "MIRA (stopped)" (`assistant.history_stopped`, `assistant/mod.rs:500-502`); a reply still in flight is dropped. Test: `stopping_mid_turn_commits_one_step` (`assistant/tests.rs:172`).
+Stop is available three ways: the button above, the button in the viewport banner (`:1013-1019`), and Esc (`app.rs:2178-2182`). All end in `Assistant::stop` (`assistant/mod.rs:321-324`) and `assistant_commit_turn`. Edits already applied are kept as one history step labelled "MIRA (stopped)" (`assistant.history_stopped`, `assistant/mod.rs:470-472`); a reply still in flight is dropped. Test: `stopping_mid_turn_commits_one_step` (`assistant/tests.rs:172`).
 
-Other things that also stop a turn: starting a new model (`app.rs:996`), opening/replacing a project (`projects.rs:166`). A remote replacement of a shared project discards the turn without committing (`sharing.rs:377`, `assistant/mod.rs:366-377`).
+Other things that also stop a turn: starting a new model (`app.rs:1015`), opening/replacing a project (`projects.rs:166`). A remote replacement of a shared project discards the turn without committing (`sharing.rs:377`, `assistant/mod.rs:328-339`).
 
-After a commit the editor selects the parts the turn created or modified (only top-level, visible ones), and applies the selection the model set with the `select` tool (`assistant/mod.rs:518-533`).
+After a commit the editor selects the parts the turn created or modified (only top-level, visible ones), and applies the selection the model set with the `select` tool (`assistant/mod.rs:488-493`).
 
 ## 4. References
 
@@ -147,7 +147,7 @@ Dragging a row from the Outliner carries an `OutlinerDrag { ids }` payload (`out
 ### 4.3 "Ask MIRA about this" and the Include selection chip
 
 * **Context menu.** The viewport/outliner context menu has a separator and an item `assistant.ask_about_this`, disabled when nothing is selected (`context_menu.rs:415-416`; test `ask_mira_is_disabled_without_a_selection`, `assistant/ui_tests.rs:60`). The action (`context_menu.rs:53-57`) adds one chip per selected id and calls `assistant_reveal`, which opens the inspector and the section (or raises the detached window), scrolls to it and focuses the prompt (`assistant/window.rs:134-145`).
-* **Include selection.** A checkbox under the composer (`assistant/panel.rs:759-764`, persisted as `Preferences::include_selection`, default `true`, `assistant/mod.rs:52,62`). When on and at least one selected id is an object, a dimmed italic "Selection (N)" label is shown next to the chips (`:591-612`). The flag controls what the model gets: `Turn::start` adds the selection to the references block only when it is on, and when it is off the selection is also left out of the scene summary and `get_selection` answers with `{"selection":[],"note":"The designer has turned off sharing their selection."}` (`assistant/turn.rs:139-142`, `assistant/tools.rs:869`). Tests: `include_selection_off_hides_the_selection_from_the_scene_and_get_selection`, `hidden_selection_is_not_revealed_by_get_scene_or_get_selection`.
+* **Include selection.** A checkbox under the composer (`assistant/panel.rs:759-764`, persisted as `Preferences::include_selection`, default `true`, `assistant/mod.rs:40,40`). When on and at least one selected id is an object, a dimmed italic "Selection (N)" label is shown next to the chips (`:591-612`). The flag controls what the model gets: `Turn::start` adds the selection to the references block only when it is on, and when it is off the selection is also left out of the scene summary and `get_selection` answers with `{"selection":[],"note":"The designer has turned off sharing their selection."}` (`assistant/turn.rs:139-142`, `benchup-tools/src/ops.rs:918`). Tests: `include_selection_off_hides_the_selection_from_the_scene_and_get_selection`, `hidden_selection_is_not_revealed_by_get_scene_or_get_selection`.
 * Chips whose object has since been deleted are drawn with an accent outline and strikethrough (`chip_pill`, `:811-839`); they are dropped when composing (`assistant_compose`, `:178-187`). Each pill has a "×" that removes it (`:604-606`).
 
 ### 4.4 How chips are rewritten
@@ -163,7 +163,7 @@ Tests: `chips_rewrite_the_prompt_with_ids_and_collect_references`, `a_renamed_pa
 
 ## 5. Connect modal
 
-Built with the shared `Modal` shell (`modal.rs`), `Modal::new("assistant_connect", 460.)` (`assistant/panel.rs:423`). Rendered by whichever window hosts the panel (`assistant_dialogs` is called from `assistant_window`: `assistant/window.rs:185-189` docked, `:259` inside the native window, `:198` for the embedded window).
+Built with the shared `Modal` shell (`modal.rs`), `Modal::new("assistant_connect", 460.)` (`assistant/panel.rs:423`). Rendered by whichever window hosts the panel (`assistant_dialogs` is called from `assistant_window`: `assistant/window.rs:189-196` docked, `:259` inside the native window, `:198` for the embedded window).
 
 | Element | Detail | Code |
 |---|---|---|
@@ -174,7 +174,7 @@ Built with the shared `Modal` shell (`modal.rs`), `Modal::new("assistant_connect
 | Server address | Single line, hint `DEFAULT_BASE_URL` = `https://api.endlesstokens.ai/v1` | `:448-453`, `assistant/client.rs:9` |
 | Status | Spinner + "Checking your key…" while connecting; the server error (accent) after a failed attempt | `:466-474` |
 
-**Validation.** The server address is normalised (`normalize_base`: trim, strip trailing `/`) and must pass `valid_base_url` (`assistant/panel.rs:422`): `https://` with a non-empty host, or `http://` only for `localhost` / `127.0.0.1` (optionally with a port); no `?`, `#`, `@` or spaces (`assistant/client.rs:26-39`). An invalid address shows `assistant.error.invalid_server_address` and disables **Connect** (`:454-463,476`). **Connect** is also disabled while a check is running. An empty key is rejected by `Assistant::connect` with `assistant.error.invalid_api_key` (`assistant/mod.rs:195-207`).
+**Validation.** The server address is normalised (`normalize_base`: trim, strip trailing `/`) and must pass `valid_base_url` (`assistant/panel.rs:422`): `https://` with a non-empty host, or `http://` only for `localhost` / `127.0.0.1` (optionally with a port); no `?`, `#`, `@` or spaces (`assistant/client.rs:26-39`). An invalid address shows `assistant.error.invalid_server_address` and disables **Connect** (`:454-463,476`). **Connect** is also disabled while a check is running. An empty key is rejected by `Assistant::connect` with `assistant.error.invalid_api_key` (`assistant/mod.rs:157-169`).
 
 **Footer order.** AGENTS.md "Modal actions" says the least impactful action goes on the right and the footer renders right to left, so actions are declared from least to most impactful. The code declares **Cancel** first, then **Connect** (`assistant/panel.rs:476-481`), so on screen it reads Connect, Cancel. The test `connect_dialog_declares_cancel_before_connect_so_cancel_renders_on_the_right` (`assistant/ui_tests.rs:69`) measures the x positions.
 
@@ -197,7 +197,7 @@ Under the composer, until dismissed, a wrapped weak line `assistant.privacy` sho
 * Default choice: after a successful model list, if **no model is chosen yet** (the setting is empty), the first id containing `qwen` (case-insensitive, `DEFAULT_MODEL_HINT`, `assistant/mod.rs:34`) is selected, else the first id (`:276-283`).
 * A model the user picked or typed (`Use "..."`) is kept when the list is reloaded or the app restarts, even if the server's list omits it (fixed; test `a_typed_model_survives_a_model_list_that_omits_it`). Switching to a different server resets the model so a default is chosen for it.
 
-**Forget API key** (⋯ menu, `assistant/panel.rs:289-292,316-323`): `Assistant::forget_key` (`assistant/mod.rs:220-226`) clears the in-memory key and model list, sets `Disconnected`, and deletes the key stored for the **current** server address (`credentials::forget`). The panel returns to the disconnected layout; the transcript, history and model name are kept. A deletion error is shown as the notice. Keys stored for other addresses are not touched. See [persistence-and-security.md](persistence-and-security.md#5-api-key-storage).
+**Forget API key** (⋯ menu, `assistant/panel.rs:289-292,316-323`): `Assistant::forget_key` (`assistant/mod.rs:182-188`) clears the in-memory key and model list, sets `Disconnected`, and deletes the key stored for the **current** server address (`credentials::forget`). The panel returns to the disconnected layout; the transcript, history and model name are kept. A deletion error is shown as the notice. Keys stored for other addresses are not touched. See [persistence-and-security.md](persistence-and-security.md#5-api-key-storage).
 
 ## 8. Latch and unlatch
 
@@ -213,19 +213,19 @@ flowchart TD
     C -- "app quits" --> E["detached stays true:<br/>reopens detached next launch"]
 ```
 
-`assistant_window` runs once per frame after the busy banner (`app.rs:6462-6463`; `assistant/window.rs:185-200`). Docked, it only runs the dialogs and resets geometry tracking.
+`assistant_window` runs once per frame after the busy banner (`app.rs:6485-6486`; `assistant/window.rs:189-207`). Docked, it only runs the dialogs and resets geometry tracking.
 
 ### 8.1 Native window
 
-`assistant_native_window` (`assistant/window.rs:229-284`) opens an **immediate viewport** (`ctx.show_viewport_immediate`, id from `viewport_id()` = hash of `"benchup.assistant"`, `:31-33,251`). Immediate viewports run the callback inline, which is what lets the panel borrow `&mut self` (module comment, `:3-5`). The window has title "Build with MIRA", inner size from the saved size (default `DEFAULT_SIZE` 440×640) and minimum `MIN_SIZE` 340×300 (`:16-17`), and its content is the same `assistant_panel` with `Host::Window` inside a `CentralPanel` (`:252-258`). The connect modal is drawn inside it (`:257`).
+`assistant_native_window` (`assistant/window.rs:236-291`) opens an **immediate viewport** (`ctx.show_viewport_immediate`, id from `viewport_id()` = hash of `"benchup.assistant"`, `:31-33,251`). Immediate viewports run the callback inline, which is what lets the panel borrow `&mut self` (module comment, `:3-5`). The window has title "Build with MIRA", inner size from the saved size (default `DEFAULT_SIZE` 440×640) and minimum `MIN_SIZE` 340×300 (`:16-17`), and its content is the same `assistant_panel` with `Host::Window` inside a `CentralPanel` (`:252-258`). The connect modal is drawn inside it (`:257`).
 
 ### 8.2 Web / embedded window
 
-`assistant_embedded_window` (`assistant/window.rs:202-226`) uses `egui::Window` (not collapsible, resizable, default size from prefs, minimum `MIN_SIZE`). It is chosen whenever `ctx.embed_viewports()` is true, which includes the browser. Start position: the saved position if it lies inside the screen shrunk by 8 px, else the top-right corner minus the window width and 24 px, 96 px down (`:210-215`). Closing it with its X latches back (`:223-225`).
+`assistant_embedded_window` (`assistant/window.rs:209-233`) uses `egui::Window` (not collapsible, resizable, default size from prefs, minimum `MIN_SIZE`). It is chosen whenever `ctx.embed_viewports()` is true, which includes the browser. Start position: the saved position if it lies inside the screen shrunk by 8 px, else the top-right corner minus the window width and 24 px, 96 px down (`:210-215`). Closing it with its X latches back (`:223-225`).
 
 ### 8.3 Placement persistence and debounce
 
-`track_geometry` (`assistant/window.rs:286-305`) runs each frame while the window is visible with the window's position (native: outer corner; embedded: top-left of the window rect) and size (native: inner size). The rectangle must be unchanged for `SETTLE_SECONDS = 0.4` before it is copied into `settings.window.position/size`; while it is still moving a repaint is requested after 500 ms. Dragging therefore does not rewrite preferences every frame. Persisting to storage happens through `persist_inspector_changes` ([persistence-and-security.md](persistence-and-security.md#2-what-is-persisted)). Test: `detached_panel_state_follows_latch_calls_and_is_debounced` (`assistant/tests.rs:509`).
+`track_geometry` (`assistant/window.rs:293-312`) runs each frame while the window is visible with the window's position (native: outer corner; embedded: top-left of the window rect) and size (native: inner size). The rectangle must be unchanged for `SETTLE_SECONDS = 0.4` before it is copied into `settings.window.position/size`; while it is still moving a repaint is requested after 500 ms. Dragging therefore does not rewrite preferences every frame. Persisting to storage happens through `persist_inspector_changes` ([persistence-and-security.md](persistence-and-security.md#2-what-is-persisted)). Test: `detached_panel_state_follows_latch_calls_and_is_debounced` (`assistant/tests.rs:509`).
 
 ### 8.4 Off-screen heuristic
 
@@ -235,7 +235,7 @@ Limits: a monitor that was unplugged but whose area lies within that margin (for
 
 ### 8.5 Close and quit
 
-* Closing the detached OS window sets `latch` from `close_requested()` and calls `assistant_set_detached(false)` unless the **root** window is also closing (`assistant/window.rs:229-234,281,280-282`). Quitting the app therefore leaves `detached == true`, and the panel reopens detached at the next launch (test `window_privacy_and_selection_preferences_persist_without_a_model_edit`, `assistant/tests.rs:449`).
+* Closing the detached OS window sets `latch` from `close_requested()` and calls `assistant_set_detached(false)` unless the **root** window is also closing (`assistant/window.rs:236-241,288,287-289`). Quitting the app therefore leaves `detached == true`, and the panel reopens detached at the next launch (test `window_privacy_and_selection_preferences_persist_without_a_model_edit`, `assistant/tests.rs:449`).
 * Latching back (`assistant_set_detached(ctx, false)`, `window.rs:102-114`) turns the inspector on, opens the section, resets geometry tracking and focuses the prompt. The remembered position and size are kept for next time.
 
 ### 8.6 Docked placeholder
@@ -250,31 +250,31 @@ When detached, the inspector section shows `assistant.detached_window` ("Build w
 
 ## 9. Busy gate
 
-While `Assistant::busy()` (a `Turn` exists, `assistant/mod.rs:177-179`) the editor protects the model from interleaved user edits.
+While `Assistant::busy()` (a `Turn` exists, `assistant/mod.rs:139-141`) the editor protects the model from interleaved user edits.
 
 | Area | What happens | Code |
 |---|---|---|
-| Edits that go through `finish_edit` | The model is restored to its pre-edit state and the notice `assistant.busy_blocked` is shown ("MIRA is editing the model. Wait for it to finish or press Stop.") | `app.rs:753-773` |
-| Undo / redo / History clicks | Refused with the same notice | `app.rs:815` |
-| Keyboard shortcuts | The handler returns early; only Esc (Stop) and the MIRA toggle shortcut work | `app.rs:2156-2165` |
-| Viewport primary-button gestures | Skipped unless the tool is Select or Orbit; middle/right buttons and context menu handling are unchanged | `app.rs:4509-4515` |
-| Sending another prompt | `assistant.error.busy`; Enter does nothing; the Send button is replaced by Stop | `assistant/mod.rs:309-311`, `assistant/panel.rs:654,766` |
+| Edits that go through `finish_edit` | The model is restored to its pre-edit state and the notice `assistant.busy_blocked` is shown ("MIRA is editing the model. Wait for it to finish or press Stop.") | `app.rs:772-792` |
+| Undo / redo / History clicks | Refused with the same notice | `app.rs:834` |
+| Keyboard shortcuts | The handler returns early; only Esc (Stop) and the MIRA toggle shortcut work | `app.rs:2175-2184` |
+| Viewport primary-button gestures | Skipped unless the tool is Select or Orbit; middle/right buttons and context menu handling are unchanged | `app.rs:4531-4537` |
+| Sending another prompt | `assistant.error.busy`; Enter does nothing; the Send button is replaced by Stop | `assistant/mod.rs:271-273`, `assistant/panel.rs:654,766` |
 | Model picker, New chat | Picker changes ignored; New chat disabled | `assistant/panel.rs:370,296` |
-| New model / open project | The turn is stopped first | `app.rs:996`, `projects.rs:166` |
-| Still allowed | Orbit, pan, zoom, selecting, scrolling the transcript, Stop, toggling the panel, latching/unlatching | `app.rs:4509` |
+| New model / open project | The turn is stopped first | `app.rs:1015`, `projects.rs:166` |
+| Still allowed | Orbit, pan, zoom, selecting, scrolling the transcript, Stop, toggling the panel, latching/unlatching | `app.rs:4531` |
 
-The commit at the end of a turn is never refused by this gate because the `Turn` is dropped before `finish_edit` runs (`app.rs:762-766`, `assistant/mod.rs:488-506`).
+The commit at the end of a turn is never refused by this gate because the `Turn` is dropped before `finish_edit` runs (`app.rs:781-785`, `assistant/mod.rs:458-476`).
 
-**Viewport banner** (`assistant_busy_banner`, `assistant/panel.rs:1000-1022`): an egui popup-styled `Area` pinned 12 px below the top-centre of the viewport rectangle (`self.viewport.center_top()`), foreground order, with a spinner, `assistant.banner` ("MIRA is editing…") and a **Stop** button. It is an egui overlay, not scene geometry, and is drawn in the main window only.
+**Viewport banner** (`assistant_busy_banner`, `assistant/panel.rs:1002-1024`): an egui popup-styled `Area` pinned 12 px below the top-centre of the viewport rectangle (`self.viewport.center_top()`), foreground order, with a spinner, `assistant.banner` ("MIRA is editing…") and a **Stop** button. It is an egui overlay, not scene geometry, and is drawn in the main window only.
 
 Not covered: inspector widgets are not disabled; their edits are only refused if they flow through `finish_edit`. See [roadmap.md](roadmap.md).
 
 ## 10. View menu item and shortcut
 
-* **View menu.** `assistant_view_menu_item` adds an item labelled "Build with MIRA" with the `assistant` icon and the formatted shortcut text, hover text `assistant.menu_help`; clicking toggles the panel (`assistant/window.rs:174-183`). It is inserted after the separator at the end of the View menu, before the Sections submenu (`sidebar.rs:4913`).
-* **Shortcut.** Ctrl+Shift+<key> (Cmd+Shift on macOS), default `M` (`GeneralSettings::assistant_key`, `settings.rs:157,177`; `assistant_shortcut`, `assistant/window.rs:159-162`). Handled by `assistant_toggle_shortcut` (`:165-172`) at `app.rs:2156`, after the "project blocked / screenshot open" guard and before the busy check, so it works while MIRA is busy.
-* **Remapping.** Settings → Shortcuts has a row (`settings.rs:554-581`) using the shared `shortcut_input`. It is listed in the shortcuts help (`shortcuts.rs:94-97,286`). Test: `shortcut_is_cmd_shift_m_by_default_and_toggles_the_panel` (`assistant/ui_tests.rs:160`).
-* **Reserved-key rule.** Egui matches `Cmd+Shift+<key>` also for commands defined without Shift (extra Shift is ignored), so MIRA may not use the letters of existing Ctrl/Cmd commands: `A C F N O S V X Y Z` and `Space` (`GeneralSettings::RESERVED_ASSISTANT_KEYS`, `settings.rs:225`; `assistant_key_allowed`, `:227-229`). Valid keys are `A`-`Z` (upper case) or `Space` (`shortcut_input.rs:6-8`) minus that list, which leaves `B D E G H I J K L M P Q R T U W`. A rejected key shows `assistant.shortcut_reserved` and is not saved (`settings.rs:558-577`); a saved reserved key falls back to `M` when settings are normalised (`settings.rs:208-210`). Test: `assistant_shortcut_keys_cannot_collide_with_ctrl_shift_commands` (`assistant/ui_tests.rs:244`).
+* **View menu.** `assistant_view_menu_item` adds an item labelled "Build with MIRA" with the `assistant` icon and the formatted shortcut text, hover text `assistant.menu_help`; clicking toggles the panel (`assistant/window.rs:175-187`). It is inserted after the separator at the end of the View menu, before the Sections submenu (`sidebar.rs:4913`).
+* **Shortcut.** Ctrl+Shift+<key> (Cmd+Shift on macOS), default `M` (`GeneralSettings::assistant_key`, `settings.rs:162,187`; `assistant_shortcut`, `assistant/window.rs:159-162`). Handled by `assistant_toggle_shortcut` (`:165-172`) at `app.rs:2175`, after the "project blocked / screenshot open" guard and before the busy check, so it works while MIRA is busy.
+* **Remapping.** Settings → Shortcuts has a row (`settings.rs:581-608`) using the shared `shortcut_input`. It is listed in the shortcuts help (`shortcuts.rs:94-97,286`). Test: `shortcut_is_cmd_shift_m_by_default_and_toggles_the_panel` (`assistant/ui_tests.rs:160`).
+* **Reserved-key rule.** Egui matches `Cmd+Shift+<key>` also for commands defined without Shift (extra Shift is ignored), so MIRA may not use the letters of existing Ctrl/Cmd commands: `A C F N O S V X Y Z` and `Space` (`GeneralSettings::RESERVED_ASSISTANT_KEYS`, `settings.rs:238`; `assistant_key_allowed`, `:227-229`). Valid keys are `A`-`Z` (upper case) or `Space` (`shortcut_input.rs:6-8`) minus that list, which leaves `B D E G H I J K L M P Q R T U W`. A rejected key shows `assistant.shortcut_reserved` and is not saved (`settings.rs:585-604`); a saved reserved key falls back to `M` when settings are normalised (`settings.rs:221-223`). Test: `assistant_shortcut_keys_cannot_collide_with_ctrl_shift_commands` (`assistant/ui_tests.rs:244`).
 
 ## 11. Icons
 
@@ -286,12 +286,12 @@ All user-facing text uses `tr!` keys in `assets/i18n/en.json` (English only, per
 
 | Key | English text | Used at |
 |---|---|---|
-| `assistant.name` | Build with MIRA | `shortcuts.rs:286`, `sidebar.rs:4033`, `settings.rs:554` |
+| `assistant.name` | Build with MIRA | `shortcuts.rs:286`, `sidebar.rs:4033`, `settings.rs:581` |
 | `assistant.default_summary` | Done. | `assistant/turn.rs:304` |
-| `assistant.history_label` | MIRA: {summary} | `assistant/mod.rs:504` |
-| `assistant.history_stopped` | MIRA (stopped) | `assistant/mod.rs:501` |
+| `assistant.history_label` | MIRA: {summary} | `assistant/mod.rs:474` |
+| `assistant.history_stopped` | MIRA (stopped) | `assistant/mod.rs:471` |
 | `assistant.error.invalid_server_address` | The assistant server address must use https, or http on localhost. | `assistant/client.rs:55`, `assistant/panel.rs:458` |
-| `assistant.error.invalid_api_key` | Invalid API key | `assistant/client.rs:56`, `assistant/mod.rs:205` |
+| `assistant.error.invalid_api_key` | Invalid API key | `assistant/client.rs:56`, `assistant/mod.rs:167` |
 | `assistant.error.tools_unsupported` | This model doesn't support tool calls. Pick another model. | `assistant/client.rs:57` |
 | `assistant.error.network` | Cannot reach the assistant server: {e} | `assistant/client.rs:58` |
 | `assistant.error.cannot_reach_server` | Cannot reach the assistant server | `assistant/client.rs:341` |
@@ -299,37 +299,37 @@ All user-facing text uses `tr!` keys in `assets/i18n/en.json` (English only, per
 | `assistant.error.bad_response` | Unexpected response from the assistant server: {e} | `assistant/client.rs:62` |
 | `assistant.error.no_model_list` | The server did not return a model list | `assistant/client.rs:211` |
 | `assistant.error.no_choices` | The server returned no answer | `assistant/client.rs:226` |
-| `assistant.error.interrupted` | The request was interrupted | `assistant/turn.rs:207`, `assistant/mod.rs:239` |
+| `assistant.error.interrupted` | The request was interrupted | `assistant/turn.rs:207`, `assistant/mod.rs:201` |
 | `assistant.error.round_limit` | MIRA stopped after {count} steps without finishing. Ask for the remaining work in a new message. | `assistant/turn.rs:276` |
-| `assistant.error.busy` | MIRA is still working on the previous request | `assistant/mod.rs:310` |
-| `assistant.error.rolled_back` | MIRA's changes were rolled back because you no longer have edit access to this shared project. | `assistant/mod.rs:512` |
+| `assistant.error.busy` | MIRA is still working on the previous request | `assistant/mod.rs:272` |
+| `assistant.error.rolled_back` | MIRA's changes were rolled back because you no longer have edit access to this shared project. | `assistant/mod.rs:482` |
 | `assistant.error.shared_changed` | The shared project changed; MIRA stopped | `sharing.rs:376` |
-| `assistant.error.empty_prompt` | Type what you want to build or change | `assistant/mod.rs:313` |
-| `assistant.error.not_connected` | Connect to the assistant server with an API key first | `assistant/mod.rs:318` |
-| `assistant.error.no_model` | Choose a model first | `assistant/mod.rs:320` |
+| `assistant.error.empty_prompt` | Type what you want to build or change | `assistant/mod.rs:275` |
+| `assistant.error.not_connected` | Connect to the assistant server with an API key first | `assistant/mod.rs:280` |
+| `assistant.error.no_model` | Choose a model first | `assistant/mod.rs:282` |
 | `assistant.error.no_browser` | No browser is available | `assistant/credentials.rs:79` |
 | `assistant.error.storage_unavailable` | Browser storage is unavailable | `assistant/credentials.rs:81`, `assistant/credentials.rs:82` |
 | `assistant.error.cannot_save_key` | Cannot save the API key in this browser | `assistant/credentials.rs:95`, `assistant/credentials.rs:101` |
-| `assistant.error.cannot_save_key_detail` | Connected, but the API key could not be saved on this device: {e} | `assistant/mod.rs:269` |
+| `assistant.error.cannot_save_key_detail` | Connected, but the API key could not be saved on this device: {e} | `assistant/mod.rs:231` |
 | `assistant.advanced` | Advanced | `assistant/panel.rs:444` |
 | `assistant.api_key` | API key | `assistant/panel.rs:429` |
 | `assistant.api_key_hint` | Paste your API key | `assistant/panel.rs:433` |
 | `assistant.ask_about_this` | Ask MIRA about this | `context_menu.rs:416` |
-| `assistant.banner` | MIRA is editing… | `assistant/panel.rs:1014` |
+| `assistant.banner` | MIRA is editing… | `assistant/panel.rs:1016` |
 | `assistant.base_url` | Server address | `assistant/panel.rs:448` |
 | `assistant.bring_to_front` | Bring to front | `assistant/window.rs:96` |
-| `assistant.busy_blocked` | MIRA is editing the model. Wait for it to finish or press Stop. | `app.rs:764`, `app.rs:815` |
-| `assistant.card.created` | Created | `assistant/panel.rs:923` |
-| `assistant.card.erased` | Erased | `assistant/panel.rs:962` |
-| `assistant.card.joint` | Joint | `assistant/panel.rs:925` |
-| `assistant.card.modified` | Modified | `assistant/panel.rs:924` |
-| `assistant.card.more` | +{count} more | `assistant/panel.rs:966` |
-| `assistant.card.row_help` | Select this {kind} and zoom to it | `assistant/panel.rs:947` |
-| `assistant.card.stopped` | stopped | `assistant/panel.rs:917` |
-| `assistant.card.summary` | Created {created} · Modified {modified} · Erased {erased} · Joints {joints} | `assistant/panel.rs:910` |
-| `assistant.card.undo_turn` | Undo turn | `assistant/panel.rs:971` |
-| `assistant.card.undo_turn_disabled` | Only the most recent change can be undone here. Use History for earlier ones. | `assistant/panel.rs:975` |
-| `assistant.card.undo_turn_help` | Undo everything MIRA changed in this turn | `assistant/panel.rs:973` |
+| `assistant.busy_blocked` | MIRA is editing the model. Wait for it to finish or press Stop. | `app.rs:783`, `app.rs:834` |
+| `assistant.card.created` | Created | `assistant/panel.rs:925` |
+| `assistant.card.erased` | Erased | `assistant/panel.rs:964` |
+| `assistant.card.joint` | Joint | `assistant/panel.rs:927` |
+| `assistant.card.modified` | Modified | `assistant/panel.rs:926` |
+| `assistant.card.more` | +{count} more | `assistant/panel.rs:968` |
+| `assistant.card.row_help` | Select this {kind} and zoom to it | `assistant/panel.rs:949` |
+| `assistant.card.stopped` | stopped | `assistant/panel.rs:919` |
+| `assistant.card.summary` | Created {created} · Modified {modified} · Erased {erased} · Joints {joints} | `assistant/panel.rs:912` |
+| `assistant.card.undo_turn` | Undo turn | `assistant/panel.rs:973` |
+| `assistant.card.undo_turn_disabled` | Only the most recent change can be undone here. Use History for earlier ones. | `assistant/panel.rs:977` |
+| `assistant.card.undo_turn_help` | Undo everything MIRA changed in this turn | `assistant/panel.rs:975` |
 | `assistant.change_endpoint` | Change endpoint… | `assistant/panel.rs:285` |
 | `assistant.choose_model` | Choose a model | `assistant/panel.rs:348` |
 | `assistant.connect` | Connect | `assistant/panel.rs:390`, `assistant/panel.rs:480` |
@@ -340,7 +340,7 @@ All user-facing text uses `tr!` keys in `assets/i18n/en.json` (English only, per
 | `assistant.detached_window` | Build with MIRA is open in a separate window. | `assistant/window.rs:89` |
 | `assistant.dont_show_again` | Don't show again | `assistant/panel.rs:751` |
 | `assistant.empty_transcript` | Describe what you want to build or change. Type @ to refer to a part of your design. | `assistant/panel.rs:537` |
-| `assistant.error_label` | Problem | `assistant/panel.rs:865` |
+| `assistant.error_label` | Problem | `assistant/panel.rs:866` |
 | `assistant.explainer` | Describe a change in plain language and MIRA builds it in your model. Each request is one undo step. Connect an API key to start. | `assistant/panel.rs:380` |
 | `assistant.forget_key` | Forget API key | `assistant/panel.rs:289` |
 | `assistant.get_a_key` | Get a key | `assistant/panel.rs:442` |
@@ -350,7 +350,7 @@ All user-facing text uses `tr!` keys in `assets/i18n/en.json` (English only, per
 | `assistant.kind_group` | group | `assistant/panel.rs:563` |
 | `assistant.latch` | Latch back into the sidebar | `assistant/panel.rs:269` |
 | `assistant.latch_back` | Latch back | `assistant/window.rs:93` |
-| `assistant.menu_help` | Show or hide the Build with MIRA assistant | `assistant/window.rs:178` |
+| `assistant.menu_help` | Show or hide the Build with MIRA assistant | `assistant/window.rs:182` |
 | `assistant.more` | More | `assistant/panel.rs:280` |
 | `assistant.new_chat` | New chat | `assistant/panel.rs:297` |
 | `assistant.no_models_match` | No models match your search | `assistant/panel.rs:367` |
@@ -365,13 +365,13 @@ All user-facing text uses `tr!` keys in `assets/i18n/en.json` (English only, per
 | `assistant.selection_chip_help` | Your current selection is sent with the request | `assistant/panel.rs:611` |
 | `assistant.send` | Send | `assistant/panel.rs:781` |
 | `assistant.send_help` | Send (Enter). Shift+Enter adds a new line. | `assistant/panel.rs:782` |
-| `assistant.shortcut_label` | {name} ({modifier} + key) | `settings.rs:562` |
-| `assistant.shortcut_reserved` | {key} is already used by another Ctrl/Cmd+Shift shortcut. Choose a different key. | `settings.rs:564` |
-| `assistant.stop` | Stop | `assistant/panel.rs:767`, `assistant/panel.rs:1015` |
+| `assistant.shortcut_label` | {name} ({modifier} + key) | `settings.rs:589` |
+| `assistant.shortcut_reserved` | {key} is already used by another Ctrl/Cmd+Shift shortcut. Choose a different key. | `settings.rs:591` |
+| `assistant.stop` | Stop | `assistant/panel.rs:767`, `assistant/panel.rs:1017` |
 | `assistant.unlatch` | Open in a separate window | `assistant/panel.rs:268` |
 | `assistant.use_model` | Use "{model}" | `assistant/panel.rs:342` |
 | `assistant.working` | Working… {seconds} s | `assistant/panel.rs:772` |
-| `assistant.you` | You | `assistant/panel.rs:863` |
+| `assistant.you` | You | `assistant/panel.rs:864` |
 
 Notes: `assistant.error.cannot_save_key` / `assistant.error.no_browser` / `assistant.error.storage_unavailable` are used only in the wasm build of `credentials.rs`. Templates use named placeholders such as `{host}`, `{count}`, `{e}`.
 
@@ -380,7 +380,7 @@ Notes: `assistant.error.cannot_save_key` / `assistant.error.no_browser` / `assis
 Fixed in the commit "Fix issues found while documenting MIRA": Shift+Enter submitting, the lost Undo turn after a no-change turn, a typed model being replaced on reload, Bring to front on the web, and erased rows missing from the "+N more" count. Still open or unverified:
 
 1. **Why drag-in works only when docked.** The code does not check the host; the cause is presumed to be egui's drag payload being per window. Not verified, and the web floating window was not tried.
-2. **Esc in the detached window.** The Esc-to-stop handler is in the root window's keyboard handler (`app.rs:2161`). The user guide says Esc stops a request ([../assistant.md](../assistant.md)); I did not verify it works while the detached window has focus. The guide also says typing in the detached window never triggers editor shortcuts; the mechanism (separate viewport input) is assumed, not asserted in code.
+2. **Esc in the detached window.** The Esc-to-stop handler is in the root window's keyboard handler (`app.rs:2180`). The user guide says Esc stops a request ([../assistant.md](../assistant.md)); I did not verify it works while the detached window has focus. The guide also says typing in the detached window never triggers editor shortcuts; the mechanism (separate viewport input) is assumed, not asserted in code.
 3. **Privacy notice wording** says "names and dimensions" while the summary also carries positions, tags, joints and materials.
 4. **Native window on a real second monitor** was never exercised by a human or a test; only the pure functions are tested. See [roadmap.md](roadmap.md).
 5. **Keys rendered by the OS** (key chord text, window titles) were not verified on Windows or Linux.
