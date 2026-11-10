@@ -20,6 +20,9 @@ const DEAD_ZONE: f64 = 0.04;
 const ORBIT_RATE: f64 = 450.;
 const PAN_RATE: f64 = 1.;
 const ZOOM_RATE: f64 = 750.;
+/// Seconds after the cap comes to rest during which wheel input is still
+/// treated as the operating system's scroll emulation of the cap.
+const WHEEL_GRACE: f64 = 0.3;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -252,6 +255,8 @@ pub(super) struct SpaceMouse {
     /// Orbit pivot locked for one continuous push of the cap.
     pub pivot: Option<DVec3>,
     pub last_time: Option<f64>,
+    /// Input time until which wheel and zoom events are discarded.
+    wheel_quiet_until: f64,
 }
 
 impl SpaceMouse {
@@ -301,6 +306,24 @@ impl SpaceMouse {
             || "Select Connect 3D Mouse to grant access to your device.".to_owned(),
             browser::Browser::status,
         )
+    }
+
+    /// Without 3DxWare, macOS also turns cap pushes into scroll events, which
+    /// the viewport would apply as wheel zoom on top of the cap's own motion.
+    /// Discard wheel and zoom input while the cap is deflected and briefly
+    /// after it is released.
+    pub fn filter_input(&mut self, raw: &mut egui::RawInput) {
+        let Some(now) = raw.time else {
+            return;
+        };
+        if !self.lock().axes.idle() {
+            self.wheel_quiet_until = now + WHEEL_GRACE;
+        }
+        if now < self.wheel_quiet_until {
+            raw.events.retain(|event| {
+                !matches!(event, egui::Event::MouseWheel { .. } | egui::Event::Zoom(_))
+            });
+        }
     }
 
     /// The current deflection and the buttons pressed since the last call.
@@ -908,6 +931,33 @@ mod tests {
             assert_eq!(normalize_axis(-raw), -value);
             previous = value;
         }
+    }
+
+    #[test]
+    fn wheel_input_is_discarded_while_the_cap_moves_and_briefly_after() {
+        let wheel = || egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0., -40.),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let frame = |space_mouse: &mut SpaceMouse, time: f64| {
+            let mut raw = egui::RawInput {
+                time: Some(time),
+                events: vec![wheel(), egui::Event::Zoom(0.9), egui::Event::Text("a".into())],
+                ..Default::default()
+            };
+            space_mouse.filter_input(&mut raw);
+            raw.events.len()
+        };
+        let mut space_mouse = SpaceMouse::default();
+        assert_eq!(frame(&mut space_mouse, 1.), 3, "an idle cap keeps mouse wheel input");
+        space_mouse.inject(Axes { rotation: DVec3::X * 0.5, ..Default::default() }, 0);
+        assert_eq!(frame(&mut space_mouse, 2.), 1);
+        space_mouse.inject(Axes::default(), 0);
+        assert_eq!(frame(&mut space_mouse, 2. + WHEEL_GRACE / 2.), 1);
+        assert_eq!(frame(&mut space_mouse, 2. + WHEEL_GRACE * 2.), 3);
     }
 
     const VIEWPORT: DVec2 = DVec2::new(1200., 800.);

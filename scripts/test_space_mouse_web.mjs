@@ -287,7 +287,14 @@ test('exclusive-access failures permit retry and another granted device can open
     const first = new Device({ openError: new DOMException('busy', 'NetworkError') });
     const second = new Device({ productName: 'SpaceMouse Pro' });
     const f = await ready(t, [first]);
-    assert.match(f.connection.status, /Close other apps/);
+    assert.match(f.connection.status, /Quit other apps or drivers/);
+    assert.equal(f.connection.canConnect, true);
+    // Chrome reports an OS-level open failure as NotAllowedError.
+    first.openError = new DOMException('Failed to open the device.', 'NotAllowedError');
+    f.hid.selection = [first];
+    f.connection.connect();
+    await settle();
+    assert.match(f.connection.status, /Quit other apps or drivers/);
     assert.equal(f.connection.canConnect, true);
     f.hid.selection = [first, second];
     f.connection.connect();

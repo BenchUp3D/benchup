@@ -6387,6 +6387,10 @@ impl BenchUpApp {
     }
 }
 impl eframe::App for BenchUpApp {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.space_mouse.filter_input(raw_input);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.ui_frame=Some(ctx.cumulative_frame_nr());
