@@ -8,6 +8,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 mod resident;
 #[path = "scale_handles.rs"]
 mod scale_handles;
+#[path = "scene_buffers.rs"]
+mod scene_buffers;
+use scene_buffers::GpuBuffers;
 pub(crate) use scale_handles::{Cache as ScaleHandleCache, paint as paint_scale_handles};
 pub(crate) use resident::{edited_geometry as geometry_changes, supported as resident_supported};
 
@@ -281,11 +284,6 @@ impl SceneCache {
 
 type BufferPool = Arc<Mutex<Vec<MeshBuffers>>>;
 type GpuBufferPool = Arc<Mutex<Vec<GpuBuffers>>>;
-
-struct GpuBuffers {
-    vertices: wgpu::Buffer,
-    indices: wgpu::Buffer,
-}
 
 struct MeshBuffers {
     vertices: Vec<Vertex>,
@@ -3417,49 +3415,8 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
         // calls precede all paint calls, so a shared buffer would render only
         // the last camera in every pane. Pool allocations between frames.
         self.gpu_buffers.get_or_init(|| {
-            let vertex_bytes = (self.vertices.len() * std::mem::size_of::<Vertex>()) as u64;
-            let index_bytes = (self.indices.len() * std::mem::size_of::<u32>()) as u64;
             let cached = self.gpu_pool.lock().ok().and_then(|mut pool| pool.pop());
-            let create = |size: u64, usage, label| {
-                device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(label),
-                    size: size.max(4096).next_power_of_two(),
-                    usage,
-                    mapped_at_creation: false,
-                })
-            };
-            let (vertices, indices) = if let Some(cached) = cached {
-                (Some(cached.vertices), Some(cached.indices))
-            } else {
-                (None, None)
-            };
-            let buffers = GpuBuffers {
-                vertices: vertices
-                    .filter(|buffer| buffer.size() >= vertex_bytes)
-                    .unwrap_or_else(|| {
-                        create(
-                            vertex_bytes,
-                            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                            "BenchUp vertices",
-                        )
-                    }),
-                indices: indices
-                    .filter(|buffer| buffer.size() >= index_bytes)
-                    .unwrap_or_else(|| {
-                        create(
-                            index_bytes,
-                            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-                            "BenchUp indices",
-                        )
-                    }),
-            };
-            if !self.vertices.is_empty() {
-                queue.write_buffer(&buffers.vertices, 0, bytemuck::cast_slice(&self.vertices));
-            }
-            if !self.indices.is_empty() {
-                queue.write_buffer(&buffers.indices, 0, bytemuck::cast_slice(&self.indices));
-            }
-            buffers
+            GpuBuffers::upload(device, queue, &self.vertices, &self.indices, cached)
         });
         if self.antialiasing && !self.shadow_range.is_empty() {
             // Render once per retained scene. Each pane owns its resolve texture,
@@ -3524,14 +3481,12 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
                         ..Default::default()
                     });
                     let buffers = self.gpu_buffers.get().unwrap();
-                    pass.set_vertex_buffer(0, buffers.vertices.slice(..));
-                    pass.set_index_buffer(buffers.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.set_pipeline(&r.mask_base);
                     for range in &self.triangle_ranges {
-                        pass.draw_indexed(range.clone(), 0, 0..1);
+                        buffers.draw(&mut pass, range.clone());
                     }
                     pass.set_pipeline(&r.mask_shadow);
-                    pass.draw_indexed(self.shadow_range.clone(), 0, 0..1);
+                    buffers.draw(&mut pass, self.shadow_range.clone());
                 }
                 let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
                 let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -3585,13 +3540,11 @@ impl SceneCallback {
         let Some(buffers) = self.gpu_buffers.get() else {
             return;
         };
-        pass.set_vertex_buffer(0, buffers.vertices.slice(..));
-        pass.set_index_buffer(buffers.indices.slice(..), wgpu::IndexFormat::Uint32);
         // Populate depth with faces first, then test edges against that stable
         // surface depth. Grid/overlay depths keep their existing semantics.
         pass.set_pipeline(pipelines[0]);
         for range in &self.triangle_ranges {
-            pass.draw_indexed(range.clone(), 0, 0..1);
+            buffers.draw(pass, range.clone());
         }
         // Resolve edge-to-edge occlusion before blending any colors. Otherwise
         // later strokes (including wide selection strokes) overwrite nearer
@@ -3601,12 +3554,12 @@ impl SceneCallback {
             let mut start = 0;
             for range in &self.triangle_ranges {
                 if start < range.start {
-                    pass.draw_indexed(start..range.start, 0, 0..1);
+                    buffers.draw(pass, start..range.start);
                 }
                 start = range.end;
             }
             if start < self.shadow_range.start {
-                pass.draw_indexed(start..self.shadow_range.start, 0, 0..1);
+                buffers.draw(pass, start..self.shadow_range.start);
             }
         }
     }
@@ -5951,11 +5904,11 @@ mod tests {
             &mut encoder,
             &mut renderer.callback_resources,
         );
-        let original = first.gpu_buffers.get().unwrap().vertices.clone();
-        assert_ne!(original, second.gpu_buffers.get().unwrap().vertices);
+        let original = first.gpu_buffers.get().unwrap().chunks[0].vertices.clone();
+        assert_ne!(original, second.gpu_buffers.get().unwrap().chunks[0].vertices);
         assert_ne!(
-            first.gpu_buffers.get().unwrap().indices,
-            second.gpu_buffers.get().unwrap().indices
+            first.gpu_buffers.get().unwrap().chunks[0].indices,
+            second.gpu_buffers.get().unwrap().chunks[0].indices
         );
         assert!(gpu_pool.lock().unwrap().is_empty());
         drop(first);
@@ -5968,10 +5921,10 @@ mod tests {
             &mut encoder,
             &mut renderer.callback_resources,
         );
-        assert_eq!(original, third.gpu_buffers.get().unwrap().vertices);
+        assert_eq!(original, third.gpu_buffers.get().unwrap().chunks[0].vertices);
         assert_ne!(
-            third.gpu_buffers.get().unwrap().vertices,
-            second.gpu_buffers.get().unwrap().vertices
+            third.gpu_buffers.get().unwrap().chunks[0].vertices,
+            second.gpu_buffers.get().unwrap().chunks[0].vertices
         );
     }
 
