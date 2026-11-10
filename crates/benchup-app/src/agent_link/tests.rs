@@ -929,3 +929,126 @@ fn client_names_drop_invisible_and_bidi_characters() {
     assert_eq!(clean_client("é日本 ok"), "é日本 ok");
     assert_eq!(clean_client(&"y".repeat(100)).chars().count(), MAX_CLIENT_CHARS);
 }
+
+// ------------------------------------------------------------ end to end
+// The real app side (real socket, real handshake) against the real
+// `benchup_mcp::live::Bridge`, driven through the MCP protocol. Loopback only.
+
+const E2E_TOKEN: &str = "e2e-0123456789-abcdef-token";
+
+fn start_bridge(token: &str) -> benchup_mcp::live::Bridge {
+    let mut config = benchup_mcp::live::LiveConfig::new(token);
+    config.port = 0;
+    config.call_timeout = std::time::Duration::from_secs(8);
+    benchup_mcp::live::Bridge::start(config).unwrap()
+}
+fn real_app(port: u16, token: &str) -> BenchUpApp {
+    let mut app = BenchUpApp::with_document(benchup_core::Document::default(), None, true);
+    app.agent_link.set_token_for_test(token);
+    app.general_settings.agent_link = Preferences { enabled: true, port };
+    app
+}
+/// Pump the app until `done`, for at most 10 s.
+fn pump_until(app: &mut BenchUpApp, ctx: &egui::Context, mut done: impl FnMut(&mut BenchUpApp) -> bool) {
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(10) {
+        app.poll_agent_link(ctx);
+        if done(app) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("timed out; status {:?}", app.agent_link.status);
+}
+/// An MCP session on the bridge that makes one `create_board` call.
+fn mcp_create_board(mut bridge: benchup_mcp::live::Bridge) -> std::thread::JoinHandle<Vec<Value>> {
+    std::thread::spawn(move || {
+        let input = format!(
+            "{}\n{}\n",
+            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"clientInfo": {"name": "e2e-agent"}}}),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "create_board",
+                "arguments": {"name": "E2E", "origin_mm": [0, 0, 0], "size_mm": [100, 100, 100]}}}),
+        );
+        let mut out = Vec::new();
+        benchup_mcp::serve(std::io::Cursor::new(input.into_bytes()), &mut out, &mut bridge).unwrap();
+        String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+    })
+}
+fn assert_board_created(replies: &[Value], app: &mut BenchUpApp, ctx: &egui::Context) {
+    let reply = replies.iter().find(|r| r["id"] == 2).expect("a reply to the call");
+    assert_eq!(reply["result"]["isError"], false, "{reply}");
+    assert!(app.doc.model.objects.values().any(|o| o.name == "E2E"));
+    let agent_steps: Vec<_> = labels(app).into_iter().filter(|l| l.starts_with("Agent:")).collect();
+    assert_eq!(agent_steps.len(), 1, "{:?}", labels(app));
+    assert_eq!(labels(app).len(), 1);
+    app.undo(ctx, false);
+    assert!(app.doc.model.objects.is_empty(), "undo restores the project");
+}
+
+#[test]
+fn end_to_end_an_mcp_call_edits_the_open_project_through_the_real_bridge() {
+    in_temp_data_dir("end_to_end_an_mcp_call_edits_the_open_project_through_the_real_bridge", || {
+        let ctx = egui::Context::default();
+        let bridge = start_bridge(E2E_TOKEN);
+        let mut app = real_app(bridge.port(), E2E_TOKEN);
+        pump_until(&mut app, &ctx, |app| app.agent_link.connected());
+        let session = mcp_create_board(bridge);
+        pump_until(&mut app, &ctx, |_| session.is_finished());
+        assert_board_created(&session.join().unwrap(), &mut app, &ctx);
+    });
+}
+
+#[cfg(feature = "assistant")]
+#[test]
+fn end_to_end_a_call_waits_for_a_running_mira_turn() {
+    in_temp_data_dir("end_to_end_a_call_waits_for_a_running_mira_turn", || {
+        let ctx = egui::Context::default();
+        let bridge = start_bridge(E2E_TOKEN);
+        let mut app = real_app(bridge.port(), E2E_TOKEN);
+        pump_until(&mut app, &ctx, |app| app.agent_link.connected());
+        let fake = FakeTransport::default();
+        app.assistant = crate::app::assistant::Assistant::with_transport(Box::new(fake.clone()));
+        app.assistant.key = Some("k".into());
+        app.assistant.settings.model = "m".into();
+        fake.push_text("Done.");
+        app.assistant_send(&ctx, Prompt { prompt: "hi".into(), references: Default::default() }).unwrap();
+        assert!(app.assistant.busy());
+        let session = mcp_create_board(bridge);
+        pump_until(&mut app, &ctx, |app| app.agent_link.queued() == 1);
+        assert!(!session.is_finished() && app.doc.model.objects.is_empty(), "waits for the turn");
+        pump_until(&mut app, &ctx, |app| {
+            app.poll_assistant(&ctx);
+            session.is_finished()
+        });
+        assert!(!app.assistant.busy());
+        let replies = session.join().unwrap();
+        let reply = replies.iter().find(|r| r["id"] == 2).unwrap();
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+        assert!(app.doc.model.objects.values().any(|o| o.name == "E2E"));
+        assert_eq!(labels(&app).iter().filter(|l| l.starts_with("Agent:")).count(), 1);
+    });
+}
+
+#[test]
+fn end_to_end_a_wrong_token_is_refused_and_nothing_is_edited() {
+    in_temp_data_dir("end_to_end_a_wrong_token_is_refused_and_nothing_is_edited", || {
+        let ctx = egui::Context::default();
+        let bridge = start_bridge(E2E_TOKEN);
+        let mut app = real_app(bridge.port(), "a-different-token-0123456789");
+        pump_until(&mut app, &ctx, |app| matches!(app.agent_link.status, Status::Error(_)));
+        assert!(!app.agent_link.connected());
+        assert!(matches!(&app.agent_link.status, Status::Error(m) if m.contains("refused") && m.contains("token")), "{:?}", app.agent_link.status);
+        let session = mcp_create_board(bridge);
+        let start = std::time::Instant::now();
+        while !session.is_finished() && start.elapsed() < std::time::Duration::from_secs(10) {
+            app.poll_agent_link(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(session.is_finished());
+        let replies = session.join().unwrap();
+        let reply = replies.iter().find(|r| r["id"] == 2).unwrap();
+        assert_eq!(reply["result"]["isError"], true, "{reply}");
+        assert!(app.doc.model.objects.is_empty() && labels(&app).is_empty());
+        assert!(!app.agent_link.connected());
+    });
+}
