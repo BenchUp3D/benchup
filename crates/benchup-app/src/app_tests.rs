@@ -1111,6 +1111,69 @@ fn precision_commit_uses_current_pointer_even_when_it_moved_in_the_same_frame() 
 }
 
 #[test]
+fn mouse_inversions_apply_regardless_of_the_selected_settings_device() {
+    for kind in [
+        settings::NavigationType::MouseTrackpad,
+        settings::NavigationType::SpaceMouse,
+    ] {
+        for inverted in [false, true] {
+            let mut h = Harness::new();
+            h.app.general_settings.navigation_type = kind;
+            h.app.general_settings.orbit_speed = 1.7;
+            h.app.general_settings.pan_speed = 0.5;
+            h.app.general_settings.invert_orbit = inverted;
+            h.app.general_settings.invert_pan = inverted;
+            h.app.general_settings.reverse_zoom = inverted;
+            h.app.general_settings.space_mouse.invert_orbit = !inverted;
+            h.app.general_settings.space_mouse.invert_pan = !inverted;
+            h.app.general_settings.space_mouse.invert_zoom = !inverted;
+            let direction = if inverted { -1. } else { 1. };
+            let start = h.app.viewport.center();
+            let delta = egui::vec2(12., 8.);
+            h.pointer(start, egui::PointerButton::Middle, true, false);
+            let mut expected = h.app.doc.camera.clone();
+            expected.orbit_around(dv(delta) * (1.7 * direction), DVec3::ZERO);
+            h.frame(
+                vec![egui::Event::PointerMoved(start + delta)],
+                egui::Modifiers::NONE,
+            );
+            assert_eq!(h.app.doc.camera, expected);
+            h.pointer(start + delta, egui::PointerButton::Middle, false, false);
+
+            h.pointer(start, egui::PointerButton::Middle, true, true);
+            let mut expected = h.app.doc.camera.clone();
+            expected.pan(
+                dv(delta) * (0.5 * direction),
+                h.app.viewport.height() as f64,
+            );
+            h.frame(
+                vec![egui::Event::PointerMoved(start + delta)],
+                egui::Modifiers::SHIFT,
+            );
+            assert_eq!(h.app.doc.camera, expected);
+            h.pointer(start + delta, egui::PointerButton::Middle, false, true);
+
+            let distance = h.app.doc.camera.distance;
+            h.frame(
+                vec![
+                    egui::Event::PointerMoved(start),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Unknown,
+                        delta: egui::vec2(0., 60.),
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                egui::Modifiers::NONE,
+            );
+            assert_ne!(h.app.doc.camera.distance, distance);
+            assert_eq!(h.app.doc.camera.distance > distance, inverted);
+        }
+    }
+}
+
+#[test]
 fn navigation_clears_hover_and_freezes_tool_inference_until_release() {
     for tool in [
         Tool::Select,
@@ -6590,3 +6653,52 @@ fn web_physical_control_keys_toggle_move_copy_and_allow_arrays() {
 
 #[path = "image_tool_tests.rs"]
 mod image_tool_tests;
+
+#[test]
+fn space_mouse_navigates_only_when_the_viewport_accepts_input() {
+    let mut h = Harness::new();
+    h.app.general_settings.space_mouse.enabled = false;
+    h.frame(vec![], egui::Modifiers::NONE);
+    let tilt = space_mouse::Axes { rotation: DVec3::new(0.5, 0., 0.5), ..Default::default() };
+
+    // Disabled, inside a modal, or walking: the cap never moves the camera.
+    let before = h.app.doc.camera.clone();
+    h.app.space_mouse.inject(tilt, 0);
+    h.frame(vec![], egui::Modifiers::NONE);
+    assert_eq!(h.app.doc.camera, before);
+    h.app.general_settings.space_mouse.enabled = true;
+    h.app.space_mouse.inject(tilt, 0);
+    h.app.settings_open = true;
+    h.frame(vec![], egui::Modifiers::NONE);
+    assert_eq!(h.app.doc.camera, before);
+    h.app.settings_open = false;
+
+    h.app.space_mouse.inject(tilt, 0);
+    h.frame(vec![], egui::Modifiers::NONE);
+    let moved = h.app.doc.camera.clone();
+    assert!(moved.pitch > before.pitch);
+    assert!(moved.yaw > before.yaw);
+    assert!(h.app.doc.history.is_empty());
+
+    // Releasing the cap stops navigation and unlocks the pivot.
+    h.app.space_mouse.inject(space_mouse::Axes::default(), 0);
+    h.frame(vec![], egui::Modifiers::NONE);
+    assert_eq!(h.app.doc.camera, moved);
+    assert!(h.app.space_mouse.pivot.is_none());
+}
+
+#[test]
+fn space_mouse_fit_button_frames_the_model() {
+    let mut h = Harness::new();
+    h.app.general_settings.space_mouse.enabled = false;
+    properties_outline(&mut h.app.doc.model, &[
+        DVec3::new(-10., -10., 0.), DVec3::new(10., -10., 0.),
+        DVec3::new(10., 10., 0.), DVec3::new(-10., 10., 0.),
+    ]);
+    h.frame(vec![], egui::Modifiers::NONE);
+    h.app.doc.camera.target = DVec3::new(500., 0., 0.);
+    h.app.general_settings.space_mouse.enabled = true;
+    h.app.space_mouse.inject(space_mouse::Axes::default(), 1 << 1);
+    h.frame(vec![], egui::Modifiers::NONE);
+    assert!(h.app.doc.camera.target.abs_diff_eq(DVec3::ZERO, 1e-6));
+}

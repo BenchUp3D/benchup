@@ -34,6 +34,15 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
 
+      - name: Install Node.js for browser input tests
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Test browser 3D Mouse connection
+        run: node --test scripts/test_space_mouse_web.mjs
+
       - name: Configure GitHub Pages
         id: pages
         uses: actions/configure-pages@v5

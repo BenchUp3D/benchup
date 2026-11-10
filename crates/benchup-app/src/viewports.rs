@@ -713,7 +713,7 @@ impl BenchUpApp {
                         self.activate_viewport(owner);
                         self.viewport = *rect;
                         // Match Shift+Orbit's direction, sensitivity and viewport scale.
-                        self.doc.camera.pan(dv(pan) * self.general_settings.pan_speed, rect.height() as f64);
+                        self.doc.camera.pan(dv(pan) * self.general_settings.mouse_pan_speed(), rect.height() as f64);
                         self.changed(ctx);
                     }
                 }
@@ -723,7 +723,7 @@ impl BenchUpApp {
                     if let Some((_, rect, _)) = views.iter().find(|(id, _, _)| *id == owner) {
                         self.activate_viewport(owner);
                         self.viewport = *rect;
-                        self.doc.camera.zoom(scroll * self.general_settings.zoom_speed,
+                        self.doc.camera.zoom(scroll * self.general_settings.mouse_zoom_speed(),
                             dv(anchor - rect.min), dv(rect.size()));
                         self.changed(ctx);
                     }
