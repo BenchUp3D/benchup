@@ -1,6 +1,8 @@
 //! 3Dconnexion SpaceMouse navigation in object mode: pushing the cap moves the
-//! model. Desktop builds read the device over USB HID on a background thread;
-//! the browser build keeps the settings but never detects a device.
+//! model. Desktop builds read the device on a background thread: through the
+//! 3DxWare driver on macOS and spacenavd on Linux when they are running, and
+//! over USB HID otherwise. The browser build keeps the settings but never
+//! detects a device.
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 use super::*;
 use std::sync::{Arc, Mutex};
@@ -104,6 +106,7 @@ impl Shared {
 impl Shared {
     /// Apply a 3DxWare device state message: axes are x, y, z, rx, ry, rz in
     /// the same orientation as HID reports.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn driver_state(&mut self, command: u16, axis: [i16; 6], buttons: u32) -> bool {
         match command {
             DRIVER_AXIS => {
@@ -124,8 +127,63 @@ impl Shared {
     }
 }
 
+impl Shared {
+    /// Apply a spacenavd protocol 0 event: a type (0 motion, 1 button press,
+    /// 2 button release) followed by x, y, z, rx, ry, rz or a button number.
+    /// spacenavd axes are x right, y up, z away from the user.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    fn spnav_event(&mut self, event: [i32; 8]) -> bool {
+        let button = |number: i32| {
+            u32::try_from(number).ok().and_then(|number| 1u32.checked_shl(number)).unwrap_or(0)
+        };
+        match event[0] {
+            0 => {
+                let limit = i32::from(i16::MAX);
+                let axis = |i: usize| normalize_axis(event[i].clamp(-limit, limit) as i16);
+                self.axes = Axes {
+                    translation: DVec3::new(axis(1), -axis(3), -axis(2)),
+                    rotation: DVec3::new(axis(4), -axis(6), -axis(5)),
+                };
+            }
+            1 => {
+                let bit = button(event[1]);
+                self.pressed |= bit & !self.buttons;
+                self.buttons |= bit;
+            }
+            2 => self.buttons &= !button(event[1]),
+            _ => return false,
+        }
+        true
+    }
+}
+
+fn is_3dconnexion(vendor: u32, product: u32) -> bool {
+    match vendor {
+        0x256f => true,
+        // Logitech-era 3Dconnexion devices; the rest of this vendor is mice and keyboards.
+        0x046d => (0xc603..=0xc640).contains(&product),
+        _ => false,
+    }
+}
+
+/// The 3Dconnexion device listed in the text of `/proc/bus/input/devices`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn input_device_name(devices: &str) -> Option<&'static str> {
+    devices.lines().filter(|line| line.starts_with("I:")).find_map(|line| {
+        let field = |key: &str| {
+            line.split_whitespace()
+                .find_map(|field| field.strip_prefix(key))
+                .and_then(|value| u32::from_str_radix(value, 16).ok())
+        };
+        let (vendor, product) = (field("Vendor=")?, field("Product=")?);
+        is_3dconnexion(vendor, product).then(|| product_name(product))
+    })
+}
+
 /// kConnexionCmdHandleButtons and kConnexionCmdHandleAxis.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const DRIVER_BUTTONS: u16 = 2;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const DRIVER_AXIS: u16 = 3;
 
 fn axis_triplet(data: &[u8]) -> DVec3 {
@@ -304,6 +362,9 @@ mod worker {
         stop: Arc<AtomicBool>,
         #[cfg(target_os = "macos")]
         driver: Option<driver::Client>,
+        /// spacenavd sends events to every client, focused or not.
+        #[cfg(target_os = "linux")]
+        focused: Arc<AtomicBool>,
     }
 
     impl Drop for Worker {
@@ -322,9 +383,15 @@ mod worker {
                 return Self { stop, driver: Some(driver) };
             }
             let flag = stop.clone();
+            #[cfg(target_os = "linux")]
+            let focused = Arc::new(AtomicBool::new(true));
+            #[cfg(target_os = "linux")]
+            let source = Source { focused: focused.clone() };
+            #[cfg(not(target_os = "linux"))]
+            let source = Source {};
             let spawned = std::thread::Builder::new()
                 .name("space-mouse".into())
-                .spawn(move || run(&ctx, &shared, &flag));
+                .spawn(move || run(&ctx, &shared, &flag, &source));
             if let Err(error) = spawned {
                 eprintln!("Could not start 3D mouse support: {error}");
             }
@@ -332,12 +399,16 @@ mod worker {
                 stop,
                 #[cfg(target_os = "macos")]
                 driver: None,
+                #[cfg(target_os = "linux")]
+                focused,
             }
         }
 
         /// Only the focused window receives driver events, like other 3D apps.
-        #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+        #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(unused_variables))]
         pub fn focus(&mut self, focused: bool) {
+            #[cfg(target_os = "linux")]
+            self.focused.store(focused, Ordering::Relaxed);
             #[cfg(target_os = "macos")]
             if let Some(driver) = &mut self.driver {
                 driver.focus(focused);
@@ -350,31 +421,43 @@ mod worker {
     }
 
     fn is_space_mouse(info: &hidapi::DeviceInfo) -> bool {
-        let vendor = match info.vendor_id() {
-            0x256f => true,
-            // Logitech-era 3Dconnexion devices; the rest of this vendor is mice and keyboards.
-            0x046d => (0xc603..=0xc640).contains(&info.product_id()),
-            _ => false,
-        };
         // Multi-axis controller collection; some backends cannot report usages.
-        vendor
+        super::is_3dconnexion(info.vendor_id().into(), info.product_id().into())
             && ((info.usage_page() == 0x01 && info.usage() == 0x08) || info.usage_page() == 0)
     }
 
-    fn run(ctx: &egui::Context, shared: &Mutex<Shared>, stop: &AtomicBool) {
+    /// What the reader thread needs besides the shared state.
+    struct Source {
+        #[cfg(target_os = "linux")]
+        focused: Arc<AtomicBool>,
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+    fn run(ctx: &egui::Context, shared: &Mutex<Shared>, stop: &AtomicBool, source: &Source) {
         let mut api = match hidapi::HidApi::new() {
-            Ok(api) => api,
+            Ok(api) => Some(api),
             Err(error) => {
-                eprintln!("3D mouse support is unavailable: {error}");
-                return;
+                eprintln!("3D mouse USB access is unavailable: {error}");
+                // spacenavd can still deliver events on Linux.
+                if !cfg!(target_os = "linux") {
+                    return;
+                }
+                None
             }
         };
         while !stop.load(Ordering::Relaxed) {
-            let found = api.refresh_devices().ok().and_then(|()| {
-                api.device_list().find(|info| is_space_mouse(info)).and_then(|info| {
-                    let name = info.product_string().unwrap_or("3D mouse").to_owned();
-                    info.open_device(&api).ok().map(|device| (device, name))
-                })
+            // spacenavd owns the device when it runs, and raw HID access
+            // usually needs extra permissions on Linux, so prefer the daemon.
+            #[cfg(target_os = "linux")]
+            if spacenavd(ctx, shared, stop, &source.focused) {
+                *lock(shared) = Shared::default();
+                ctx.request_repaint();
+            }
+            let found = api.as_mut().and_then(|api| {
+                api.refresh_devices().ok()?;
+                let info = api.device_list().find(|info| is_space_mouse(info))?;
+                let name = info.product_string().unwrap_or("3D mouse").to_owned();
+                info.open_device(api).ok().map(|device| (device, name))
             });
             if let Some((device, name)) = found {
                 lock(shared).device = Some(name);
@@ -390,6 +473,79 @@ mod worker {
                 waited += Duration::from_millis(100);
             }
         }
+    }
+
+    /// Read events from a running spacenavd until it goes away. Returns false
+    /// when the daemon is not running.
+    #[cfg(target_os = "linux")]
+    fn spacenavd(
+        ctx: &egui::Context,
+        shared: &Mutex<Shared>,
+        stop: &AtomicBool,
+        focused: &AtomicBool,
+    ) -> bool {
+        use std::io::{ErrorKind, Read};
+        let path = std::env::var_os("SPNAV_SOCKET").unwrap_or_else(|| "/var/run/spnav.sock".into());
+        let Ok(mut stream) = std::os::unix::net::UnixStream::connect(path) else {
+            return false;
+        };
+        if stream.set_read_timeout(Some(Duration::from_millis(100))).is_err() {
+            return false;
+        }
+        // Clients that send nothing stay on protocol 0: eight native ints per event.
+        let mut event = [0u8; 32];
+        let mut filled = 0;
+        let mut scanned: Option<std::time::Instant> = None;
+        while !stop.load(Ordering::Relaxed) {
+            // The daemon stays up without a device, so report what is plugged in.
+            if scanned.is_none_or(|time| time.elapsed() >= SCAN_INTERVAL) {
+                scanned = Some(std::time::Instant::now());
+                let devices = std::fs::read_to_string("/proc/bus/input/devices").unwrap_or_default();
+                let device = super::input_device_name(&devices).map(str::to_owned);
+                let mut shared = lock(shared);
+                if shared.device != device {
+                    if device.is_none() {
+                        *shared = Shared::default();
+                    }
+                    shared.device = device;
+                    ctx.request_repaint();
+                }
+            }
+            match stream.read(&mut event[filled..]) {
+                Ok(0) => break,
+                Ok(len) => {
+                    filled += len;
+                    if filled < event.len() {
+                        continue;
+                    }
+                    filled = 0;
+                    let mut values = [0i32; 8];
+                    for (value, bytes) in values.iter_mut().zip(event.chunks_exact(4)) {
+                        *value = i32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    }
+                    let mut shared = lock(shared);
+                    let changed = if focused.load(Ordering::Relaxed) {
+                        shared.spnav_event(values)
+                    } else {
+                        // Another app is using the device; stay still.
+                        let moving = !shared.axes.idle();
+                        shared.axes = super::Axes::default();
+                        shared.buttons = 0;
+                        moving
+                    };
+                    if changed {
+                        ctx.request_repaint();
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => break,
+            }
+        }
+        true
     }
 
     fn read(ctx: &egui::Context, shared: &Mutex<Shared>, stop: &AtomicBool, device: &hidapi::HidDevice) {
@@ -580,7 +736,6 @@ mod driver {
     }
 }
 
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn product_name(product: u32) -> &'static str {
     match product {
         0xc626 => "SpaceNavigator",
@@ -641,6 +796,39 @@ mod tests {
         assert_eq!(shared.pressed, FIT_BUTTON);
         assert!(!shared.driver_state(0, [350; 6], 0));
         assert_eq!(shared.axes.translation, DVec3::new(1., 0., -1.));
+    }
+
+    #[test]
+    fn spacenavd_events_use_device_axes_and_latch_buttons() {
+        let mut shared = Shared::default();
+        // spacenavd: x right, y up, z away from the user.
+        assert!(shared.spnav_event([0, 350, -350, 350, 0, 350, 0, 8]));
+        assert_eq!(shared.axes.translation, DVec3::new(1., -1., 1.));
+        assert_eq!(shared.axes.rotation, DVec3::new(0., 0., -1.));
+        assert!(shared.spnav_event([0, 0, 0, 0, i32::MIN, 0, i32::MAX, 8]));
+        assert_eq!(shared.axes.translation, DVec3::ZERO);
+        assert_eq!(shared.axes.rotation, DVec3::new(-1., -1., 0.));
+
+        assert!(shared.spnav_event([1, 1, 0, 0, 0, 0, 0, 0]));
+        assert_eq!(shared.buttons, FIT_BUTTON);
+        assert!(shared.spnav_event([2, 1, 0, 0, 0, 0, 0, 0]));
+        assert_eq!(shared.buttons, 0);
+        assert_eq!(shared.pressed, FIT_BUTTON);
+        assert!(shared.spnav_event([1, 99, 0, 0, 0, 0, 0, 0]));
+        assert!(shared.spnav_event([1, -1, 0, 0, 0, 0, 0, 0]));
+        assert_eq!(shared.buttons, 0);
+        assert!(!shared.spnav_event([7, 0, 0, 0, 0, 0, 0, 0]));
+    }
+
+    #[test]
+    fn finds_the_3dconnexion_device_among_input_devices() {
+        let devices = "I: Bus=0003 Vendor=046d Product=c52b Version=0111\n\
+            N: Name=\"Logitech USB Receiver\"\n\n\
+            I: Bus=0003 Vendor=256f Product=c635 Version=0111\n\
+            N: Name=\"3Dconnexion SpaceMouse Compact\"\n";
+        assert_eq!(input_device_name(devices), Some("SpaceMouse Compact"));
+        assert_eq!(input_device_name("I: Bus=0003 Vendor=046d Product=c52b Version=0111\n"), None);
+        assert_eq!(input_device_name(""), None);
     }
 
     #[test]
