@@ -3214,7 +3214,9 @@ impl BenchUpApp {
                 let scroll = sidebar::restored_scroll_area(
                     ui,
                     "sidebar_left",
-                    egui::ScrollArea::vertical().id_salt("tool_scroll"),
+                    egui::ScrollArea::vertical()
+                        .id_salt("tool_scroll")
+                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden),
                 )
                 .show(ui, |ui| {
                     // Reserve a shape behind every button, then resolve the final selection
