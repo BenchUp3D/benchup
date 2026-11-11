@@ -2,12 +2,13 @@
   {
     "version": "0.6.8",
     "date": "2026-11-11",
-    "title": "Simplified Chinese and responsive exports",
+    "title": "Angular dimensions, selection, and responsive exports",
     "sections": [
       {
         "title": "Language support",
         "changes": [
-          "Choose Simplified Chinese in Settings, with bundled Chinese fonts and translated controls, navigation, and modeling messages."
+          "Choose Simplified Chinese in Settings, with bundled Chinese fonts and translated controls, navigation, and modeling messages.",
+          "Use the supported browser or operating-system language automatically on first launch."
         ]
       },
       {
@@ -21,6 +22,22 @@
         "title": "Project menus",
         "changes": [
           "Keep the Recent Projects menu exclusive to desktop, where saved project paths can be reopened, and improve the layout of recent-project entries."
+        ]
+      },
+      {
+        "title": "Modeling and selection",
+        "changes": [
+          "Create angular dimensions to annotate angles in your model.",
+          "Select faces and connected geometry with repeated clicks.",
+          "Control snapping to directly hovered visible elements with a remembered setting.",
+          "Use the clearer Focus on Edited Group display option.",
+          "Improve Push/Pull face merging, drag origins, and snap-target selection."
+        ]
+      },
+      {
+        "title": "Release reliability",
+        "changes": [
+          "Improve Linux dependency installation with faster timeouts and an Ubuntu mirror fallback."
         ]
       }
     ]
@@ -417,7 +434,7 @@
       {
         "title": "Editor",
         "changes": [
-          "Browse release history offline from Help \u2192 Release notes, with new notes opening automatically once per release.",
+          "Browse release history offline from Help → Release notes, with new notes opening automatically once per release.",
           "Use the Edit menu for shared selection commands, and expand or collapse an object's descendants from the Outliner context menu.",
           "Identify Outliner entities with clearer icons and labels, and read keyboard shortcuts in a cleaner layout."
         ]
