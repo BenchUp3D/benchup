@@ -420,8 +420,8 @@ name = "benchup-app"
 version = "0.6.8"
 dependencies = [
  "benchup-core",
+ "benchup-io",
  "bytemuck",
- "cc",
  "directories",
  "eframe",
  "flate2",
@@ -458,6 +458,25 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "benchup-io"
+version = "0.6.8"
+dependencies = [
+ "benchup-core",
+ "benchup-skp",
+ "js-sys",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "benchup-skp"
+version = "0.6.8"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

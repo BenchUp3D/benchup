@@ -73,34 +73,17 @@ fn decode_model(json: &str, name: &str) -> Result<Model, String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_skp(bytes: &[u8]) -> Result<String, String> {
-    use std::ffi::{CStr, c_char};
-    unsafe extern "C" {
-        fn benchup_skp_parse(bytes: *const u8, len: usize, success: *mut i32) -> *mut c_char;
-        fn benchup_skp_free(value: *mut c_char);
-    }
-    let mut success = 0;
-    // The adapter catches C++ exceptions and returns one owned, NUL-terminated
-    // UTF-8 buffer. It borrows the input only for the duration of this call.
-    let value = unsafe { benchup_skp_parse(bytes.as_ptr(), bytes.len(), &mut success) };
-    if value.is_null() {
-        return Err(tr!("interchange.not_enough_memory_to_read_this_sketchup_file").into());
-    }
-    let text = unsafe { CStr::from_ptr(value) }
-        .to_string_lossy()
-        .into_owned();
-    unsafe {
-        benchup_skp_free(value);
-    }
-    if success == 1 {
-        Ok(text)
-    } else {
-        Err(skp_error_message(&text).into())
-    }
+    benchup_skp::parse(bytes).map_err(|error| match error {
+        benchup_skp::ParseError::OutOfMemory => {
+            tr!("interchange.not_enough_memory_to_read_this_sketchup_file").into()
+        }
+        benchup_skp::ParseError::Reader(message) => skp_error_message(&message).into(),
+    })
 }
 
 #[cfg(target_arch = "wasm32")]
 pub async fn import_skp_async(bytes: &[u8], name: &str) -> Result<Model, String> {
-    use eframe::wasm_bindgen::JsCast;
+    use wasm_bindgen::JsCast;
     if bytes.len() > MAX_SKP_BYTES {
         return Err(tr!("interchange.sketchup_import_is_limited_to_64_mib_per").into());
     }
@@ -109,7 +92,7 @@ pub async fn import_skp_async(bytes: &[u8], name: &str) -> Result<Model, String>
     let launch = js_sys::Function::new_with_args("source, bytes", include_str!("skp_worker.js"));
     let promise = launch
         .call2(
-            &eframe::wasm_bindgen::JsValue::NULL,
+            &wasm_bindgen::JsValue::NULL,
             &SKP_READER.into(),
             &js_sys::Uint8Array::from(bytes),
         )
@@ -125,7 +108,7 @@ pub async fn import_skp_async(bytes: &[u8], name: &str) -> Result<Model, String>
 }
 
 #[cfg(target_arch = "wasm32")]
-fn js_error(error: eframe::wasm_bindgen::JsValue) -> String {
+fn js_error(error: wasm_bindgen::JsValue) -> String {
     let message = js_sys::Reflect::get(&error, &"message".into())
         .ok()
         .and_then(|message| message.as_string())

@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/benchup-core", "crates/benchup-app"]
+members = [
+    "crates/benchup-core",
+    "crates/benchup-io",
+    "crates/benchup-skp",
+    "crates/benchup-app",
+]
 default-members = ["crates/benchup-app"]
 resolver = "2"
 
@@ -30,6 +35,14 @@ incremental = false
 
 [profile.dev.package.benchup-core]
 opt-level = 2
+
+# Desktop edits can reuse application codegen units without the WebAssembly
+# linker workaround above. Retain the same optimization and debug settings.
+[profile.dev-desktop]
+inherits = "dev"
+
+[profile.dev-desktop.package.benchup-app]
+incremental = true
 
 [profile.release]
 opt-level = 2

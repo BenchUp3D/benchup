@@ -53,16 +53,39 @@ Linux desktop builds use libudev through the `hidapi` dependency to discover Spa
 ## Run on desktop
 
 ```sh
-cargo run -p benchup-app
+cargo run -p benchup-app --profile dev-desktop
 ```
+
+The `dev-desktop` profile enables incremental application compilation for faster
+rebuilds after edits. It preserves the usual development optimizations, full debug
+symbols, debug assertions, and overflow checks. The executable is
+`target/dev-desktop/benchup-app` (`benchup-app.exe` on Windows).
+
+To rebuild and relaunch automatically after changes, install a
+[prebuilt Watchexec executable](https://github.com/watchexec/watchexec/releases)
+and put it on your `PATH`, then run from the repository root:
+
+```sh
+watchexec --restart --debounce 1s --shell none \
+  --watch crates --watch assets --watch Cargo.toml --watch Cargo.lock \
+  -- cargo run -p benchup-app --profile dev-desktop --locked
+```
+
+This watches all workspace crates (including native reader sources and shaders),
+embedded assets, and dependency manifests. Saves within one second are grouped
+into one restart. Build output stays in the terminal; after a compilation error,
+the watcher retries on the next edit. Stop it with Ctrl+C. Each restart terminates
+the current app process, so save model edits before changing source files; only
+persisted state survives. This command watches application inputs; restart it
+manually after changing `.env`, Cargo configuration, or the Rust toolchain.
 
 On Linux, register the application launcher and icons once after compiling:
 
 ```sh
-python3 scripts/install_linux_desktop.py
+python3 scripts/install_linux_desktop.py target/dev-desktop/benchup-app
 ```
 
-This installs into your user data directory (`$XDG_DATA_HOME`, or `~/.local/share`) without root access. GNOME on Wayland uses the application's ID and matching desktop entry to find its icon. Restart BenchUp after installing. The launcher points to `target/debug/benchup-app`, so later development compilations update the same executable. For a release installation, pass its path: `python3 scripts/install_linux_desktop.py target/release/benchup-app`. Keep that executable in place, or rerun the installer with its new path if you move it.
+This installs into your user data directory (`$XDG_DATA_HOME`, or `~/.local/share`) without root access. GNOME on Wayland uses the application's ID and matching desktop entry to find its icon. Restart BenchUp after installing. The launcher points to the executable you pass, so later compilations with the same profile update it. For a release installation, pass its path: `python3 scripts/install_linux_desktop.py target/release/benchup-app`. Keep that executable in place, or rerun the installer with its new path if you move it. Omitting the path still selects `target/debug/benchup-app` for the standard `dev` profile.
 
 ## Run in a browser
 
@@ -82,6 +105,17 @@ trunk serve
 Open <http://127.0.0.1:8080>. Keep the app on the same origin/port to restore the same saved model. No Node.js, JavaScript application framework, or backend is required. Trunk generates the JavaScript needed to load the Rust WebAssembly program.
 
 Development builds use light optimization for application code and stronger optimization for dependencies and the geometry core, on both desktop and WebAssembly. Debug symbols, debug assertions, and overflow checks remain enabled. These optimizations target the cost of menu hovering, scrolling, and rendering in debug mode. The profile takes effect on the next development compilation; changing it recompiles affected dependencies once.
+
+`trunk serve` continues to use the standard `dev` profile, which disables
+incremental compilation for `benchup-app` to avoid a WebAssembly linker issue.
+Use `dev-desktop` only for native development. Its first build populates a
+separate target directory; later edits reuse that profile's compilation artifacts.
+
+The workspace keeps geometry formats and the embedded browser SketchUp reader
+in `benchup-io`, with the C/C++ reader and its safe Rust boundary in `benchup-skp`.
+The application depends on these crates, so UI edits reuse their compiled
+artifacts. The native reader compiles C/C++ files in parallel and no
+longer rebuilds when application server or update configuration changes.
 
 ## Application messages
 
@@ -127,6 +161,15 @@ The macOS builds run natively on `macos-15` (Apple Silicon) and
 `macos-15-intel` (Intel). Both target macOS 11.0 or newer and use the same
 signing and notarization secrets, with separate `osx-arm64` and `osx-x64`
 update channels.
+
+[Warm release caches](.github/workflows/cache.yml) populates dependency caches
+on relevant pushes to `main`, or manually from that branch. It uses the same Rust
+toolchain, runners, release profile, targets, and shared cache keys as releases,
+and skips compilation on an exact cache hit. Release tags and manual Pages builds
+restore these caches without saving duplicate tag caches. GitHub permits tags to
+restore caches from the default branch, but not from other tags. Keep `main` as
+the default branch and let cache warming finish before tagging a release to get
+the benefit. Cache warming does not package or publish a release.
 
 After all desktop and WebAssembly builds succeed, the workflow creates a GitHub Release for the
 pushed tag with the prepared release notes, installers, portable packages, full

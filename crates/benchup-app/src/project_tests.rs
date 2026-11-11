@@ -506,12 +506,12 @@ fn exchange_formats_use_atomic_import_and_undo_redo() {
     for (extension, bytes) in [
         (
             "stl",
-            include_bytes!("../tests/fixtures/triangle-mm.stl").as_slice(),
+            include_bytes!("../../benchup-io/tests/fixtures/triangle-mm.stl").as_slice(),
         ),
         ("obj", b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n".as_slice()),
         (
             "dxf",
-            include_bytes!("../tests/fixtures/profile-mm.dxf").as_slice(),
+            include_bytes!("../../benchup-io/tests/fixtures/profile-mm.dxf").as_slice(),
         ),
     ] {
         let ctx = egui::Context::default();

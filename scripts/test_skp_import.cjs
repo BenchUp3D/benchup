@@ -3,7 +3,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const base = path.resolve(__dirname, '../crates/benchup-app');
+const base = path.resolve(__dirname, '../crates/benchup-io');
 const rust = fs.readFileSync(path.join(base, 'src/interchange.rs'), 'utf8');
 const concat = rust.split('const SKP_READER: &str = concat!(')[1].split('\n);')[0];
 // Read the very same concat/include_str inputs that Rust embeds.

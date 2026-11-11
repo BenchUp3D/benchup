@@ -133,7 +133,10 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: desktop-${{ matrix.target }}
+          # Restore dependencies warmed on main; tag-scoped caches cannot be
+          # reused by the next release tag.
+          shared-key: desktop-${{ matrix.target }}
+          save-if: 'false'
 
       - name: Build release executable
         run: cargo build -p benchup-app --bin benchup-app --release --locked --target "${{ matrix.target }}"
@@ -143,13 +146,16 @@ jobs:
           cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" -- \
             updates:: update_repository:: identity:: storage:: project_files:: server_config::
 
+      - name: Test native import and export fixtures
+        run: cargo test -p benchup-io -p benchup-skp --release --locked --target "${{ matrix.target }}"
+
       - name: Stage distribution
         run: |
           mkdir -p dist package/licenses/skp
           cp "target/${{ matrix.target }}/release/${{ matrix.executable }}" package/
           cp LICENSE README.md package/
-          cp crates/benchup-app/vendor/skp/LICENSE* package/licenses/skp/
-          cp crates/benchup-app/vendor/skp/native/miniz/LICENSE package/licenses/skp/LICENSE-miniz
+          cp crates/benchup-io/vendor/skp/LICENSE* package/licenses/skp/
+          cp crates/benchup-skp/vendor/openskp/miniz/LICENSE package/licenses/skp/LICENSE-miniz
 
       - name: Create installer and update feed
         run: python scripts/desktop_release.py package --tag "$TAG_NAME" --platform "${{ matrix.platform }}"
@@ -190,7 +196,8 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: release-wasm
+          shared-key: release-wasm
+          save-if: 'false'
 
       - uses: actions/setup-python@v6
         with:
@@ -217,8 +224,8 @@ jobs:
           test -n "$(find dist/wasm -name '*.js' -size +0c -print -quit)"
           cp LICENSE README.md dist/wasm/
           mkdir -p dist/wasm/licenses/skp
-          cp crates/benchup-app/vendor/skp/LICENSE* dist/wasm/licenses/skp/
-          cp crates/benchup-app/vendor/skp/native/miniz/LICENSE dist/wasm/licenses/skp/LICENSE-miniz
+          cp crates/benchup-io/vendor/skp/LICENSE* dist/wasm/licenses/skp/
+          cp crates/benchup-skp/vendor/openskp/miniz/LICENSE dist/wasm/licenses/skp/LICENSE-miniz
           python3 - <<'PY'
           import os
           import shutil
