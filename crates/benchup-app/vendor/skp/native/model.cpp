@@ -1,5 +1,9 @@
 #include <charconv>
 #include <fstream>
+#include <iomanip>
+#include <limits>
+#include <locale>
+#include <sstream>
 
 #include "internal.hpp"
 
@@ -7,9 +11,18 @@ namespace openskp {
 namespace {
 
 std::string format_double(double v) {
+#if defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && \
+    __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 130300
+  // Apple libc++ provides floating-point to_chars starting with macOS 13.3.
+  std::ostringstream out;
+  out.imbue(std::locale::classic());
+  out << std::setprecision(std::numeric_limits<double>::max_digits10) << v;
+  return out.str();
+#else
   char buf[32];
   auto result = std::to_chars(buf, buf + sizeof(buf), v);
   return std::string(buf, result.ptr);
+#endif
 }
 
 }  // namespace
