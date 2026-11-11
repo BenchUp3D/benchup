@@ -56,6 +56,7 @@ class DesktopReleaseTests(unittest.TestCase):
                 self.assertEqual(args[args.index("--packTitle") + 1], "BenchUp")
                 self.assertEqual(args[args.index("--mainExe") + 1], executable)
                 self.assertEqual(args[args.index("--channel") + 1], release.PLATFORMS[platform][0])
+                self.assertEqual(args[args.index("--runtime") + 1], release.PLATFORMS[platform][0])
                 self.assertEqual(args[args.index("--delta") + 1], "None")
                 self.assertTrue(Path(args[args.index("--icon") + 1]).is_file())
                 if platform.startswith("macos"):
@@ -63,19 +64,21 @@ class DesktopReleaseTests(unittest.TestCase):
 
     def test_macos_bundle_declares_project_opening_and_png_thumbnail_conformance(self):
         (self.directory / "benchup-app").touch()
-        captured = []
-        def inspect(args, **kwargs):
-            captured.append(plistlib.loads(Path(args[args.index("--plist") + 1]).read_bytes()))
-        with patch.dict(os.environ, {}, clear=True), patch.object(release.subprocess, "run", side_effect=inspect), patch.object(release, "validate_assets"):
-            release.package("macos-arm64", self.tag, self.directory, self.directory / "dist")
-        plist = captured[0]
-        self.assertEqual(plist["CFBundleVersion"], self.current)
-        self.assertEqual(plist["CFBundleExecutable"], "benchup-app")
-        doc = plist["CFBundleDocumentTypes"][0]
-        uti = plist["UTExportedTypeDeclarations"][0]
-        self.assertEqual(doc["LSItemContentTypes"], [uti["UTTypeIdentifier"]])
-        self.assertEqual(uti["UTTypeTagSpecification"]["public.filename-extension"], ["bup"])
-        self.assertIn("public.png", uti["UTTypeConformsTo"])
+        for platform in ("macos-arm64", "macos-x64"):
+            with self.subTest(platform=platform):
+                captured = []
+                def inspect(args, **kwargs):
+                    captured.append(plistlib.loads(Path(args[args.index("--plist") + 1]).read_bytes()))
+                with patch.dict(os.environ, {}, clear=True), patch.object(release.subprocess, "run", side_effect=inspect), patch.object(release, "validate_assets"):
+                    release.package(platform, self.tag, self.directory, self.directory / "dist")
+                plist = captured[0]
+                self.assertEqual(plist["CFBundleVersion"], self.current)
+                self.assertEqual(plist["CFBundleExecutable"], "benchup-app")
+                doc = plist["CFBundleDocumentTypes"][0]
+                uti = plist["UTExportedTypeDeclarations"][0]
+                self.assertEqual(doc["LSItemContentTypes"], [uti["UTTypeIdentifier"]])
+                self.assertEqual(uti["UTTypeTagSpecification"]["public.filename-extension"], ["bup"])
+                self.assertIn("public.png", uti["UTTypeConformsTo"])
 
     def test_delta_in_migration_feed_prevents_publication(self):
         feed, asset = self.assets("windows-x64")
@@ -163,7 +166,7 @@ class DesktopReleaseTests(unittest.TestCase):
         first = (self.directory / "SHA256SUMS").read_bytes()
         release.checksums(self.directory)
         self.assertEqual(first, (self.directory / "SHA256SUMS").read_bytes())
-        self.assertEqual(len(first.splitlines()), 9)
+        self.assertEqual(len(first.splitlines()), 3 * len(release.PLATFORMS))
 
     def test_publication_removes_only_packaging_metadata_before_checksumming(self):
         for platform, (channel, _, _, _) in release.PLATFORMS.items():
@@ -201,6 +204,17 @@ class DesktopReleaseTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             release.validate_assets(self.directory, self.current, release.PLATFORMS)
 
+    def test_missing_macos_intel_feed_or_installer_prevents_publication(self):
+        for platform in release.PLATFORMS:
+            if platform != "macos-x64":
+                self.assets(platform)
+        with self.assertRaises(FileNotFoundError):
+            release.validate_assets(self.directory, self.current, release.PLATFORMS)
+        self.assets("macos-x64")
+        (self.directory / f"{release.APP_ID}-osx-x64-Setup.pkg").unlink()
+        with self.assertRaisesRegex(ValueError, "Missing installer.*osx-x64"):
+            release.validate_assets(self.directory, self.current, release.PLATFORMS)
+
     def test_wrong_identity_duplicate_packages_and_unsafe_paths_are_rejected(self):
         for change in ("identity", "duplicate", "path", "size"):
             with self.subTest(change=change):
@@ -224,7 +238,7 @@ class DesktopReleaseTests(unittest.TestCase):
             release.validate_assets(self.directory, self.current, ["macos-arm64"])
 
     def test_required_signing_never_falls_back_to_unsigned_packages(self):
-        for platform in ("windows-x64", "macos-arm64"):
+        for platform in ("windows-x64", "macos-arm64", "macos-x64"):
             with self.subTest(platform=platform), patch.dict(os.environ, {"BENCHUP_REQUIRE_SIGNING": "true"}, clear=True), patch.object(release.subprocess, "run") as run:
                 (self.directory / release.PLATFORMS[platform][1]).touch()
                 with self.assertRaisesRegex(ValueError, "signing is required"):
@@ -235,12 +249,34 @@ class DesktopReleaseTests(unittest.TestCase):
         for platform, env in (
             ("windows-x64", {"AZURE_CREDENTIALS": "configured"}),
             ("macos-arm64", {"MACOS_SIGN_APP_IDENTITY": "configured"}),
+            ("macos-x64", {"MACOS_SIGN_APP_IDENTITY": "configured"}),
         ):
             with self.subTest(platform=platform), patch.dict(os.environ, env, clear=True), patch.object(release.subprocess, "run") as run:
                 (self.directory / release.PLATFORMS[platform][1]).touch()
                 with self.assertRaises(ValueError):
                     release.package(platform, self.tag, self.directory, self.directory / "dist")
                 run.assert_not_called()
+
+    def test_both_macos_architectures_use_configured_signing_and_notarization(self):
+        env = {
+            "BENCHUP_REQUIRE_SIGNING": "true",
+            "MACOS_SIGN_APP_IDENTITY": "Developer ID Application: BenchUp",
+            "MACOS_SIGN_INSTALL_IDENTITY": "Developer ID Installer: BenchUp",
+            "BENCHUP_MACOS_KEYCHAIN": "temporary.keychain-db",
+            "BENCHUP_MACOS_NOTARY_PROFILE": "benchup-notary",
+        }
+        (self.directory / "benchup-app").touch()
+        for platform in ("macos-arm64", "macos-x64"):
+            with self.subTest(platform=platform), patch.dict(os.environ, env, clear=True), patch.object(release.subprocess, "run") as run, patch.object(release, "validate_assets"):
+                release.package(platform, self.tag, self.directory, self.directory / "dist")
+                args = run.call_args.args[0]
+                for option, name in (
+                    ("--signAppIdentity", "MACOS_SIGN_APP_IDENTITY"),
+                    ("--signInstallIdentity", "MACOS_SIGN_INSTALL_IDENTITY"),
+                    ("--keychain", "BENCHUP_MACOS_KEYCHAIN"),
+                    ("--notaryProfile", "BENCHUP_MACOS_NOTARY_PROFILE"),
+                ):
+                    self.assertEqual(args[args.index(option) + 1], env[name])
 
     def test_windows_signing_file_is_removed_when_packaging_fails(self):
         captured = []

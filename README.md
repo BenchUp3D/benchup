@@ -1,6 +1,6 @@
 # BenchUp
 
-![BenchUp editor screenshot](assets/screenshots/benchup.jpg "BenchUp v0.6.8 desktop workspace")
+![BenchUp editor screenshot](assets/screenshots/benchup.jpg)
 
 [![Try BenchUp in your browser](https://img.shields.io/badge/Try_BenchUp_in_your_browser-d63b32?style=for-the-badge)](https://benchup3d.github.io/editor/play/)
 
@@ -8,6 +8,7 @@
 
 [![Download for Windows x64](https://img.shields.io/badge/Windows_x64-0078D4?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest/download/io.github.BenchUp3D.BenchUp-win-x64-Setup.exe)
 [![Download for macOS Apple Silicon](https://img.shields.io/badge/macOS_Apple_Silicon-6E40C9?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest/download/io.github.BenchUp3D.BenchUp-osx-arm64-Setup.pkg)
+[![Download for macOS Intel](https://img.shields.io/badge/macOS_Intel-6E40C9?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest/download/io.github.BenchUp3D.BenchUp-osx-x64-Setup.pkg)
 [![Download for Linux x64](https://img.shields.io/badge/Linux_x64-E95420?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest/download/io.github.BenchUp3D.BenchUp-linux-x64.AppImage)
 [![See all downloads](https://img.shields.io/badge/All_downloads-555555?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest)
 
@@ -118,8 +119,14 @@ packages the desktop app with Velopack and the browser app with Trunk:
 |---|---|---|
 | `benchup-windows-x64` | Windows x64 (MSVC) | `*-win-x64-Setup.exe` (per-user installer) |
 | `benchup-macos-arm64` | macOS Apple Silicon | `*-osx-arm64-Setup.pkg` or the portable `.app` zip |
+| `benchup-macos-x64` | macOS Intel (x64) | `*-osx-x64-Setup.pkg` or the portable `.app` zip |
 | `benchup-linux-x64` | Linux x64 (built on Ubuntu 22.04) | `*-linux-x64.AppImage` |
 | `benchup-wasm` | Desktop browsers (WebAssembly) | Extract `benchup-vX.Y.Z-wasm.zip` and serve it with a static web server |
+
+The macOS builds run natively on `macos-15` (Apple Silicon) and
+`macos-15-intel` (Intel). Both target macOS 11.0 or newer and use the same
+signing and notarization secrets, with separate `osx-arm64` and `osx-x64`
+update channels.
 
 After all desktop and WebAssembly builds succeed, the workflow creates a GitHub Release for the
 pushed tag with the prepared release notes, installers, portable packages, full

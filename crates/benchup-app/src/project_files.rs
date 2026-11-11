@@ -751,7 +751,13 @@ pub(crate) fn save_pdf_contents(name: &str, report: Option<CutReport>, contents:
 /// Optional PNG preview lives in portable files only, never in recovery/history.
 /// The encoder moves this temporary field into a private PNG chunk.
 pub(crate) fn with_preview(json: &str, image: image::RgbaImage) -> Result<String, String> {
-    let image = image::DynamicImage::ImageRgba8(image).thumbnail(512, 512);
+    const MAX_PREVIEW_SIZE: u32 = 512;
+    let image = image::DynamicImage::ImageRgba8(image);
+    let image = if image.width() > MAX_PREVIEW_SIZE || image.height() > MAX_PREVIEW_SIZE {
+        image.thumbnail(MAX_PREVIEW_SIZE, MAX_PREVIEW_SIZE)
+    } else {
+        image
+    };
     let mut png = std::io::Cursor::new(Vec::new());
     image.write_to(&mut png, image::ImageFormat::Png).map_err(|e| e.to_string())?;
     let mut value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;

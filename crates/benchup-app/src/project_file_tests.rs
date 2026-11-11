@@ -89,7 +89,10 @@ fn corrupt_or_incomplete_compressed_projects_are_rejected() {
     let mut trailing = compressed;
     trailing.extend_from_slice(b"unexpected trailing data");
     assert!(decode(&trailing).is_err());
-    assert!(decode(&encode("not json").unwrap()).is_err());
+    assert!(encode("not json").is_err());
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(b"not json").unwrap();
+    assert!(decode(&encoder.finish().unwrap()).is_err());
 }
 
 #[test]

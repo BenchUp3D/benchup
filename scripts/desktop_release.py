@@ -23,6 +23,7 @@ STABLE_VERSION = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
 PLATFORMS = {
     "windows-x64": ("win-x64", "benchup-app.exe", "favicon.ico", ".exe"),
     "macos-arm64": ("osx-arm64", "benchup-app", "benchup.icns", ".pkg"),
+    "macos-x64": ("osx-x64", "benchup-app", "benchup.icns", ".pkg"),
     "linux-x64": ("linux-x64", "benchup-app", "icon-256.png", ".AppImage"),
 }
 
@@ -128,7 +129,7 @@ def package(platform, tag, pack_dir, output_dir):
             elif signing_required():
                 raise ValueError("Windows signing is required but signing secrets are missing.")
             args += ["--framework", "vcredist143-x64"]
-        elif platform == "macos-arm64":
+        elif platform in ("macos-arm64", "macos-x64"):
             plist = plistlib.loads((ROOT / "packaging/macos/Info.plist").read_bytes())
             plist["CFBundleShortVersionString"] = current
             plist["CFBundleVersion"] = current

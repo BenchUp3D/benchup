@@ -7,7 +7,7 @@ BenchUp helps woodworkers, furniture makers, and DIY builders model shelves, tab
 ## Application facts
 
 - License and price: MIT, free and open source.
-- Platforms: Windows x64, macOS Apple Silicon, Linux x64, and desktop browsers with hardware acceleration and WebGPU or WebGL2. Use a mouse and keyboard.
+- Platforms: Windows x64, macOS Apple Silicon and Intel, Linux x64, and desktop browsers with hardware acceleration and WebGPU or WebGL2. Use a mouse and keyboard.
 - Modeling: lines, rectangles, circles, polygons, freehand outlines, Push/Pull, Move, Scale, Offset, and Paint.
 - Precision: exact lengths, geometry and axis snapping, Tape Measure, Protractor, and Dimensions.
 - Organization: groups, reusable components, and tags; undo and redo.

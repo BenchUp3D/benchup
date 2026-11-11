@@ -72,7 +72,7 @@ figcaption { display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: spa
 .steps p { font-size: .9rem; color: var(--muted); margin-top: 9px; }
 
 .downloads { margin-top: 24px; }
-.download-links { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.download-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .download-links > a { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 14px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 6px; text-decoration: none; }
 .download-links > a:hover { background: #eeeadd; border-color: var(--ink); }
 .os-icon { display: block; width: 28px; height: 28px; }

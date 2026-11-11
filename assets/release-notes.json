@@ -45,7 +45,8 @@
       {
         "title": "Desktop integration and previews",
         "changes": [
-          "Open .bup projects through desktop file associations and improve portable viewport previews.",
+          "Open .bup projects through desktop file associations and save portable viewport previews without enlarging small images.",
+          "Install BenchUp on Intel Macs running macOS 11 or later using the dedicated Intel download.",
           "Use a theme-aware New Project icon."
         ]
       }
