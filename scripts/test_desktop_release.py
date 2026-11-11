@@ -60,7 +60,7 @@ class DesktopReleaseTests(unittest.TestCase):
                 self.assertEqual(args[args.index("--delta") + 1], "None")
                 self.assertTrue(Path(args[args.index("--icon") + 1]).is_file())
                 if platform.startswith("macos"):
-                    self.assertEqual(args[args.index("--bundleId") + 1], release.APP_ID)
+                    self.assertNotIn("--bundleId", args)
 
     def test_macos_bundle_declares_project_opening_and_png_thumbnail_conformance(self):
         (self.directory / "benchup-app").touch()
@@ -72,6 +72,7 @@ class DesktopReleaseTests(unittest.TestCase):
                 with patch.dict(os.environ, {}, clear=True), patch.object(release.subprocess, "run", side_effect=inspect), patch.object(release, "validate_assets"):
                     release.package(platform, self.tag, self.directory, self.directory / "dist")
                 plist = captured[0]
+                self.assertEqual(plist["CFBundleIdentifier"], release.APP_ID)
                 self.assertEqual(plist["CFBundleVersion"], self.current)
                 self.assertEqual(plist["CFBundleExecutable"], "benchup-app")
                 doc = plist["CFBundleDocumentTypes"][0]

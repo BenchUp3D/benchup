@@ -131,11 +131,12 @@ def package(platform, tag, pack_dir, output_dir):
             args += ["--framework", "vcredist143-x64"]
         elif platform in ("macos-arm64", "macos-x64"):
             plist = plistlib.loads((ROOT / "packaging/macos/Info.plist").read_bytes())
+            plist["CFBundleIdentifier"] = APP_ID
             plist["CFBundleShortVersionString"] = current
             plist["CFBundleVersion"] = current
             plist_path = Path(temporary) / "Info.plist"
             plist_path.write_bytes(plistlib.dumps(plist))
-            args += ["--bundleId", APP_ID, "--plist", str(plist_path)]
+            args += ["--plist", str(plist_path)]
             names = ("MACOS_SIGN_APP_IDENTITY", "MACOS_SIGN_INSTALL_IDENTITY", "BENCHUP_MACOS_KEYCHAIN", "BENCHUP_MACOS_NOTARY_PROFILE")
             values = [os.environ.get(name, "") for name in names]
             if any(values) and not all(values):
