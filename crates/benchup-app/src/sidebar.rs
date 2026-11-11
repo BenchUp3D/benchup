@@ -646,10 +646,20 @@ impl BenchUpApp {
         ctx: &egui::Context,
         storage: Option<&dyn eframe::Storage>,
     ) {
+        self.restore_inspector_preferences_with_language(ctx, storage, settings::detected_language);
+    }
+
+    fn restore_inspector_preferences_with_language(
+        &mut self,
+        ctx: &egui::Context,
+        storage: Option<&dyn eframe::Storage>,
+        detect_language: impl FnOnce() -> &'static str,
+    ) {
         self.inspector_order = restore_order(storage);
-        let mut preferences = storage
-            .and_then(|storage| crate::identity::preference_value::<InspectorPreferences>(storage, PREFERENCE_KEY))
-            .unwrap_or_default();
+        let saved_preferences = storage
+            .and_then(|storage| crate::identity::preference_value::<InspectorPreferences>(storage, PREFERENCE_KEY));
+        let first_launch = saved_preferences.is_none();
+        let mut preferences = saved_preferences.unwrap_or_default();
         self.inspector_layout =
             InspectorLayout::restore(preferences.docking.as_ref(), &self.inspector_order);
         self.inspector_order = self.inspector_layout.order();
@@ -660,6 +670,9 @@ impl BenchUpApp {
         self.account.open = preferences.account_open;
         self.account.menu_open = preferences.account_menu_open;
         self.general_settings = preferences.general.clone();
+        if first_launch {
+            self.general_settings.language = detect_language().into();
+        }
         self.general_settings.normalize();
         benchup_core::i18n::set_language(&self.general_settings.language);
         preferences.tools.restore(self);
@@ -2701,6 +2714,51 @@ mod preference_tests {
             restored.general_settings.default_units.length,
             LengthUnit::Inches
         );
+    }
+
+    #[test]
+    fn first_launch_language_is_saved_without_a_model_edit_and_not_redetected() {
+        for language in ["en", "zh_CN"] {
+            let ctx = egui::Context::default();
+            let mut storage = SavedPreferences::default();
+            let mut app = BenchUpApp::with_document(Document::default(), None, true);
+            app.restore_inspector_preferences_with_language(&ctx, Some(&storage), || language);
+            assert_eq!(app.general_settings.language, language);
+
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            assert!(app.dirty_since.is_none());
+            let saved: InspectorPreferences = crate::identity::preference_value(&storage, PREFERENCE_KEY).unwrap();
+            assert_eq!(saved.general.language, language);
+
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences_with_language(
+                &egui::Context::default(),
+                Some(&storage),
+                || panic!("Saved language must take precedence over browser/OS language"),
+            );
+            assert_eq!(restored.general_settings.language, language);
+        }
+        benchup_core::i18n::set_language("en");
+    }
+
+    #[test]
+    fn existing_preferences_keep_legacy_language_defaults_without_detection() {
+        for key in [PREFERENCE_KEY, "ketchup.inspector.v1"] {
+            let mut storage = SavedPreferences::default();
+            let saved: InspectorPreferences =
+                serde_json::from_str(r#"{"general":{"orbit_speed":2.0}}"#).unwrap();
+            eframe::set_value(&mut storage, key, &saved);
+            let mut app = BenchUpApp::with_document(Document::default(), None, true);
+            app.restore_inspector_preferences_with_language(
+                &egui::Context::default(),
+                Some(&storage),
+                || panic!("Existing preferences must not trigger language detection"),
+            );
+            assert_eq!(app.general_settings.language, "en");
+            assert_eq!(app.general_settings.orbit_speed, 2.0);
+        }
     }
 
     #[test]

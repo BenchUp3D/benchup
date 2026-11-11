@@ -148,6 +148,13 @@ pub(super) const TOOLS: [(Tool, &str); 18] = [
 ];
 
 const DEFAULT_LANGUAGE: &str = "en";
+#[path = "language.rs"]
+mod language;
+
+pub(super) fn detected_language() -> &'static str {
+    language::detected_language()
+}
+
 fn languages() -> [(&'static str, &'static str); 2] {
     [
         (DEFAULT_LANGUAGE, tr!("settings.language_english")),

@@ -17,6 +17,7 @@ bytemuck = { version = "1", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 zip = { version = "8", default-features = false }
 rfd = { version = "0.17.2", features = ["file-handle-inner"] }
+sys-locale = { version = "0.3.2", features = ["js"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wgpu = { version = "30", features = ["webgpu", "webgl"] }
