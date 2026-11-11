@@ -724,8 +724,15 @@ pub fn line_icon(p: &egui::Painter, c: Pos2, kind: &str, color: Color32) {
 pub fn menu_icon(p: &egui::Painter, c: Pos2, kind: &str) {
     let colors = ToolPalette::for_painter(p);
     let color = match kind {
+        "new" => {
+            if p.ctx().global_style().visuals.dark_mode {
+                Color32::WHITE
+            } else {
+                colors.outline
+            }
+        }
         "cut" | "delete" | "close" => colors.red,
-        "new" | "save" | "paste" | "import" | "unlock" | "clean_aligned" => {
+        "save" | "paste" | "import" | "unlock" | "clean_aligned" => {
             crate::theme::Palette::for_painter(p).green
         }
         "open" | "group" | "lock" | "dimension" | "connections/wood_joinery" => colors.gold,
