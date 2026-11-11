@@ -10,4 +10,4 @@ Terminal=false
 Categories=Graphics;3DGraphics;
 Keywords=3D;modeling;drawing;
 StartupNotify=true
-StartupWMClass=benchup-app
+StartupWMClass=io.github.BenchUp3D.BenchUp
