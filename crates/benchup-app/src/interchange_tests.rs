@@ -3,6 +3,38 @@ use benchup_core::DVec3;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
+fn skp_import_normalizes_duplicate_pinched_faces_without_losing_placement_or_color() {
+    let bytes = include_bytes!("../tests/fixtures/pinched-face.skp");
+    let raw: Model = serde_json::from_str(&parse_skp(bytes).unwrap()).unwrap();
+    assert_eq!(raw.faces.len(), 2);
+    assert!(raw.validate().is_err());
+    let model = import_skp(bytes, "Pinched panel").unwrap();
+    model.validate().unwrap();
+    assert_eq!(model.vertices, raw.vertices);
+    assert_eq!(model.edges, raw.edges);
+    assert_eq!(model.faces.len(), 2);
+    assert_eq!(model.objects.len(), 2);
+    assert_eq!(
+        model.objects.last_key_value().unwrap().1.name,
+        "Pinched panel"
+    );
+    assert_eq!(model.face_colors.len(), 2);
+    assert!(model.face_colors.values().all(|c| *c == [210, 45, 30]));
+    assert!(
+        model
+            .vertices
+            .values()
+            .any(|v| { v.position.distance(DVec3::new(11., 21., 30.) * 0.0254) < 1e-12 })
+    );
+    let area: f64 = model.faces.values().map(|face| model.face_area(face)).sum();
+    assert!((area - 2. * 0.0254_f64.powi(2)).abs() < 1e-12);
+    let restored: Model = serde_json::from_str(&serde_json::to_string(&model).unwrap()).unwrap();
+    restored.validate().unwrap();
+    assert_eq!(model, restored);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
 fn skp_import_accepts_small_details_and_warped_faces_without_losing_holes() {
     let bytes = include_bytes!("../tests/fixtures/precision-faces.skp");
     let raw: Model = serde_json::from_str(&parse_skp(bytes).unwrap()).unwrap();

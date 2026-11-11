@@ -59,6 +59,24 @@ if (process.argv.includes('--generate-fixture')) {
     assert(offset >= 0 && preciseBytes.indexOf(vertexBytes, offset+1) < 0);
     preciseBytes.writeDoubleLE(0.0004, offset+16);
     fs.writeFileSync(path.join(base,'tests/fixtures/precision-faces.skp'), preciseBytes);
+
+    // Two filled triangles touch at a shared vertex, represented by one
+    // SketchUp face loop. Include a duplicate surface as well: House Double.skp
+    // contains both patterns.
+    const pinched = sdk.create();
+    const pinchColor = pinched.addMaterial('Pinch color', [210,45,30]);
+    const pinchedPanel = pinched.addComponentDefinition('Pinched panel', def => {
+        // Register the shared vertex before the writer walks the face loop.
+        def.addPolyline([[1,1,0], [0,0,0]]);
+        def.addFace([[0,0,0],[2,0,0],[1,1,0],[2,2,0],[0,2,0],[1,1,0]], {
+            material: pinchColor,
+        });
+        def.addFace([[0,0,0],[2,0,0],[1,1,0],[2,2,0],[0,2,0],[1,1,0]], {
+            material: pinchColor,
+        });
+    });
+    pinched.addInstance(pinchedPanel, {name: 'Placed pinched panel', translation: [10,20,30]});
+    fs.writeFileSync(path.join(base,'tests/fixtures/pinched-face.skp'), pinched.toBytes());
 }
 
 test('actual SKP bytes preserve holes, nested placement, mirrored placement, colors, and units', () => {
@@ -100,6 +118,21 @@ test('precision fixture passes tiny faces and warped holed boundaries to shared 
     assert(Object.values(m.vertices).some(v => Math.abs(v.position[2] - 0.00001016) < 1e-12));
     assert.equal(Object.values(m.faces).filter(f => f.holes.length === 1).length, 1);
     assert(Object.values(m.face_colors).every(c => JSON.stringify(c) === '[210,45,30]'));
+});
+
+test('duplicate pinched SKP faces reach shared normalization with shared vertices and placement intact', () => {
+    const m = read(new Uint8Array(fs.readFileSync(path.join(base,'tests/fixtures/pinched-face.skp'))));
+    assert.equal(Object.keys(m.vertices).length, 5);
+    assert.equal(Object.keys(m.edges).length, 6);
+    assert.equal(Object.keys(m.faces).length, 2);
+    assert.equal(Object.keys(m.objects).length, 2);
+    const face = Object.values(m.faces)[0];
+    assert.equal(face.vertices.length, 6);
+    assert.equal(new Set(face.vertices).size, 5);
+    assert.equal(face.vertices[2], face.vertices[5]);
+    assert.deepEqual(m.face_colors[face.id], [210,45,30]);
+    const p = m.vertices[face.vertices[2]].position;
+    assert(p.every((v,i) => Math.abs(v - [11,21,30][i]*0.0254) < 1e-12));
 });
 
 test('recursive definitions and missing references fail', () => {

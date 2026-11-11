@@ -3,10 +3,11 @@ use crate::{DVec3, Edge, Face, Model, faces};
 use std::collections::{BTreeMap, BTreeSet};
 
 impl Model {
-    /// Remove boundary spurs and tessellate imported polygons that cannot be
-    /// represented by a strict planar face. Call on fresh, group-based imports
-    /// before validation and before introducing linked component definitions.
-    /// Planar faces stay intact.
+    /// Remove duplicate surfaces and boundary spurs, and tessellate polygons
+    /// that cannot be represented by a strict planar face. Call on fresh,
+    /// group-based imports before validation and before introducing linked
+    /// component definitions.
+    /// Simple planar faces stay intact.
     pub fn normalize_imported_faces(&mut self) -> Result<(), &'static str> {
         // SketchUp loops can walk a dangling edge in both directions. That
         // edge remains editable geometry, but is not part of the filled region.
@@ -15,6 +16,7 @@ impl Model {
                 *ring = faces::strip_spurs(std::mem::take(ring));
             }
         }
+        self.deduplicate_imported_faces();
         let warped: Vec<_> = self
             .faces
             .values()
@@ -42,7 +44,13 @@ impl Model {
                 .chain(&face.holes)
                 .enumerate()
             {
-                if ring.len() < 3 || ring.iter().collect::<BTreeSet<_>>().len() != ring.len() {
+                // A SketchUp boundary may revisit a vertex where two filled
+                // regions touch. Earcut splits these pinched loops into simple
+                // triangles; rejecting every repeated vertex loses valid
+                // surfaces. Consecutive duplicates (including a repeated closing
+                // vertex) still describe a zero-length boundary edge.
+                if ring.len() < 3 || (0..ring.len()).any(|j| ring[j] == ring[(j + 1) % ring.len()])
+                {
                     return Err(boundary_error);
                 }
                 if i > 0 {
@@ -168,7 +176,52 @@ impl Model {
                 object.entities.extend(&added);
             }
         }
+        // Tessellation can also reproduce a triangle already present in the
+        // source. Keep one editable surface per exact boundary and properties.
+        self.deduplicate_imported_faces();
         Ok(())
+    }
+
+    fn deduplicate_imported_faces(&mut self) {
+        let mut seen = BTreeMap::new();
+        let mut duplicates = BTreeMap::new();
+        for face in self.faces.values() {
+            let mut holes: Vec<_> = face
+                .holes
+                .iter()
+                .map(|r| faces::canonical_ring(r))
+                .collect();
+            holes.sort();
+            let key = (
+                faces::canonical_ring(&face.vertices),
+                holes,
+                self.face_colors.get(&face.id).copied(),
+                self.hidden.contains(&face.id),
+                self.locked.contains(&face.id),
+                self.entity_tags.get(&face.id).copied(),
+            );
+            if let Some(&original) = seen.get(&key) {
+                duplicates.insert(face.id, original);
+            } else {
+                seen.insert(key, face.id);
+            }
+        }
+        if duplicates.is_empty() {
+            return;
+        }
+        for id in duplicates.keys() {
+            self.faces.remove(id);
+            self.face_colors.remove(id);
+            self.hidden.remove(id);
+            self.locked.remove(id);
+            self.entity_tags.remove(id);
+        }
+        for object in self.objects.values_mut() {
+            object.entities = std::mem::take(&mut object.entities)
+                .into_iter()
+                .map(|id| duplicates.get(&id).copied().unwrap_or(id))
+                .collect();
+        }
     }
 }
 
@@ -179,20 +232,23 @@ mod tests {
 
     fn imported_face(rings: &[&[[f64; 3]]]) -> Model {
         let mut model = Model::default();
+        let mut vertices = BTreeMap::new();
         let rings: Vec<Vec<_>> = rings
             .iter()
             .map(|ring| {
                 ring.iter()
                     .map(|p| {
-                        let id = model.id();
-                        model.vertices.insert(
-                            id,
-                            Vertex {
+                        *vertices.entry(p.map(f64::to_bits)).or_insert_with(|| {
+                            let id = model.id();
+                            model.vertices.insert(
                                 id,
-                                position: DVec3::from_array(*p),
-                            },
-                        );
-                        id
+                                Vertex {
+                                    id,
+                                    position: DVec3::from_array(*p),
+                                },
+                            );
+                            id
+                        })
                     })
                     .collect()
             })
@@ -225,6 +281,171 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&model).unwrap()).unwrap();
         restored.validate().unwrap();
         assert_eq!(model, restored);
+    }
+
+    #[test]
+    fn pinched_imported_boundary_keeps_both_lobes_and_surface_properties() {
+        for height in [0., 0.00001] {
+            let mut model = imported_face(&[&[
+                [0., 0., 0.],
+                [2., 0., 0.],
+                [1., 1., height],
+                [2., 2., 0.],
+                [0., 2., 0.],
+                [1., 1., height],
+            ]]);
+            let face = *model.faces.keys().next().unwrap();
+            model.face_colors.insert(face, [210, 45, 30]);
+            model.hidden.insert(face);
+            // One lobe is also stored as a separate source triangle. Cleanup
+            // must run after tessellation as well as before it.
+            let triangle = model.id();
+            model.faces.insert(
+                triangle,
+                Face {
+                    id: triangle,
+                    vertices: model.faces[&face].vertices[..3].to_vec(),
+                    holes: vec![],
+                },
+            );
+            model.face_colors.insert(triangle, [210, 45, 30]);
+            model.hidden.insert(triangle);
+            let group = model.id();
+            model.objects.insert(
+                group,
+                serde_json::from_value(serde_json::json!({
+                    "id": group, "name": "Pinched", "kind": "Group",
+                    "entities": model.edges.keys().chain(model.faces.keys()).collect::<Vec<_>>(),
+                }))
+                .unwrap(),
+            );
+            let vertices = model.vertices.clone();
+            let edges = model.edges.clone();
+            assert!(model.validate().is_err());
+            model.normalize_imported_faces().unwrap();
+            model.validate().unwrap();
+            assert_eq!(model.vertices, vertices);
+            assert_eq!(model.edges, edges);
+            assert_eq!(model.faces.len(), 2);
+            assert!(model.faces.contains_key(&face));
+            for face in model.faces.values() {
+                assert_eq!(face.vertices.len(), 3);
+                assert!(face.holes.is_empty());
+                assert_eq!(model.face_colors[&face.id], [210, 45, 30]);
+                assert!(model.hidden.contains(&face.id));
+                assert!(model.objects[&group].entities.contains(&face.id));
+            }
+            let area: f64 = model.faces.values().map(|f| model.face_area(f)).sum();
+            assert!((area - 2.).abs() < 1e-8);
+            let before = model.clone();
+            model.normalize_imported_faces().unwrap();
+            assert_eq!(model, before);
+            let restored: Model =
+                serde_json::from_str(&serde_json::to_string(&model).unwrap()).unwrap();
+            restored.validate().unwrap();
+            assert_eq!(model, restored);
+        }
+    }
+
+    #[test]
+    fn pinched_hole_boundary_keeps_both_openings() {
+        let mut model = imported_face(&[
+            &[[0., 0., 0.], [4., 0., 0.], [4., 4., 0.], [0., 4., 0.]],
+            &[
+                [1., 1., 0.],
+                [3., 1., 0.],
+                [2., 2., 0.],
+                [3., 3., 0.],
+                [1., 3., 0.],
+                [2., 2., 0.],
+            ],
+        ]);
+        let vertices = model.vertices.clone();
+        assert!(model.validate().is_err());
+        model.normalize_imported_faces().unwrap();
+        model.validate().unwrap();
+        assert_eq!(model.vertices, vertices);
+        let area: f64 = model.faces.values().map(|f| model.face_area(f)).sum();
+        assert!((area - 14.).abs() < 1e-8);
+        for p in [DVec3::new(2., 1.5, 0.), DVec3::new(2., 2.5, 0.)] {
+            assert!(
+                !model
+                    .faces
+                    .values()
+                    .any(|f| model.face_contains(f, p, false))
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_imported_surfaces_keep_holes_properties_and_group_membership() {
+        let mut model = imported_face(&[
+            &[[0., 0., 0.], [4., 0., 0.], [4., 4., 0.], [0., 4., 0.]],
+            &[[1., 1., 0.], [3., 1., 0.], [3., 3., 0.], [1., 3., 0.]],
+        ]);
+        let face = model.faces.values().next().unwrap().clone();
+        let duplicate = model.id();
+        let mut copy = face.clone();
+        copy.id = duplicate;
+        copy.vertices.reverse();
+        copy.vertices.rotate_left(1);
+        copy.holes[0].reverse();
+        model.faces.insert(duplicate, copy);
+        for id in [face.id, duplicate] {
+            model.face_colors.insert(id, [210, 45, 30]);
+            model.hidden.insert(id);
+            model.locked.insert(id);
+        }
+        let group = model.id();
+        model.objects.insert(
+            group,
+            serde_json::from_value(serde_json::json!({
+                "id": group, "name": "Duplicates", "kind": "Group",
+                "entities": model.edges.keys().chain(model.faces.keys()).collect::<Vec<_>>(),
+            }))
+            .unwrap(),
+        );
+        assert!(model.validate().is_err());
+        model.normalize_imported_faces().unwrap();
+        model.validate().unwrap();
+        assert_eq!(model.faces, BTreeMap::from([(face.id, face.clone())]));
+        assert_eq!(
+            model.face_colors,
+            BTreeMap::from([(face.id, [210, 45, 30])])
+        );
+        assert_eq!(model.hidden, BTreeSet::from([face.id]));
+        assert_eq!(model.locked, BTreeSet::from([face.id]));
+        assert!(model.objects[&group].entities.contains(&face.id));
+        assert!(!model.objects[&group].entities.contains(&duplicate));
+        assert_eq!(model.face_area(&face), 12.);
+        let before = model.clone();
+        model.normalize_imported_faces().unwrap();
+        assert_eq!(model, before);
+        let restored: Model =
+            serde_json::from_str(&serde_json::to_string(&model).unwrap()).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(model, restored);
+    }
+
+    #[test]
+    fn coincident_boundaries_with_different_holes_or_colors_are_not_silently_removed() {
+        for different_hole in [false, true] {
+            let mut model = imported_face(&[
+                &[[0., 0., 0.], [4., 0., 0.], [4., 4., 0.], [0., 4., 0.]],
+                &[[1., 1., 0.], [3., 1., 0.], [3., 3., 0.], [1., 3., 0.]],
+            ]);
+            let mut copy = model.faces.values().next().unwrap().clone();
+            copy.id = model.id();
+            if different_hole {
+                copy.holes.clear();
+            } else {
+                model.face_colors.insert(copy.id, [210, 45, 30]);
+            }
+            model.faces.insert(copy.id, copy);
+            model.normalize_imported_faces().unwrap();
+            assert_eq!(model.faces.len(), 2);
+            assert!(model.validate().is_err());
+        }
     }
 
     #[test]
