@@ -107,13 +107,27 @@ impl Preferences {
             "https://www.nmra.org/beginner/scales",
         );
         ui.text_weak("Woodworking mockup presets are conveniences, not NMRA standards. Railway names can use different ratios in other regions.");
+        // Reserve the full single-line button width, including the theme's
+        // padding and border, so the cell clip never cuts off its right edge.
+        let remove_width = (ui
+            .painter()
+            .layout_no_wrap(
+                "Remove".into(),
+                egui::TextStyle::Button.resolve(ui.style()),
+                ui.visuals().text_color(),
+            )
+            .size()
+            .x
+            + 2. * ui.spacing().button_padding.x
+            + 4.)
+            .max(ui.spacing().interact_size.x);
         let mut table = InspectorTable::new(
             ui.available_width(),
             [
                 Column::flex(3.),
                 Column::flex(1.),
                 Column::flex(1.),
-                Column::fixed(64.),
+                Column::fixed(remove_width),
             ],
         );
         table.header(ui, ["Name", "Exported", "Model", ""]);
@@ -141,7 +155,10 @@ impl Preferences {
                         );
                     }
                     _ => {
-                        if cell.button("Remove").clicked() {
+                        if cell
+                            .add(egui::Button::new("Remove").wrap_mode(egui::TextWrapMode::Extend))
+                            .clicked()
+                        {
                             remove = Some(preset.id);
                         }
                     }
