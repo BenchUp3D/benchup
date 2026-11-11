@@ -8,6 +8,7 @@ from datetime import date
 import hashlib
 import json
 import os
+import plistlib
 from pathlib import Path
 import re
 import subprocess
@@ -128,7 +129,12 @@ def package(platform, tag, pack_dir, output_dir):
                 raise ValueError("Windows signing is required but signing secrets are missing.")
             args += ["--framework", "vcredist143-x64"]
         elif platform == "macos-arm64":
-            args += ["--bundleId", APP_ID]
+            plist = plistlib.loads((ROOT / "packaging/macos/Info.plist").read_bytes())
+            plist["CFBundleShortVersionString"] = current
+            plist["CFBundleVersion"] = current
+            plist_path = Path(temporary) / "Info.plist"
+            plist_path.write_bytes(plistlib.dumps(plist))
+            args += ["--bundleId", APP_ID, "--plist", str(plist_path)]
             names = ("MACOS_SIGN_APP_IDENTITY", "MACOS_SIGN_INSTALL_IDENTITY", "BENCHUP_MACOS_KEYCHAIN", "BENCHUP_MACOS_NOTARY_PROFILE")
             values = [os.environ.get(name, "") for name in names]
             if any(values) and not all(values):

@@ -50,3 +50,24 @@ On the first launch of a new version, the release notes open automatically if
 you haven't viewed them yet. The last viewed release version is saved immediately
 across app restarts and browser reloads, so the modal appears automatically only
 once per release. You can reopen it at any time from **Help → Release notes**.
+
+## Project files and thumbnails
+
+Launch BenchUp once after installing so Linux and Windows can register `.bup`
+with the desktop. Choose BenchUp in **Open with** if another app owns the
+extension. macOS registers the document type from the installed application
+bundle. Opening a project uses the existing save/discard/cancel prompt when
+local recovery contains unsaved work.
+
+Desktop saves embed a viewport preview in the project file. Save older projects
+once to add it. Explorer uses the system image thumbnail provider; Finder uses
+PNG type conformance; Linux desktops use the installed freedesktop thumbnailer.
+Thumbnail display must be enabled in the file manager. Linux desktops without
+freedesktop thumbnailer support may need their own thumbnail plugin.
+
+The preview container is a valid PNG with gzip JSON in the private `buPd`
+ancillary chunk (CRC checked on opening). Do not edit or optimize project files
+with an image editor: it may discard project data. Previous BenchUp versions
+cannot open this format. Existing gzip and plain JSON projects remain readable.
+`benchup-app --thumbnail input.bup output.png` extracts the image without
+launching the editor or initializing a GPU.

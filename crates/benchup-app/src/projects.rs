@@ -3,10 +3,12 @@ use super::*;
 use crate::project_files::{self, Outcome};
 use std::{path::PathBuf, sync::mpsc::TryRecvError};
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) enum Action {
     New,
     Open,
+    #[cfg(not(target_arch = "wasm32"))]
+    OpenPath(PathBuf),
     #[cfg(not(target_arch = "wasm32"))]
     Recent(usize),
     #[cfg(not(target_arch = "wasm32"))]
@@ -32,6 +34,7 @@ pub(super) struct Project {
     pub export_stl: bool,
     pub modified: bool,
     pub pending: Option<project_files::Pending>,
+    pub preview_save: Option<(super::screenshot_dialog::Capture, Option<PathBuf>, String)>,
     pub operation: Operation,
     pub snapshot: Option<String>,
     pub confirm: Option<Action>,
@@ -51,6 +54,7 @@ impl Default for Project {
             export_stl: false,
             modified: false,
             pending: None,
+            preview_save: None,
             operation: Operation::default(),
             snapshot: None,
             confirm: None,
@@ -95,7 +99,7 @@ impl RecentProject {
 
 impl Project {
     pub fn blocked(&self) -> bool {
-        self.pending.is_some()
+        (self.pending.is_some() || self.preview_save.is_some())
             || self.confirm.is_some()
             || self.error.is_some()
             || self.cut_report.is_some()
@@ -240,6 +244,11 @@ impl BenchUpApp {
 
     fn perform_project(&mut self, action: Action, ctx: &egui::Context) {
         match action {
+            #[cfg(not(target_arch = "wasm32"))]
+            Action::OpenPath(path) => {
+                self.project.operation = Operation::Open;
+                self.project.pending = Some(project_files::open_path(ctx, path));
+            }
             Action::New => self.new_model(ctx),
             Action::Open => {
                 self.project.operation = Operation::Open;
@@ -389,15 +398,67 @@ impl BenchUpApp {
         };
         self.project.snapshot = Some(contents.clone());
         self.project.operation = Operation::Save;
-        self.project.pending = Some(project_files::save(
-            ctx,
-            path,
-            self.doc.name.clone(),
-            contents,
-        ));
+        if let Some((device, queue)) = &self.screenshot_gpu {
+            let settings = crate::screenshots::Settings {
+                views: [true, false, false, false, false, false, false, false],
+                ..Default::default()
+            };
+            let retained = (self.render_model.revision() != 0
+                && self.doc.model.connections.is_empty()
+                && self.history_preview.is_none() && self.modeling.is_none()
+                && self.joint_highlight_preview_key().is_none())
+                .then(|| self.viewports.capture_resident(
+                    &super::screenshot_dialog::capture_display(&self.doc, ctx.global_style().visuals.dark_mode),
+                    self.render_model.shared(), self.render_model.revision(),
+                )).flatten().map(|scene| (scene, crate::screenshots::visible_points_with_entities(&self.doc.model, &self.entity_cache)));
+            match super::screenshot_dialog::Capture::with_scene(
+                device, queue, ctx, &self.doc, &settings, false, retained,
+            ) {
+                Ok(capture) => {
+                    #[cfg(target_arch = "wasm32")]
+                    { self.project.pending = Some(project_files::save_preview(ctx, path, self.doc.name.clone(), contents, capture)); }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    { self.project.preview_save = Some((capture, path, contents)); }
+                    ctx.request_repaint();
+                    return;
+                }
+                Err(error) => {
+                    self.project.error = Some(format!("Could not capture the project preview: {error}"));
+                    self.project.after_save = None;
+                    self.project.snapshot = None;
+                    return;
+                }
+            }
+        }
+        self.project.pending = Some(project_files::save(ctx, path, self.doc.name.clone(), contents));
     }
 
     pub(super) fn poll_project(&mut self, ctx: &egui::Context) {
+        if let Some((mut capture, path, contents)) = self.project.preview_save.take() {
+            match capture.poll(ctx) {
+                Ok(None) => {
+                    self.project.preview_save = Some((capture, path, contents));
+                    ctx.request_repaint_after(Duration::from_millis(16));
+                    return;
+                }
+                result => {
+                    let contents = match result.and_then(|pages| {
+                        let page = pages.and_then(|pages| pages.into_iter().next())
+                            .ok_or("The viewport preview is empty.")?;
+                        project_files::with_preview(&contents, page)
+                    }) {
+                        Ok(contents) => contents,
+                        Err(error) => {
+                            self.project.error = Some(format!("Could not capture the project preview: {error}"));
+                            self.project.after_save = None;
+                            self.project.snapshot = None;
+                            return;
+                        }
+                    };
+                    self.project.pending = Some(project_files::save(ctx, path, self.doc.name.clone(), contents));
+                }
+            }
+        }
         let Some(pending) = &self.project.pending else {
             return;
         };
@@ -555,7 +616,7 @@ impl BenchUpApp {
                 self.project.cut_report = Some((report, selection));
             }
         }
-        if self.project.pending.is_some() {
+        if self.project.pending.is_some() || self.project.preview_save.is_some() {
             Modal::new("project_file_pending", 360.)
                 .dismissible(false)
                 .show(ctx, |modal| {
@@ -582,7 +643,7 @@ impl BenchUpApp {
                     });
                 });
         }
-        if let Some(action) = self.project.confirm {
+        if let Some(action) = self.project.confirm.clone() {
             let response = Modal::new("project_unsaved", 480.).show(ctx, |modal| {
                 modal.header(|ui| {
                     ui.text_heading(tr!("projects.save_project_changes"));

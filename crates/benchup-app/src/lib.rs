@@ -56,3 +56,6 @@ mod reference_image_gpu;
 
 #[cfg(target_arch = "wasm32")]
 pub use storage::prepare_browser_storage;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod desktop_files;

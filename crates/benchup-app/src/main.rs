@@ -3,6 +3,10 @@
 use benchup_core::tr;
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
+    if let Some(result) = benchup_app::desktop_files::thumbnail_command() {
+        if let Err(error) = result { eprintln!("{error}"); std::process::exit(1); }
+        return Ok(());
+    }
     // Installer hooks must run before opening windows or loading user data.
     benchup_app::initialize_updater();
 

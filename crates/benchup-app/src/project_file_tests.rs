@@ -210,3 +210,37 @@ fn opening_current_and_legacy_extensions_defaults_save_as_to_bup() {
         }
     }
 }
+
+#[test]
+fn portable_preview_is_a_png_and_preserves_the_project() {
+    let doc = benchup_core::Document::default();
+    let json = serde_json::to_string(&doc).unwrap();
+    let preview = image::RgbaImage::from_pixel(32, 24, image::Rgba([45, 90, 180, 255]));
+    let contents = super::with_preview(&json, preview).unwrap();
+    let bytes = super::encode(&contents).unwrap();
+    assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+    let image = image::load_from_memory(&bytes).unwrap();
+    assert_eq!((image.width(), image.height()), (32, 24));
+    assert_eq!(super::decode(&bytes).unwrap(), doc);
+    let directory = tempfile::tempdir().unwrap();
+    let project = directory.path().join("Project with spaces.bup");
+    let thumbnail = directory.path().join("thumbnail.png");
+    std::fs::write(&project, &bytes).unwrap();
+    super::extract_preview(&project, &thumbnail).unwrap();
+    assert_eq!(image::open(&thumbnail).unwrap().to_rgba8(), image.to_rgba8());
+    assert_eq!(std::fs::read(&project).unwrap(), bytes);
+    let payload = super::project_payload(&bytes).unwrap();
+    assert!(payload.starts_with(&[0x1f, 0x8b]));
+    let mut corrupt = bytes.clone();
+    let offset = payload.as_ptr() as usize - bytes.as_ptr() as usize;
+    corrupt[offset] ^= 1;
+    assert!(super::decode(&corrupt).is_err());
+    assert!(super::decode(&bytes[..bytes.len() / 2]).is_err());
+}
+
+#[test]
+fn ordinary_png_is_not_a_project() {
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::new(2, 2).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    assert!(super::decode(png.get_ref()).is_err());
+}

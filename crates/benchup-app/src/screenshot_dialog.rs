@@ -453,7 +453,7 @@ fn capture_document(doc: &Document, dark: bool) -> Document {
     source
 }
 
-fn capture_display(doc: &Document, dark: bool) -> benchup_core::DisplaySettings {
+pub(super) fn capture_display(doc: &Document, dark: bool) -> benchup_core::DisplaySettings {
     let mut display = display_scene::effective_display(&doc.display, &doc.model, dark);
     display.axes = false;
     display.grid = false;
@@ -469,7 +469,7 @@ struct Readback {
     stride: u32,
     image: Option<RgbaImage>,
 }
-struct Capture {
+pub(crate) struct Capture {
     #[cfg(not(target_arch = "wasm32"))]
     device: wgpu::Device,
     settings: Settings,
@@ -485,7 +485,7 @@ impl Capture {
     ) -> Result<Self, String> {
         Self::with_scene(device, queue, parent, doc, settings, export, None)
     }
-    fn with_scene(
+    pub(super) fn with_scene(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         parent: &egui::Context,
@@ -680,7 +680,7 @@ impl Capture {
             started: parent.input(|i| i.time),
         })
     }
-    fn poll(&mut self, ctx: &egui::Context) -> Result<Option<Vec<RgbaImage>>, String> {
+    pub(crate) fn poll(&mut self, ctx: &egui::Context) -> Result<Option<Vec<RgbaImage>>, String> {
         #[cfg(not(target_arch = "wasm32"))]
         self.device
             .poll(wgpu::PollType::Poll)

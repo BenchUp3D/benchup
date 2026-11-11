@@ -6,6 +6,7 @@ import copy
 import io
 import json
 import os
+import plistlib
 from pathlib import Path
 import subprocess
 import sys
@@ -59,6 +60,22 @@ class DesktopReleaseTests(unittest.TestCase):
                 self.assertTrue(Path(args[args.index("--icon") + 1]).is_file())
                 if platform.startswith("macos"):
                     self.assertEqual(args[args.index("--bundleId") + 1], release.APP_ID)
+
+    def test_macos_bundle_declares_project_opening_and_png_thumbnail_conformance(self):
+        (self.directory / "benchup-app").touch()
+        captured = []
+        def inspect(args, **kwargs):
+            captured.append(plistlib.loads(Path(args[args.index("--plist") + 1]).read_bytes()))
+        with patch.dict(os.environ, {}, clear=True), patch.object(release.subprocess, "run", side_effect=inspect), patch.object(release, "validate_assets"):
+            release.package("macos-arm64", self.tag, self.directory, self.directory / "dist")
+        plist = captured[0]
+        self.assertEqual(plist["CFBundleVersion"], self.current)
+        self.assertEqual(plist["CFBundleExecutable"], "benchup-app")
+        doc = plist["CFBundleDocumentTypes"][0]
+        uti = plist["UTExportedTypeDeclarations"][0]
+        self.assertEqual(doc["LSItemContentTypes"], [uti["UTTypeIdentifier"]])
+        self.assertEqual(uti["UTTypeTagSpecification"]["public.filename-extension"], ["bup"])
+        self.assertIn("public.png", uti["UTTypeConformsTo"])
 
     def test_delta_in_migration_feed_prevents_publication(self):
         feed, asset = self.assets("windows-x64")

@@ -48,6 +48,13 @@ def main():
             candidate.write_text(entry)
             subprocess.run([validator, str(candidate)], check=True)
 
+    mime = data_home / f"mime/packages/{APP_ID}.xml"
+    mime.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT / f"packaging/linux/{APP_ID}.xml", mime)
+    thumbnailer = data_home / "thumbnailers/benchup.thumbnailer"
+    thumbnailer.parent.mkdir(parents=True, exist_ok=True)
+    thumbnailer.write_text(f"[Thumbnailer Entry]\nExec={desktop_exec(executable)} --thumbnail %i %o\nMimeType=application/x-benchup;\n")
+
     icons = data_home / "icons/hicolor"
     for size in [16, 32, 48, 256, 512]:
         target = icons / f"{size}x{size}/apps/{APP_ID}.png"
@@ -62,6 +69,7 @@ def main():
     desktop = applications / f"{APP_ID}.desktop"
     desktop.write_text(entry)
     for command, arguments in [
+        ("update-mime-database", [str(data_home / "mime")]),
         ("update-desktop-database", [str(applications)]),
         ("gtk-update-icon-cache", ["--force", "--ignore-theme-index", str(icons)]),
     ]:

@@ -2,7 +2,7 @@
 // null means this browser needs the download fallback; a Promise means the
 // picker owns the operation, including cancellation and write failures.
 if (typeof window.showSaveFilePicker !== 'function') return null;
-// Rust supplies compressed bytes asynchronously. Handle payload rejection even
+// Rust supplies the project bytes and GPU preview asynchronously. Handle payload rejection even
 // if the picker is cancelled or fails before the payload is needed.
 const payload = Promise.resolve(contents).then(value => ({value}), error => ({error}));
 return (async () => {
@@ -13,7 +13,7 @@ return (async () => {
             suggestedName: name,
             types: [{
                 description,
-                accept: {'application/gzip': ['.bup', '.k3d', '.ketchup']},
+                accept: {'application/x-benchup': ['.bup', '.k3d', '.ketchup']},
             }],
         });
     } catch (error) {

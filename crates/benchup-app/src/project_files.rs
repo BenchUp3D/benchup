@@ -89,16 +89,32 @@ fn exchange_name(name: &str, extension: &str) -> String {
     }
 }
 
-/// Project files use gzip-compressed JSON; recovery and save snapshots stay JSON.
+/// Portable previews use PNG with a private gzip document chunk. Headless saves
+/// retain gzip JSON; recovery and save snapshots stay JSON.
 pub(crate) fn encode(json: &str) -> Result<Vec<u8>, String> {
+    let mut value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let preview = value.as_object_mut().and_then(|v| v.remove("viewport_preview_png"));
+    let json = if preview.is_some() { serde_json::to_string(&value).map_err(|e| e.to_string())? } else { json.to_owned() };
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder
-        .write_all(json.as_bytes())
-        .and_then(|_| encoder.finish())
-        .map_err(|error| tr!("project_files.could_not_compress_project", error = error))
+    encoder.write_all(json.as_bytes()).map_err(|e| e.to_string())?;
+    let compressed = encoder.finish().map_err(|e| e.to_string())?;
+    if let Some(preview) = preview {
+        let mut png: Vec<u8> = serde_json::from_value(preview).map_err(|e| e.to_string())?;
+        // Insert a private ancillary chunk immediately before IEND. Standard PNG
+        // readers ignore it and display the saved GPU viewport thumbnail.
+        let end = png.len().checked_sub(12).ok_or("Invalid project preview")?;
+        let mut chunk = Vec::with_capacity(compressed.len() + 12);
+        chunk.extend_from_slice(&(u32::try_from(compressed.len()).map_err(|e| e.to_string())?).to_be_bytes());
+        chunk.extend_from_slice(b"buPd");
+        chunk.extend_from_slice(&compressed);
+        chunk.extend_from_slice(&png_crc(&chunk[4..]).to_be_bytes());
+        png.splice(end..end, chunk);
+        Ok(png)
+    } else { Ok(compressed) }
 }
 
 pub fn decode(bytes: &[u8]) -> Result<Document, String> {
+    let bytes = project_payload(bytes)?;
     // Detect the content rather than the extension so all project extensions
     // accept compressed files and older, plain JSON files unchanged.
     let mut decompressed = Vec::new();
@@ -272,6 +288,40 @@ pub fn save(
     name: String,
     contents: String,
 ) -> Pending {
+    save_payload(ctx, path, name, async move { encode(&contents) })
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(super) fn save_preview(
+    ctx: &eframe::egui::Context,
+    path: Option<PathBuf>,
+    name: String,
+    contents: String,
+    mut capture: crate::app::screenshot_dialog::Capture,
+) -> Pending {
+    let parent = ctx.clone();
+    save_payload(ctx, path, name, async move {
+        loop {
+            if let Some(pages) = capture.poll(&parent)? {
+                let page = pages.into_iter().next().ok_or("The viewport preview is empty.")?;
+                return encode(&with_preview(&contents, page)?);
+            }
+            let delay = js_sys::Promise::new(&mut |resolve, _reject| {
+                let _ = web_sys::window().unwrap()
+                    .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 16);
+            });
+            wasm_bindgen_futures::JsFuture::from(delay).await.map_err(|e| format!("{e:?}"))?;
+        }
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_payload(
+    ctx: &eframe::egui::Context,
+    path: Option<PathBuf>,
+    name: String,
+    payload: impl std::future::Future<Output = Result<Vec<u8>, String>> + 'static,
+) -> Pending {
     let (sender, receiver) = mpsc::channel();
     let name = file_name(
         path.as_deref()
@@ -286,7 +336,7 @@ pub fn save(
     // This future starts on the next microtask. Open the picker synchronously
     // before compression can consume the browser's transient user activation.
     let contents = wasm_bindgen_futures::future_to_promise(async move {
-        let bytes = encode(&contents)
+        let bytes = payload.await
             .map_err(|error| eframe::wasm_bindgen::JsValue::from_str(&error))?;
         Ok(js_sys::Uint8Array::from(bytes.as_slice()).into())
     });
@@ -313,7 +363,7 @@ pub fn save(
                     result?;
                     let value = wasm_bindgen_futures::JsFuture::from(contents).await?;
                     let bytes = js_sys::Uint8Array::new(&value).to_vec();
-                    download_bytes(&name, &bytes, "application/gzip")?;
+                    download_bytes(&name, &bytes, "application/x-benchup")?;
                     Ok(Outcome::Saved(None))
                 }
             }
@@ -696,4 +746,51 @@ pub(crate) fn save_pdf_contents(name: &str, report: Option<CutReport>, contents:
     write(&path, contents)?;
     open_pdf(&path).map_err(|error| tr!("project_files.pdf_saved_to_but_its_viewer_could_not", path.display(), error = error))?;
     Ok(Outcome::Exported)
+}
+
+/// Optional PNG preview lives in portable files only, never in recovery/history.
+/// The encoder moves this temporary field into a private PNG chunk.
+pub(crate) fn with_preview(json: &str, image: image::RgbaImage) -> Result<String, String> {
+    let image = image::DynamicImage::ImageRgba8(image).thumbnail(512, 512);
+    let mut png = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut png, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    let mut value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    value["viewport_preview_png"] = serde_json::to_value(png.into_inner()).map_err(|e| e.to_string())?;
+    serde_json::to_string(&value).map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn extract_preview(path: &std::path::Path, output: &std::path::Path) -> Result<(), String> {
+    let input = std::fs::read(path).map_err(|e| e.to_string())?;
+    if !input.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("This project has no saved viewport preview. Save it in BenchUp first.".into());
+    }
+    let image = image::load_from_memory_with_format(&input, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    image.save_with_format(output, image::ImageFormat::Png).map_err(|e| e.to_string())
+}
+
+fn png_crc(bytes: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for &byte in bytes {
+        crc ^= byte as u32;
+        for _ in 0..8 { crc = (crc >> 1) ^ (0xedb88320u32 & 0u32.wrapping_sub(crc & 1)); }
+    }
+    !crc
+}
+
+fn project_payload(bytes: &[u8]) -> Result<&[u8], String> {
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") { return Ok(bytes); }
+    let mut position = 8usize;
+    while let Some(header) = bytes.get(position..position.saturating_add(8)) {
+        let length = u32::from_be_bytes(header[..4].try_into().unwrap()) as usize;
+        let end = position.checked_add(12).and_then(|v| v.checked_add(length)).ok_or("Invalid project chunk size")?;
+        let chunk = bytes.get(position..end).ok_or("Truncated project chunk")?;
+        if &header[4..8] == b"buPd" {
+            let checksum = u32::from_be_bytes(chunk[8 + length..].try_into().unwrap());
+            if png_crc(&chunk[4..8 + length]) != checksum { return Err("The project data checksum is invalid.".into()); }
+            return Ok(&chunk[8..8 + length]);
+        }
+        position = end;
+    }
+    Err("This PNG does not contain a BenchUp project.".into())
 }

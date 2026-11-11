@@ -24,7 +24,7 @@ test('save prompts immediately and reports the chosen name only after committing
             assert.equal(options.suggestedName, 'House.bup');
             assert.equal(options.id, 'benchup-project-save');
             assert.equal(options.types[0].description, 'BenchUp project');
-            assert.deepEqual(options.types[0].accept, {'application/gzip': ['.bup', '.k3d', '.ketchup']});
+            assert.deepEqual(options.types[0].accept, {'application/x-benchup': ['.bup', '.k3d', '.ketchup']});
             return Promise.resolve({
                 name: 'New house.bup',
                 async createWritable() {
@@ -116,7 +116,7 @@ test('saving to either supported extension reports the chosen name unchanged', a
         const result = await save({
             async showSaveFilePicker(options) {
                 assert.equal(options.suggestedName, 'House.bup');
-                assert.deepEqual(options.types[0].accept, {'application/gzip': ['.bup', '.k3d', '.ketchup']});
+                assert.deepEqual(options.types[0].accept, {'application/x-benchup': ['.bup', '.k3d', '.ketchup']});
                 assert.equal(options.id, 'benchup-project-save');
                 return {
                     name: chosenName,
@@ -186,4 +186,39 @@ test('cancellation and picker errors handle a rejected compression payload', asy
         else await assert.rejects(pending, candidate => candidate === pickerError);
         await new Promise(resolve => setImmediate(resolve));
     }
+});
+
+test('saving a viewport preview keeps PNG bytes intact and opens the picker before rendering finishes', async () => {
+    // Real PNG bytes exercise the new container's binary save path. Rust's
+    // project-file tests cover inserting and reading the project data chunk.
+    const png = new Uint8Array(Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64'));
+    let finishPreview;
+    const rendering = new Promise(resolve => { finishPreview = resolve; });
+    const events = [];
+    let written;
+    const pending = save({
+        showSaveFilePicker(options) {
+            events.push('picker');
+            assert.deepEqual(options.types[0].accept, {'application/x-benchup': ['.bup', '.k3d', '.ketchup']});
+            return Promise.resolve({
+                name: 'Viewport.bup',
+                async createWritable() {
+                    events.push('create');
+                    return {
+                        async write(value) { written = value; },
+                        async close() { events.push('close'); },
+                        async abort() { assert.fail('The preview save should succeed'); },
+                    };
+                },
+            });
+        },
+    }, 'Viewport.bup', rendering);
+    assert.deepEqual(events, ['picker']);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(written, undefined);
+    finishPreview(png);
+    assert.equal(await pending, 'Viewport.bup');
+    assert.deepEqual(written, png);
+    assert.deepEqual(events, ['picker', 'create', 'close']);
 });

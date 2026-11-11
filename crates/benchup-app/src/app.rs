@@ -92,7 +92,7 @@ mod sharing;
 #[path = "pdf_export.rs"]
 mod pdf_export;
 #[path = "screenshot_dialog.rs"]
-mod screenshot_dialog;
+pub(crate) mod screenshot_dialog;
 #[path = "searchable_selector.rs"]
 mod searchable_selector;
 #[path = "settings.rs"]
@@ -475,6 +475,8 @@ impl BenchUpApp {
         app.release_notes.open_if_unread();
         app.account.start(&cc.egui_ctx);
         app.open_shared_startup(&cc.egui_ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::desktop_files::initialize();
         #[cfg(not(target_arch = "wasm32"))]
         let app = {
             let mut app = app;
@@ -6623,6 +6625,14 @@ impl eframe::App for BenchUpApp {
         self.history_preview = None;
         self.account.poll(&ctx);
         self.poll_project(&ctx);
+        #[cfg(target_os = "macos")]
+        ctx.request_repaint_after(Duration::from_millis(500));
+        #[cfg(not(target_arch = "wasm32"))]
+        if !self.project.blocked() {
+            if let Some(path) = crate::desktop_files::next_open() {
+                self.request_project(projects::Action::OpenPath(path), &ctx);
+            }
+        }
         self.poll_reference_image(&ctx);
         self.poll_sharing(&ctx);
         self.sharing_before_frame(&ctx);

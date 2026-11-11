@@ -16,7 +16,20 @@ if(!project)throw Error(usage);
 const mode=option('--mode','orbit');
 if(!['screenshot','orbit','sun','select','box-select','groups','draw-line','draw-rectangle','measure-tape','walk','scale','erase-edge','erase-face','erase-object'].includes(mode))throw Error('--mode must be orbit, sun, select, groups, draw-line, draw-rectangle, measure-tape, walk, or erase-edge');
 const projectBytes=await readFile(project);
-const model=(projectBytes[0]===0x1f&&projectBytes[1]===0x8b?gunzipSync(projectBytes):projectBytes).toString('utf8');
+let payload=projectBytes;
+if(payload.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))){
+  let found=false;
+  for(let offset=8;offset+12<=projectBytes.length;){
+    const length=projectBytes.readUInt32BE(offset);
+    if(offset+12+length>projectBytes.length)throw Error('Truncated project chunk');
+    if(projectBytes.toString('ascii',offset+4,offset+8)==='buPd'){
+      payload=projectBytes.subarray(offset+8,offset+8+length);found=true;break;
+    }
+    offset+=12+length;
+  }
+  if(!found)throw Error('PNG has no BenchUp project data');
+}
+const model=(payload[0]===0x1f&&payload[1]===0x8b?gunzipSync(payload):payload).toString('utf8');
 const projectData=JSON.parse(model);
 const scope=option('--scope',mode.startsWith('erase-')?'leaf':'root');
 if(!['root','group','leaf'].includes(scope))throw Error('--scope must be root, group, or leaf');
