@@ -458,10 +458,38 @@ impl Model {
             })
             .map(|f| f.id)
             .collect();
+        let inherited: Vec<_> = fresh
+            .iter()
+            .map(|vertices| {
+                if replaced.is_empty() {
+                    return (None, None);
+                }
+                let face = Face {
+                    id: 0,
+                    vertices: vertices.clone(),
+                    holes: vec![],
+                };
+                let sample = self
+                    .face_triangles(&face)
+                    .first()
+                    .map(|triangle| (triangle[0] + triangle[1] + triangle[2]) / 3.);
+                let parent = sample.and_then(|point| {
+                    replaced
+                        .iter()
+                        .find(|id| self.face_contains(&self.faces[id], point, false))
+                });
+                (
+                    parent.and_then(|id| self.face_colors.get(id)).copied(),
+                    parent.and_then(|id| self.entity_tags.get(id)).copied(),
+                )
+            })
+            .collect();
         self.faces.retain(|id, _| !replaced.contains(id));
         self.face_colors.retain(|id, _| self.faces.contains_key(id));
-        self.reference_images.retain(|id, _| self.faces.contains_key(id));
-        for vertices in fresh {
+        self.entity_tags.retain(|id, _| !replaced.contains(id));
+        self.reference_images
+            .retain(|id, _| self.faces.contains_key(id));
+        for (vertices, (color, tag)) in fresh.into_iter().zip(inherited) {
             let id = self.id();
             self.faces.insert(
                 id,
@@ -471,6 +499,12 @@ impl Model {
                     holes: vec![],
                 },
             );
+            if let Some(color) = color {
+                self.face_colors.insert(id, color);
+            }
+            if let Some(tag) = tag {
+                self.entity_tags.insert(id, tag);
+            }
         }
         // Keep nested outlines as holes even when their independently selectable fill is deleted.
         let holes: Vec<_> = self

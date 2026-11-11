@@ -546,6 +546,282 @@ fn pulling_an_existing_cap_stretches_walls_without_internal_faces() {
     model.validate().unwrap();
 }
 
+fn floor_with_upright() -> (Model, u64, u64) {
+    let mut model = Model::default();
+    let base = rectangle(&mut model, DVec3::ZERO, DVec3::new(100., -200., 0.));
+    let points = [
+        DVec3::new(100., 0., 0.),
+        DVec3::new(100., 0., 50.),
+        DVec3::new(100., -50., 50.),
+        DVec3::new(100., -50., 0.),
+        DVec3::new(100., 0., 0.),
+    ];
+    model.draw_polyline(&points, true).unwrap();
+    let upright = model
+        .faces
+        .values()
+        .find(|face| model.face_contains(face, DVec3::new(100., -25., 25.), false))
+        .unwrap()
+        .id;
+    (model, base, upright)
+}
+
+// Issue #26: a vertical rectangle pulled across a floor must divide that floor,
+// rather than leave a second bottom face overlapping the original surface.
+#[test]
+fn push_pull_across_a_floor_splits_the_surface_before_offset() {
+    for distance in [100., 100. - 1.4210854715202004e-14, 50.] {
+        let (mut model, base, upright) = floor_with_upright();
+        model.paint_face(base, [31, 66, 99]).unwrap();
+        let tag = model.add_tag("Floor").unwrap();
+        model
+            .assign_tag(&BTreeSet::from([base]), Some(tag))
+            .unwrap();
+        let before = model.clone();
+        let delta = -DVec3::X * distance;
+        let cap = model.push_pull_along(upright, delta).unwrap();
+        assert!(model.face_contains(
+            &model.faces[&cap],
+            DVec3::new(100. - distance, -25., 25.),
+            false,
+        ));
+
+        let floor_faces: Vec<_> = model
+            .faces
+            .values()
+            .filter(|face| {
+                face.vertices
+                    .iter()
+                    .all(|id| model.vertices[id].position.z.abs() < 1e-7)
+            })
+            .collect();
+        assert_eq!(
+            floor_faces.len(),
+            2,
+            "The floor must have two separate regions"
+        );
+        let floor_area: f64 = floor_faces.iter().map(|face| model.face_area(face)).sum();
+        assert!(
+            (floor_area - 20000.).abs() < 1e-6,
+            "Overlapping floor faces: {floor_area}"
+        );
+        let exposed = floor_faces
+            .iter()
+            .find(|face| model.face_contains(face, DVec3::new(50., -100., 0.), false))
+            .unwrap()
+            .id;
+        assert!((model.face_area(&model.faces[&exposed]) - (20000. - distance * 50.)).abs() < 1e-6);
+        assert_eq!(model.face_colors.get(&exposed), Some(&[31, 66, 99]));
+        assert_eq!(model.entity_tags.get(&exposed), Some(&tag));
+        for (id, vertex) in &model.vertices {
+            assert!(
+                model
+                    .vertices
+                    .range((id + 1)..)
+                    .all(|(_, other)| { vertex.position.distance(other.position) >= 1e-7 }),
+                "Extrusion created coincident vertices"
+            );
+        }
+        model.validate().unwrap();
+
+        let mut history = History::default();
+        history.record("Push/Pull", before.clone(), &model);
+        let after_pull = model.clone();
+        assert!(history.undo(&mut model));
+        assert_eq!(model, before);
+        assert!(history.redo(&mut model));
+        assert_eq!(model, after_pull);
+
+        let wall = model
+            .faces
+            .values()
+            .find(|face| model.face_contains(face, DVec3::new(75., -50., 25.), false))
+            .unwrap()
+            .id;
+        model.locked.insert(wall);
+        history.record("Lock", after_pull.clone(), &model);
+        let locked = model.clone();
+        model.locked.remove(&wall);
+        history.record("Unlock", locked, &model);
+        model.offset_face(exposed, 2.).unwrap();
+        history.record("Offset", after_pull.clone(), &model);
+        let inset = model
+            .faces
+            .values()
+            .find(|face| model.face_contains(face, DVec3::new(50., -100., 0.), false))
+            .unwrap()
+            .id;
+        assert_ne!(inset, exposed, "Offset must create a selectable inset face");
+        assert_eq!(model.faces[&exposed].holes.len(), 1);
+        assert!(
+            model.face_area(&model.faces[&inset]) < model.face_area(&after_pull.faces[&exposed])
+        );
+        let before_inset_pull = model.clone();
+        model.push_pull_along(inset, -DVec3::Z * 10.).unwrap();
+        history.record("Push/Pull", before_inset_pull, &model);
+        model.validate().unwrap();
+        let final_model = model.clone();
+        for _ in 0..5 {
+            assert!(history.undo(&mut model));
+        }
+        assert_eq!(model, before);
+        for _ in 0..5 {
+            assert!(history.redo(&mut model));
+        }
+        assert_eq!(model, final_model);
+        let doc = Document {
+            model: model.clone(),
+            history,
+            ..Document::default()
+        };
+        assert_eq!(
+            Document::from_json(&serde_json::to_string(&doc).unwrap())
+                .unwrap()
+                .model,
+            model
+        );
+    }
+}
+
+#[test]
+fn push_pull_joins_a_subdivided_floor_in_rotated_groups_and_components() {
+    for component in [false, true] {
+        let (mut model, _, _) = floor_with_upright();
+        model
+            .ensure_edge(DVec3::ZERO, DVec3::new(50., 0., 0.))
+            .unwrap();
+        let rotation = glam::DQuat::from_rotation_x(0.8) * glam::DQuat::from_rotation_z(0.3);
+        for vertex in model.vertices.values_mut() {
+            vertex.position = rotation * vertex.position;
+        }
+        let object = model
+            .make_object(&model.root_entities(), component, "Floor")
+            .unwrap();
+        let peer = if component {
+            let clipboard = model.copy_entities(&BTreeSet::from([object]));
+            model
+                .paste_entities(&clipboard, DVec3::X * 300.)
+                .first()
+                .copied()
+        } else {
+            None
+        };
+        assert!(model.enter_object(object));
+        let contents = model.object_contents(object).unwrap();
+        let upright = contents.faces.values().find(|face| {
+            contents.face_contains(face, rotation * DVec3::new(100., -25., 25.), false)
+        }).unwrap().id;
+        let cap = model
+            .push_pull_along(upright, rotation * (-DVec3::X * 100.))
+            .unwrap();
+        assert_eq!(model.parent(cap), Some(object));
+        assert_eq!(model.edit_context, Some(object));
+        for id in std::iter::once(object).chain(peer) {
+            let contents = model.object_contents(id).unwrap();
+            let offset = if Some(id) == peer {
+                DVec3::X * 300.
+            } else {
+                DVec3::ZERO
+            };
+            let exposed = contents
+                .faces
+                .values()
+                .find(|face| {
+                    contents.face_contains(
+                        face,
+                        rotation * DVec3::new(50., -100., 0.) + offset,
+                        false,
+                    )
+                })
+                .unwrap();
+            assert!((contents.face_area(exposed) - 15000.).abs() < 1e-6);
+            for (id, vertex) in &contents.vertices {
+                assert!(
+                    contents
+                        .vertices
+                        .range((id + 1)..)
+                        .all(|(_, other)| { vertex.position.distance(other.position) >= 1e-7 })
+                );
+            }
+            contents.validate().unwrap();
+        }
+        model.validate().unwrap();
+    }
+}
+
+#[test]
+fn push_pull_keeps_cap_holes_when_its_bottom_splits_a_floor() {
+    let (mut model, _, upright) = floor_with_upright();
+    let opening = [
+        DVec3::new(100., -10., 10.),
+        DVec3::new(100., -10., 40.),
+        DVec3::new(100., -40., 40.),
+        DVec3::new(100., -40., 10.),
+        DVec3::new(100., -10., 10.),
+    ];
+    model.draw_polyline(&opening, true).unwrap();
+    let fill = model.faces.values().find(|face| {
+        model.face_contains(face, DVec3::new(100., -25., 25.), false)
+    }).unwrap().id;
+    model.erase(&BTreeSet::from([fill]));
+    let cap = model.push_pull_along(upright, -DVec3::X * 100.).unwrap();
+    assert_eq!(model.faces[&cap].holes.len(), 1);
+    assert!(!model.face_contains(&model.faces[&cap], DVec3::new(0., -25., 25.), false));
+    assert!((model.face_area(&model.faces[&cap]) - 1600.).abs() < 1e-7);
+    assert!(model.nearest_face(crate::Ray {
+        origin: DVec3::new(-10., -25., 25.), direction: DVec3::X,
+    }).is_none(), "The opening must remain clear through both caps");
+    model.validate().unwrap();
+}
+
+#[test]
+fn push_pull_does_not_weld_into_separate_hidden_or_locked_geometry() {
+    for protection in 0..3 {
+        let mut model = Model::default();
+        let floor = rectangle(&mut model, DVec3::ZERO, DVec3::new(100., -200., 0.));
+        let protected = match protection {
+            0 => model
+                .make_object(&model.root_entities(), false, "Separate floor")
+                .unwrap(),
+            1 => {
+                model.hidden.insert(floor);
+                floor
+            }
+            _ => {
+                model.locked.insert(floor);
+                floor
+            }
+        };
+        let before = model.clone();
+        let points = [
+            DVec3::new(100., 0., 0.),
+            DVec3::new(100., 0., 50.),
+            DVec3::new(100., -50., 50.),
+            DVec3::new(100., -50., 0.),
+            DVec3::new(100., 0., 0.),
+        ];
+        model.draw_polyline(&points, true).unwrap();
+        let upright = model
+            .faces
+            .values()
+            .find(|face| model.face_contains(face, DVec3::new(100., -25., 25.), false))
+            .unwrap()
+            .id;
+        model.push_pull_along(upright, -DVec3::X * 100.).unwrap();
+        for (id, vertex) in &before.vertices {
+            assert_eq!(&model.vertices[id], vertex);
+        }
+        for (id, edge) in &before.edges {
+            assert_eq!(&model.edges[id], edge);
+        }
+        for (id, face) in &before.faces {
+            assert_eq!(&model.faces[id], face);
+        }
+        assert!(model.contains_entity(&protected));
+        model.validate().unwrap();
+    }
+}
+
 #[test]
 fn pulling_an_offset_inner_face_opens_the_surface_and_preserves_the_rim() {
     for angle in [0., 0.8] {

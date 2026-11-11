@@ -185,7 +185,7 @@ impl Model {
         self.edges.insert(id, Edge { id, a, b });
         id
     }
-    fn split_at(&mut self, vertex: u64, drawing_edges: &mut BTreeSet<u64>) {
+    pub(crate) fn split_at(&mut self, vertex: u64, drawing_edges: &mut BTreeSet<u64>) {
         let point = self.vertices[&vertex].position;
         let splits: Vec<_> = self
             .edges

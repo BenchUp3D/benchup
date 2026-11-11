@@ -401,6 +401,21 @@ impl Model {
         holes: Vec<Vec<u64>>,
         color: Option<[u8; 3]>,
     ) -> u64 {
+        let key = faces::canonical_ring(&vertices);
+        if let Some(id) = self
+            .faces
+            .values()
+            .find(|face| face.vertices.len() == vertices.len() && faces::canonical_ring(&face.vertices) == key)
+            .map(|face| face.id)
+        {
+            // Connecting the extrusion's edges can already have filled this
+            // region while splitting a neighboring surface.
+            self.faces.get_mut(&id).unwrap().holes = holes;
+            if let Some(color) = color {
+                self.face_colors.insert(id, color);
+            }
+            return id;
+        }
         for ring in std::iter::once(&vertices).chain(holes.iter()) {
             for i in 0..ring.len() {
                 self.insert_edge(ring[i], ring[(i + 1) % ring.len()]);
@@ -419,6 +434,83 @@ impl Model {
             self.face_colors.insert(id, color);
         }
         id
+    }
+
+    /// Connect new extrusion boundaries to the editable drawing before adding
+    /// their explicit faces. Raw walls alone do not split an existing floor.
+    fn connect_extrusion(
+        &mut self,
+        rings: &mut [Vec<u64>],
+        mut drawing_edges: BTreeSet<u64>,
+        drawing_vertices: &BTreeSet<u64>,
+        surfaces: &[faces::Plane],
+    ) {
+        let old_edges = drawing_edges.clone();
+        for ring in rings.iter() {
+            for i in 0..ring.len() {
+                drawing_edges.insert(self.insert_edge(ring[i], ring[(i + 1) % ring.len()]));
+            }
+        }
+        let mut vertices = drawing_vertices.clone();
+        vertices.extend(rings.iter().flatten().copied());
+        let mut lo = DVec3::splat(f64::INFINITY);
+        let mut hi = DVec3::splat(f64::NEG_INFINITY);
+        for id in rings.iter().flatten() {
+            lo = lo.min(self.vertices[id].position);
+            hi = hi.max(self.vertices[id].position);
+        }
+        let vertices: Vec<_> = vertices
+            .into_iter()
+            .filter(|id| {
+                let point = self.vertices[id].position;
+                point.cmpge(lo - DVec3::splat(EPS)).all()
+                    && point.cmple(hi + DVec3::splat(EPS)).all()
+            })
+            .collect();
+        for &id in &vertices {
+            self.split_at(id, &mut drawing_edges);
+        }
+        // A side can retrace a boundary containing intermediate vertices. Its
+        // face must use the split edges too, rather than add a long duplicate.
+        for ring in rings {
+            let mut split = Vec::new();
+            for i in 0..ring.len() {
+                let a = ring[i];
+                let b = ring[(i + 1) % ring.len()];
+                let start = self.vertices[&a].position;
+                let delta = self.vertices[&b].position - start;
+                let mut interior: Vec<_> = vertices
+                    .iter()
+                    .filter(|&&id| id != a && id != b)
+                    .filter_map(|&id| {
+                        let point = self.vertices[&id].position;
+                        let t = (point - start).dot(delta) / delta.length_squared();
+                        (t > EPS && t < 1. - EPS && (start + delta * t).distance(point) < EPS)
+                            .then_some((t, id))
+                    })
+                    .collect();
+                interior.sort_by(|a, b| a.0.total_cmp(&b.0));
+                split.push(a);
+                split.extend(interior.into_iter().map(|(_, id)| id));
+            }
+            *ring = split;
+        }
+        // Only coplanar contacts need planar region discovery. The other walls
+        // and the cap retain their explicit winding and hole boundaries.
+        for id in drawing_edges
+            .difference(&old_edges)
+            .copied()
+            .collect::<Vec<_>>()
+        {
+            let edge = &self.edges[&id];
+            let (a, b) = self.points(edge);
+            if surfaces.iter().any(|plane| {
+                (a - plane.origin).dot(plane.normal).abs() < faces::TOL
+                    && (b - plane.origin).dot(plane.normal).abs() < faces::TOL
+            }) {
+                self.create_faces_with_edges(edge.a, edge.b, &drawing_edges);
+            }
+        }
     }
 
     /// Extrude a planar face, including its hole walls. Keep a base only when the
@@ -465,9 +557,8 @@ impl Model {
         keep_starting_face: bool,
     ) -> Result<u64, &'static str> {
         if self.edit_context.is_some() {
-            return self.edit_in_context(|model| {
-                model.extrude_face(face_id, delta, keep_starting_face)
-            });
+            return self
+                .edit_in_context(|model| model.extrude_face(face_id, delta, keep_starting_face));
         }
         self.editable_surface(face_id)?;
         let distance = delta.length();
@@ -501,19 +592,36 @@ impl Model {
                     })
                 })
         };
-        if !keep_starting_face && boundary.iter().all(|&(a, b)| {
-            self.faces.values().any(|other| {
-                other.id != face_id
-                    && self.parent(other.id).is_none()
-                    && faces::plane(self, &other.vertices)
-                        .is_some_and(|p| p.normal.cross(normal).length() > EPS)
-                    && shares_edge(other, a, b)
+        if !keep_starting_face
+            && boundary.iter().all(|&(a, b)| {
+                self.faces.values().any(|other| {
+                    other.id != face_id
+                        && self.parent(other.id).is_none()
+                        && faces::plane(self, &other.vertices)
+                            .is_some_and(|p| p.normal.cross(normal).length() > EPS)
+                        && shares_edge(other, a, b)
+                })
             })
-        }) {
+        {
             self.move_selection(&BTreeSet::from([face_id]), delta)?;
             return Ok(face_id);
         }
         let mut next = self.clone();
+        let drawing_edges = next.drawing_edges();
+        let drawing_vertices: BTreeSet<_> = drawing_edges
+            .iter()
+            .flat_map(|id| [next.edges[id].a, next.edges[id].b])
+            .collect();
+        let surfaces: Vec<_> = self
+            .faces
+            .values()
+            .filter(|face| {
+                self.parent(face.id).is_none()
+                    && !self.is_hidden(face.id)
+                    && !self.is_locked(face.id)
+            })
+            .filter_map(|face| faces::plane(self, &face.vertices))
+            .collect();
         let joined_surface = self.faces.values().any(|other| {
             other.id != face_id
                 && self.parent(other.id).is_none()
@@ -531,24 +639,41 @@ impl Model {
             .chain(face.holes.iter())
             .flatten()
         {
-            top.entry(*id)
-                .or_insert_with(|| next.raw_vertex(self.vertices[id].position + delta));
+            top.entry(*id).or_insert_with(|| {
+                let point = self.vertices[id].position + delta;
+                next.vertices
+                    .values()
+                    .find(|v| {
+                        !keep_starting_face
+                            && drawing_vertices.contains(&v.id)
+                            && v.position.distance(point) < EPS
+                    })
+                    .map(|v| v.id)
+                    .unwrap_or_else(|| next.raw_vertex(point))
+            });
         }
+        let mut rings = Vec::new();
         for ring in std::iter::once(&face.vertices).chain(face.holes.iter()) {
             for i in 0..ring.len() {
                 let a = ring[i];
                 let b = ring[(i + 1) % ring.len()];
-                next.raw_face(vec![a, b, top[&b], top[&a]], vec![], color);
+                rings.push(vec![a, b, top[&b], top[&a]]);
             }
         }
-        let cap = next.raw_face(
-            face.vertices.iter().map(|id| top[id]).collect(),
+        let walls = rings.len();
+        rings.push(face.vertices.iter().map(|id| top[id]).collect());
+        rings.extend(
             face.holes
                 .iter()
-                .map(|r| r.iter().map(|id| top[id]).collect())
-                .collect(),
-            color,
+                .map(|r| r.iter().map(|id| top[id]).collect::<Vec<_>>()),
         );
+        if !keep_starting_face {
+            next.connect_extrusion(&mut rings, drawing_edges, &drawing_vertices, &surfaces);
+        }
+        for ring in &rings[..walls] {
+            next.raw_face(ring.clone(), vec![], color);
+        }
+        let cap = next.raw_face(rings[walls].clone(), rings[walls + 1..].to_vec(), color);
         next.validate()?;
         *self = next;
         Ok(cap)
