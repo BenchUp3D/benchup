@@ -4219,6 +4219,28 @@ impl BenchUpApp {
             include_faces,
         )
     }
+    fn modeling_face_hover(&mut self, pos: Pos2) -> Option<u64> {
+        let model = self.modeling.as_ref()?.preview.as_ref().unwrap_or(&self.doc.model);
+        // Hit the same geometry that is drawn, after updating this pointer's
+        // preview. Reuse the render caches so caps, walls and holes all occlude
+        // correctly without a second scene triangulation or CPU projection.
+        let revision = self.render_model.update(model);
+        self.render_face_cache.update_for_revision(model, revision);
+        self.render_entity_cache.update_for_revision(model, revision);
+        self.render_picking_cache.set_display(&self.doc.display);
+        self.render_picking_cache.update(&self.render_face_cache);
+        let ray = self.doc.camera.ray(dv(pos - self.viewport.min), dv(self.viewport.size()));
+        self.render_picking_cache
+            .nearest(&self.render_face_cache, &self.render_entity_cache, ray, false)
+            .and_then(|(id, _, _)| {
+                // An uneditable foreground group still blocks faces behind it.
+                // A selected single-face group can be edited without opening it.
+                let context = self.render_entity_cache.get(id).context;
+                (context == Some(id) || context.is_some_and(|id| self.selected.contains(&id)))
+                    .then_some(id)
+            })
+    }
+
     fn update_pointer(&mut self, pos: Pos2) {
         // Navigation and selection rectangles do not need hover queries.
         // Keep their feedback responsive on large imported models.
@@ -4237,6 +4259,11 @@ impl BenchUpApp {
         if self.modeling.is_some() && matches!(self.tool, Tool::Move | Tool::Rotate | Tool::Scale) {
             self.hover = None;
             self.update_modeling(pos);
+            return;
+        }
+        if self.modeling.is_some() && matches!(self.tool, Tool::PushPull | Tool::Offset) {
+            self.update_modeling(pos);
+            self.hover = self.modeling_face_hover(pos);
             return;
         }
         if self.modeling.is_none() && matches!(self.tool, Tool::PushPull | Tool::Offset) {
@@ -4262,18 +4289,14 @@ impl BenchUpApp {
         }
         self.hover = if self.tool == Tool::Erase {
             self.erase_target(pos)
-        } else if let Some(face) = self.selected_modeling_face().filter(|face| {
-            self.doc.model.face_hit(&self.doc.model.faces[face], self.doc.camera.ray(local, size)).is_some()
-        }) {
-            Some(face)
-        } else if matches!(self.tool, Tool::PushPull | Tool::Offset | Tool::Paint) {
+        } else if self.tool == Tool::Paint {
             self.prepare_picking();
             self.picking_cache
                 .nearest(
                     &self.face_cache,
                     &self.entity_cache,
                     self.doc.camera.ray(local, size),
-                    self.tool != Tool::Paint,
+                    false,
                 )
                 .and_then(|(id, _, _)| {
                     if self.tool == Tool::Paint && self.paint_target == PaintTarget::Group {

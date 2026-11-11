@@ -313,3 +313,156 @@ fn flat_face_starts_with_zero_pull_depth() {
     let plane = benchup_core::faces::plane(&h.app.doc.model, &h.app.doc.model.faces[&face].vertices).unwrap();
     assert!(BenchUpApp::push_pull_depth(&h.app.doc.model, face, plane.origin, plane.normal).abs() < 1e-7);
 }
+
+fn hover_reference_face(model: &mut Model, center: DVec3) -> u64 {
+    let ring = [center + DVec3::new(-0.1, -0.1, 0.), center + DVec3::new(0.1, -0.1, 0.),
+        center + DVec3::new(0.1, 0.1, 0.), center + DVec3::new(-0.1, 0.1, 0.)];
+    for i in 0..4 {
+        model.add_edge(ring[i], ring[(i + 1) % 4]).unwrap();
+    }
+    *model.faces.keys().next_back().unwrap()
+}
+
+#[test]
+fn pull_hover_uses_the_current_preview_and_keeps_foreground_faces_hoverable() {
+    for projection in [benchup_core::Projection::Perspective, benchup_core::Projection::Parallel] {
+        for keep_starting_face in [false, true] {
+            for only_visible in [false, true] {
+                for foreground in [false, true] {
+                    let mut h = Harness::new();
+                    let face = modeling_rectangle(&mut h);
+                    let base_depth = if keep_starting_face { 0. } else { 2. };
+                    let face = if base_depth > 0. {
+                        h.app.doc.model.push_pull_along(face, DVec3::Z * base_depth).unwrap()
+                    } else {
+                        face
+                    };
+                    h.app.doc.camera.projection = projection;
+                    h.app.doc.snap_to_geometry = false;
+                    h.app.doc.snap_to_axes = false;
+                    h.app.snap_only_visible = only_visible;
+                    h.app.push_pull_new_faces = keep_starting_face;
+                    h.app.set_tool(Tool::PushPull);
+                    let anchor = DVec3::new(2., 2., base_depth);
+                    let cap_point = anchor + DVec3::Z;
+                    let cursor = h.at(cap_point);
+                    let ray = h.app.doc.camera.ray(dv(cursor - h.app.viewport.min), dv(h.app.viewport.size()));
+                    let reference = hover_reference_face(&mut h.app.doc.model,
+                        ray.plane_z(base_depth + if foreground { 1.5 } else { 0.5 }).unwrap());
+                    // Both reference faces win the old source-model hover query.
+                    assert_eq!(h.app.doc.model.nearest_editable_face(ray).unwrap().0, reference);
+                    let before = h.app.doc.model.clone();
+                    h.app.begin_modeling(h.at(anchor), &h.ctx);
+                    assert_eq!(h.app.modeling.as_ref().unwrap().face, Some(face));
+                    let source_revision = h.app.face_cache.revision();
+                    let mut preview_revision = None;
+                    for _ in 0..3 {
+                        h.app.update_pointer(cursor);
+                        let edit = h.app.modeling.as_ref().unwrap();
+                        assert!(edit.error.is_none(), "{:?}", edit.error);
+                        assert!((edit.value - 1.).abs() < 1e-5);
+                        let preview = edit.preview.as_ref().unwrap();
+                        let hovered = h.app.hover.unwrap();
+                        if foreground {
+                            assert_eq!(hovered, reference);
+                        } else {
+                            assert_ne!(hovered, reference);
+                            assert!(preview.face_contains(&preview.faces[&hovered], cap_point, true));
+                        }
+                        assert_eq!(h.app.doc.model, before);
+                        assert_eq!(h.app.face_cache.revision(), source_revision);
+                        let revision = h.app.render_face_cache.revision();
+                        if let Some(previous) = preview_revision {
+                            assert_eq!(revision, previous, "unchanged hover reuses preview geometry");
+                        }
+                        preview_revision = Some(revision);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn pull_hover_respects_preview_holes_walls_empty_space_and_zero_depth() {
+    for projection in [benchup_core::Projection::Perspective, benchup_core::Projection::Parallel] {
+        let mut h = Harness::new();
+        let face = modeling_rectangle(&mut h);
+        let ring = [DVec3::new(1., 1., 0.), DVec3::new(3., 1., 0.),
+            DVec3::new(3., 3., 0.), DVec3::new(1., 3., 0.)];
+        for i in 0..4 {
+            h.app.doc.model.add_edge(ring[i], ring[(i + 1) % 4]).unwrap();
+        }
+        h.app.doc.model.faces.retain(|id, _| *id == face);
+        assert_eq!(h.app.doc.model.faces[&face].holes.len(), 1);
+        h.app.doc.camera.projection = projection;
+        h.app.doc.snap_to_geometry = false;
+        h.app.doc.snap_to_axes = false;
+        h.app.set_tool(Tool::PushPull);
+        let hole_cursor = h.at(DVec3::new(2., 2., 1.));
+        let ray = h.app.doc.camera.ray(dv(hole_cursor - h.app.viewport.min), dv(h.app.viewport.size()));
+        let reference = hover_reference_face(&mut h.app.doc.model, ray.plane_z(0.5).unwrap());
+        let anchor = DVec3::new(0.5, 0.5, 0.);
+        h.app.begin_modeling(h.at(anchor), &h.ctx);
+        h.app.length_input = "1m".into();
+
+        h.app.update_pointer(h.at(anchor + DVec3::Z));
+        let cap = h.app.hover.unwrap();
+        assert_ne!(cap, face);
+        assert_ne!(cap, reference);
+        h.app.update_pointer(hole_cursor);
+        assert_eq!(h.app.hover, Some(reference), "the hole leaves the background directly visible");
+
+        let wall_point = DVec3::new(2., 0., 0.5);
+        h.app.update_pointer(h.at(wall_point));
+        let wall = h.app.hover.unwrap();
+        assert_ne!(wall, face);
+        assert_ne!(wall, cap);
+        assert_ne!(wall, reference);
+        let preview = h.app.modeling.as_ref().unwrap().preview.as_ref().unwrap();
+        assert!(preview.face_contains(&preview.faces[&wall], wall_point, true));
+
+        h.app.update_pointer(h.at(DVec3::new(8., 8., 1.)));
+        assert!(h.app.hover.is_none());
+        h.app.length_input.clear();
+        h.app.update_pointer(h.at(anchor));
+        assert!(h.app.modeling.as_ref().unwrap().preview.is_none());
+        assert_eq!(h.app.hover, Some(face), "zero depth must restore the source geometry");
+    }
+}
+
+#[test]
+fn pull_hover_supports_selected_groups_and_does_not_pick_through_other_groups() {
+    for occluded in [false, true] {
+        let mut h = Harness::new();
+        modeling_rectangle(&mut h);
+        let group = h.app.doc.model.make_object(
+            &h.app.doc.model.selectable_entities(), false, "Panel",
+        ).unwrap();
+        h.app.selected = BTreeSet::from([group]);
+        h.app.doc.snap_to_geometry = false;
+        h.app.doc.snap_to_axes = false;
+        h.app.set_tool(Tool::PushPull);
+        let anchor = DVec3::new(2., 2., 0.);
+        let cap_point = anchor + DVec3::Z;
+        let cursor = h.at(cap_point);
+        if occluded {
+            let ray = h.app.doc.camera.ray(dv(cursor - h.app.viewport.min), dv(h.app.viewport.size()));
+            let reference = hover_reference_face(&mut h.app.doc.model, ray.plane_z(1.5).unwrap());
+            h.app.doc.model.make_object(&BTreeSet::from([reference]), false, "Foreground").unwrap();
+        }
+        h.app.begin_modeling(h.at(anchor), &h.ctx);
+        h.app.length_input = "1m".into();
+        h.app.update_pointer(cursor);
+        let preview = h.app.modeling.as_ref().unwrap().preview.as_ref().unwrap();
+        if occluded {
+            assert!(h.app.hover.is_none());
+        } else {
+            let face = h.app.hover.unwrap();
+            assert_eq!(preview.entity_in_context(face), Some(group));
+            assert!(preview.face_contains(&preview.faces[&face], cap_point, true));
+        }
+        assert_eq!(h.app.selected, BTreeSet::from([group]));
+        assert_eq!(h.app.doc.model.edit_context, None);
+    }
+}
