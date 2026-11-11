@@ -31,13 +31,22 @@
           "Select faces and connected geometry with repeated clicks.",
           "Control snapping to directly hovered visible elements with a remembered setting.",
           "Use the clearer Focus on Edited Group display option.",
-          "Improve Push/Pull face merging, drag origins, and snap-target selection."
+          "Improve Push/Pull face merging, drag origins, and snap-target selection.",
+          "Improve Push/Pull preview occlusion, face hovering, and inward cuts."
         ]
       },
       {
         "title": "Release reliability",
         "changes": [
-          "Improve Linux dependency installation with faster timeouts and an Ubuntu mirror fallback."
+          "Improve Linux dependency installation with faster timeouts and an Ubuntu mirror fallback.",
+          "Handle Linux CI runner mirror lists when falling back to Ubuntu package mirrors."
+        ]
+      },
+      {
+        "title": "Desktop integration and previews",
+        "changes": [
+          "Open .bup projects through desktop file associations and improve portable viewport previews.",
+          "Use a theme-aware New Project icon."
         ]
       }
     ]
