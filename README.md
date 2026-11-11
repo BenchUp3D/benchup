@@ -39,6 +39,10 @@ Assign stock materials and wood types to parts, configure sanding and finishing 
 This README covers developer installation, building, verification, and deployment.
 For instructions on using BenchUp, see the [user documentation](docs/README.md).
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request guidelines
+
 ## Prerequisites
 
 - Rust 1.95 or newer, installed with rustup; the repository was checked with Rust 1.97.1.
