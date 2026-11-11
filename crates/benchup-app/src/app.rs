@@ -89,6 +89,8 @@ mod web_viewport_benchmark;
 mod fasteners;
 #[path = "sharing.rs"]
 mod sharing;
+#[path = "pdf_export.rs"]
+mod pdf_export;
 #[path = "screenshot_dialog.rs"]
 mod screenshot_dialog;
 #[path = "searchable_selector.rs"]
@@ -5076,7 +5078,8 @@ impl BenchUpApp {
             || self.joint_highlight_preview_key().is_some();
         // Prepare picking while the scene is being prepared, not on its first
         // click. Plain source and render geometry can start from the same data.
-        if self.doc.model.faces.len() >= 1024
+        if background
+            && self.doc.model.faces.len() >= 1024
             && self.face_cache.revision() == 0
             && self.doc.model.connections.is_empty()
         {

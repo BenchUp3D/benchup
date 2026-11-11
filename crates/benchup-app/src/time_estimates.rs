@@ -837,22 +837,49 @@ pub(super) fn treatment_controls(
     settings.sanitize();
 }
 
+/// Only the inputs needed for a report cross the worker boundary; no history,
+/// rendering resources or account state is copied.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(super) struct PdfInput {
+    name: String,
+    model: std::sync::Arc<Model>,
+    selected: BTreeSet<u64>,
+    display: benchup_core::DisplaySettings,
+    settings: Settings,
+    joinery_rates: JoineryRates,
+    stock: stock_settings::Settings,
+    layout: crate::cutting_layout::Settings,
+}
+impl PdfInput {
+    pub(super) fn render(self) -> Result<Vec<u8>, String> {
+        let mut app = BenchUpApp::with_document(Document {
+            name: self.name, model: std::sync::Arc::unwrap_or_clone(self.model), display: self.display,
+            ..Default::default()
+        }, None, false);
+        app.selected = self.selected;
+        app.time_estimates = self.settings;
+        app.joinery_rates = self.joinery_rates;
+        app.general_settings.stock = self.stock;
+        app.project.cutting_plan_layout = self.layout;
+        crate::estimate_pdf::render(&app.time_estimate_report())
+    }
+}
+
 impl BenchUpApp {
     pub(super) fn export_time_estimates(&mut self, ctx: &egui::Context) {
         if self.project.blocked() {
             return;
         }
-        let report = self.time_estimate_report();
-        match crate::estimate_pdf::render(&report) {
-            Ok(bytes) => {
-                self.project.operation = projects::Operation::Export;
-                self.project.pending = Some(crate::project_files::export_estimate_pdf(
-                    ctx,
-                    self.doc.name.clone(),
-                    bytes,
-                ));
-            }
-            Err(error) => self.project.error = Some(error),
+        self.queue_pdf_export(ctx, pdf_export::Kind::Estimates);
+    }
+
+    pub(super) fn estimate_pdf_input(&mut self, ctx: &egui::Context) -> PdfInput {
+        self.document_revision(ctx);
+        PdfInput {
+            name: self.doc.name.clone(), model: self.document_model.shared(),
+            selected: self.selected.clone(), display: self.doc.display.clone(),
+            settings: self.time_estimates.clone(), joinery_rates: self.joinery_rates.clone(),
+            stock: self.general_settings.stock.clone(), layout: self.project.cutting_plan_layout,
         }
     }
 

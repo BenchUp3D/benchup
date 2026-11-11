@@ -21,6 +21,7 @@ pub(super) enum Operation {
     Export,
     CutReport(CutReport),
     Screenshot,
+    EstimatePdf,
 }
 
 pub(super) struct Project {
@@ -314,25 +315,38 @@ impl BenchUpApp {
     }
 
     fn export_cut_report(&mut self, ctx: &egui::Context, report: CutReport, selection: bool) {
-        let selected = if selection {
-            self.selected.clone()
-        } else {
-            BTreeSet::new()
+        self.queue_pdf_export(ctx, pdf_export::Kind::CutReport(report, selection));
+    }
+
+    pub(super) fn queue_pdf_export(&mut self, ctx: &egui::Context, kind: pdf_export::Kind) {
+        if self.project.blocked() { return; }
+        // Reserve before any asynchronous work so browser popup permission is
+        // still available. The viewer itself also displays a preparing message.
+        let viewer = match project_files::PdfViewer::reserve() {
+            Ok(viewer) => viewer,
+            Err(error) => { self.project.error = Some(error); return; }
         };
-        if selection && selected.is_empty() {
-            self.project.error =
-                Some(tr!("projects.select_at_least_one_part_or_choose_the").into());
-            return;
-        }
-        self.project.operation = Operation::CutReport(report);
-        self.project.pending = Some(project_files::export_cut_report(
-            ctx,
-            report,
-            self.doc.name.clone(),
-            self.doc.model.clone(),
-            selected,
-            self.project.cutting_plan_layout,
-        ));
+        self.project.operation = match kind {
+            pdf_export::Kind::Estimates => Operation::EstimatePdf,
+            pdf_export::Kind::CutReport(report, _) => Operation::CutReport(report),
+        };
+        let request = match kind {
+            pdf_export::Kind::Estimates => pdf_export::Request::Estimates(self.estimate_pdf_input(ctx)),
+            pdf_export::Kind::CutReport(report, selection) => {
+                let selected = if selection { self.selected.clone() } else { BTreeSet::new() };
+                if selection && selected.is_empty() {
+                    self.project.error = Some(tr!("projects.select_at_least_one_part_or_choose_the").into());
+                    return;
+                }
+                self.document_revision(ctx);
+                pdf_export::Request::CutReport {
+                    report, name: self.doc.name.clone(), model: self.document_model.shared(),
+                    selected, layout: self.project.cutting_plan_layout,
+                }
+            }
+        };
+        self.project.pending = Some(pdf_export::start(ctx, self.doc.name.clone(), request, viewer));
+        ctx.request_repaint();
     }
 
     pub(super) fn save_project(&mut self, ctx: &egui::Context, save_as: bool) {
@@ -455,6 +469,8 @@ impl BenchUpApp {
                     (Operation::CutReport(CutReport::WorkshopLabels), false) => {
                         tr!("projects.workshop_labels_pdf_saved_and_opened")
                     }
+                    (Operation::EstimatePdf, true) => tr!("projects.estimates_pdf_opened"),
+                    (Operation::EstimatePdf, false) => tr!("projects.estimates_pdf_saved"),
                     (Operation::Screenshot, true) => tr!("projects.screenshot_download_started"),
                     (Operation::Screenshot, false) => tr!("projects.screenshot_exported"),
                     (_, true) => tr!("projects.geometry_download_started"),
@@ -549,6 +565,7 @@ impl BenchUpApp {
                                 Operation::CutReport(CutReport::CuttingPlan) => tr!("projects.preparing_cutting_plan_pdf"),
                                 Operation::CutReport(CutReport::WorkshopLabels) => tr!("projects.preparing_workshop_labels_pdf"),
                                 Operation::Screenshot => tr!("projects.exporting_screenshot"),
+                                Operation::EstimatePdf => tr!("projects.preparing_estimates_pdf"),
                             });
                         });
                     });

@@ -1470,3 +1470,27 @@ fn apply_materials_to_descendants_preserves_nested_selection_and_supports_undo()
     app.apply_materials_to_children(&ctx);
     assert_eq!(app.doc.model, locked);
 }
+
+#[test]
+fn background_pdf_snapshot_preserves_report_settings_without_editing_the_project() {
+    let ctx = egui::Context::default();
+    let mut app = BenchUpApp::with_document(Document::default(), None, false);
+    app.doc.name = "Background estimate".into();
+    let face = rectangle(&mut app.doc.model, DVec3::ZERO);
+    let object = app.doc.model.make_object(&BTreeSet::from([face]), false, "Report board").unwrap();
+    assign_wood(&mut app.doc.model, object);
+    app.selected.insert(object);
+    app.general_settings.stock = wood_catalog();
+    app.general_settings.stock.currency = "CAD".into();
+    app.time_estimates.stain.enabled = true;
+    app.time_estimates.stain.minutes_per_m2 = 7.;
+    app.project.cutting_plan_layout.kerf_mm = 4.;
+    app.project.cutting_plan_layout.allow_rotation = false;
+    app.joinery_rates.set_minutes(JointKind::MortiseTenon, 23.);
+    let before = app.doc.clone();
+    let expected = crate::estimate_pdf::render(&app.time_estimate_report()).unwrap();
+    let input = app.estimate_pdf_input(&ctx);
+    let restored: PdfInput = serde_json::from_str(&serde_json::to_string(&input).unwrap()).unwrap();
+    assert_eq!(restored.render().unwrap(), expected);
+    assert_eq!(app.doc, before);
+}

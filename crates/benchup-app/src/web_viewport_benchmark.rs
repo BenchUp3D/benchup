@@ -200,7 +200,8 @@ fn publish_state(app: &BenchUpApp) {
             "context": app.doc.model.edit_context,
             "tool": format!("{:?}", app.tool), "measurement_value": app.measurement_value(),
             "faces": app.doc.model.faces.len(), "edges": app.doc.model.edges.len(),
-            "history_position": app.doc.history.position(),
+            "file_pending": app.project.pending.is_some(), "file_error": app.project.error,
+            "history_position": app.doc.history.position(), "screenshot": app.screenshot.benchmark_state(),
             "measurement_points": app.measurement_points(), "guides": app.doc.model.guides.len(),
             "camera": app.doc.camera, "walk_feet": app.walk.person.as_ref().map(|p|p.feet),
             "shadows":app.doc.display.shadows,"shadow_builds":app.viewports.resident_shadow_builds(),"resident_builds": app.viewports.resident_builds()});

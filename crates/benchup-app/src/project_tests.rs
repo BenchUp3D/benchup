@@ -483,15 +483,7 @@ fn cutting_plan_export_failure_preserves_project_selection_and_history() {
     app.project.path = Some("original.bup".into());
     app.project.modified = true;
     let before = app.doc.model.clone();
-    app.project.operation = projects::Operation::CutReport(CutReport::CuttingPlan);
-    app.project.pending = Some(crate::project_files::export_cut_report(
-        &ctx,
-        CutReport::CuttingPlan,
-        app.doc.name.clone(),
-        app.doc.model.clone(),
-        app.selected.clone(),
-        crate::cutting_layout::Settings::default(),
-    ));
+    app.queue_pdf_export(&ctx, pdf_export::Kind::CutReport(CutReport::CuttingPlan, true));
     for _ in 0..100 {
         app.poll_project(&ctx);
         if app.project.pending.is_none() {
@@ -560,4 +552,25 @@ fn recent_project_uses_unsaved_changes_protection() {
     app.request_project(projects::Action::Recent(0), &ctx);
     assert!(matches!(app.project.confirm, Some(projects::Action::Recent(0))));
     assert!(app.project.pending.is_none());
+}
+
+#[test]
+fn tools_pdf_loading_precedes_validation_and_blocks_duplicate_requests() {
+    let ctx = egui::Context::default();
+    for report in [CutReport::CuttingPlan, CutReport::WorkshopLabels] {
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        let before = app.doc.clone();
+        app.queue_pdf_export(&ctx, pdf_export::Kind::CutReport(report, false));
+        assert!(app.project.blocked());
+        assert!(app.project.error.is_none(), "validation must happen after entering loading state");
+        app.export_time_estimates(&ctx);
+        app.queue_pdf_export(&ctx, pdf_export::Kind::CutReport(report, false));
+        assert!(matches!(app.project.operation, projects::Operation::CutReport(value) if value == report));
+        let result = app.project.pending.as_ref().unwrap().recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(result.is_err(), "empty projects produce a report warning");
+        deliver(&mut app, result, &ctx);
+        assert!(app.project.pending.is_none());
+        assert!(app.project.error.is_some());
+        assert_eq!(app.doc, before);
+    }
 }

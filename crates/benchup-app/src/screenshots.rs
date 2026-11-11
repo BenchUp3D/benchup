@@ -179,38 +179,47 @@ impl Settings {
     }
 }
 
+/// Collect visible content once per capture, using indexed inherited visibility.
+/// Calling Model::is_hidden for every edge/face repeatedly searches all groups.
+pub(crate) fn visible_points(model: &Model) -> Vec<DVec3> {
+    let mut entities = crate::renderer::EntityCache::default();
+    entities.update(model);
+    visible_points_with_entities(model, &entities)
+}
+
+pub(crate) fn visible_points_with_entities(model: &Model, entities: &crate::renderer::EntityCache) -> Vec<DVec3> {
+    let mut vertices = std::collections::HashSet::new();
+    for edge in model.edges.values().filter(|e| !entities.get(e.id).hidden) {
+        vertices.extend([edge.a, edge.b]);
+    }
+    for face in model.faces.values().filter(|f| !entities.get(f.id).hidden) {
+        vertices.extend(face.vertices.iter().chain(face.holes.iter().flatten()).copied());
+    }
+    // Preserve vertex order for reproducible camera fitting across captures.
+    let mut points: Vec<_> = model.vertices.iter().filter(|(id, _)| vertices.contains(id))
+        .map(|(_, vertex)| vertex.position).collect();
+    for dimension in model.dimensions.values().filter(|d| !entities.get(d.id).hidden) {
+        points.extend(dimension.layout(model));
+    }
+    for text in model.texts.values().filter(|t| !entities.get(t.id).hidden) {
+        points.extend(text.layout(model));
+    }
+    points
+}
+
 /// Fit visible geometry, excluding vertices belonging only to hidden parts.
+#[cfg(test)]
 pub(crate) fn view_camera(model: &Model, current: &Camera, view: usize, size: [u32; 2]) -> Camera {
+    fitted_camera(&visible_points(model), current, view, size)
+}
+
+pub(crate) fn fitted_camera(points: &[DVec3], current: &Camera, view: usize, size: [u32; 2]) -> Camera {
     let mut camera = current.clone();
     if let Some(standard) = STANDARD_VIEWS[view] {
         camera.set_standard_view(standard);
         camera.projection = Projection::Parallel;
     }
-    let mut points = Vec::new();
-    let mut include = |p: DVec3| {
-        points.push(p);
-    };
-    for edge in model.edges.values().filter(|e| !model.is_hidden(e.id)) {
-        let (a, b) = model.points(edge);
-        include(a);
-        include(b);
-    }
-    for face in model.faces.values().filter(|f| !model.is_hidden(f.id)) {
-        for id in face.vertices.iter().chain(face.holes.iter().flatten()) {
-            include(model.vertices[id].position);
-        }
-    }
-    for dimension in model.dimensions.values().filter(|d| !model.is_hidden(d.id)) {
-        for p in dimension.layout(model) {
-            include(p);
-        }
-    }
-    for text in model.texts.values().filter(|t| !model.is_hidden(t.id)) {
-        for p in text.layout(model) {
-            include(p);
-        }
-    }
-    fit_content(&mut camera, &points, size);
+    fit_content(&mut camera, points, size);
     camera
 }
 

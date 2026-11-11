@@ -242,6 +242,28 @@ fn every_view_fills_its_own_area_in_portrait_and_landscape() {
 }
 
 #[test]
+fn fitting_uses_inherited_group_and_tag_visibility_and_unique_vertices() {
+    let mut model = Model::default();
+    let edge = model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+    model.add_edge(DVec3::X, DVec3::Y).unwrap();
+    let expected = visible_points(&model);
+    assert_eq!(expected.len(), 3);
+    let far = model.add_edge(DVec3::splat(1000.), DVec3::splat(2000.)).unwrap();
+    let child = model.make_object(&std::collections::BTreeSet::from([far]), false, "Child").unwrap();
+    let parent = model.make_object(&std::collections::BTreeSet::from([child]), false, "Parent").unwrap();
+    model.hidden.insert(parent);
+    assert_eq!(visible_points(&model), expected);
+    model.hidden.clear();
+    let tag = model.add_tag("Hidden").unwrap();
+    model.assign_tag(&std::collections::BTreeSet::from([parent]), Some(tag)).unwrap();
+    model.tags.get_mut(&tag).unwrap().visible = false;
+    assert_eq!(visible_points(&model), expected);
+    // A hidden edge cannot remove an endpoint still used by visible geometry.
+    model.hidden.insert(edge);
+    assert_eq!(visible_points(&model).len(), 2);
+}
+
+#[test]
 fn fitting_ignores_hidden_geometry_and_keeps_empty_views_valid() {
     let mut model = Model::default();
     model.add_edge(DVec3::ZERO, DVec3::new(5., 3., 2.)).unwrap();

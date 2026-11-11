@@ -9,13 +9,29 @@ use std::sync::mpsc;
 pub(super) struct ScreenshotDialog {
     pub open: bool,
     pub settings: Settings,
-    source: Option<Document>,
     preview_settings: Option<Settings>,
     previews: Vec<egui::TextureHandle>,
     preview_page: usize,
     capture: Option<Capture>,
     exporting: bool,
+    export_requested: Option<(u64, f64)>,
     error: Option<String>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl ScreenshotDialog {
+    pub(super) fn benchmark_state(&self) -> serde_json::Value {
+        serde_json::json!({
+            "open": self.open,
+            "ready": self.open && self.capture.is_none() && !self.exporting
+                && !self.previews.is_empty() && self.preview_settings.as_ref() == Some(&self.settings)
+                && self.error.is_none(),
+            "views": self.settings.selected(),
+            "combined": self.settings.combined,
+            "pages": self.previews.len(),
+            "error": self.error,
+        })
+    }
 }
 
 impl BenchUpApp {
@@ -28,7 +44,7 @@ impl BenchUpApp {
             self.screenshot.settings.format = Format::Png;
         }
         let mut dialog = std::mem::take(&mut self.screenshot);
-        let source = dialog.source.get_or_insert_with(|| self.doc.clone());
+        let source = &self.doc;
         if let Some(capture) = &mut dialog.capture {
             match capture.poll(ctx) {
                 Ok(Some(images)) => {
@@ -72,7 +88,6 @@ impl BenchUpApp {
             }
         }
         if !dialog.open {
-            dialog.source = None;
             dialog.preview_settings = None;
             self.screenshot = dialog;
             return;
@@ -130,7 +145,7 @@ impl BenchUpApp {
                         &mut dialog.preview_page,
                         &dialog.settings,
                         &dialog.previews,
-                        dialog.capture.is_some(),
+                        dialog.capture.is_some() || dialog.export_requested.is_some(),
                         dialog.exporting,
                         &source.name,
                     );
@@ -154,7 +169,7 @@ impl BenchUpApp {
                 cancel = ui.button(tr!("common.cancel")).clicked();
                 export = primary_button(
                     ui,
-                    tr!("screenshot_dialog.generate"),
+                    if dialog.exporting { tr!("screenshot_dialog.rendering_export") } else { tr!("screenshot_dialog.generate") },
                     !dialog.exporting
                         && dialog.settings.validate().is_ok()
                         && self.screenshot_gpu.is_some(),
@@ -164,13 +179,20 @@ impl BenchUpApp {
         });
         if cancel || response.should_close() {
             dialog.open = false;
-            dialog.source = None;
             dialog.capture = None;
             dialog.preview_settings = None;
             dialog.exporting = false;
-        } else if export
+            dialog.export_requested = None;
+        } else if export {
+            dialog.capture = None;
+            dialog.exporting = true;
+            dialog.export_requested = Some((ctx.cumulative_frame_nr(), ctx.input(|i| i.time) + 0.05));
+            ctx.request_repaint();
+        } else if dialog.export_requested.is_some_and(|(frame, time)|
+            ctx.cumulative_frame_nr() > frame && ctx.input(|i| i.time) >= time)
             || (!dialog.exporting && dialog.preview_settings.as_ref() != Some(&dialog.settings))
         {
+            let export = dialog.export_requested.take().is_some();
             dialog.capture = None;
             dialog.error = None;
             dialog.previews.clear();
@@ -179,7 +201,19 @@ impl BenchUpApp {
             dialog.exporting = export;
             if !dialog.settings.selected().is_empty() {
                 if let Some((device, queue)) = &self.screenshot_gpu {
-                    match Capture::new(device, queue, ctx, source, &dialog.settings, export) {
+                    let retained = (self.render_model.revision() != 0
+                        && self.doc.model.connections.is_empty()
+                        && self.history_preview.is_none()
+                        && self.modeling.is_none()
+                        && self.joint_highlight_preview_key().is_none())
+                        .then(|| self.viewports.capture_resident(
+                            &capture_display(source, ctx.global_style().visuals.dark_mode),
+                            self.render_model.shared(), self.render_model.revision(),
+                        )).flatten()
+                        .map(|scene| (scene, screenshots::visible_points_with_entities(
+                            &source.model, &self.entity_cache,
+                        )));
+                    match Capture::with_scene(device, queue, ctx, source, &dialog.settings, export, retained) {
                         Ok(capture) => {
                             dialog.capture = Some(capture);
                             ctx.request_repaint();
@@ -195,6 +229,7 @@ impl BenchUpApp {
                 }
             }
         }
+        if dialog.export_requested.is_some() { ctx.request_repaint_after(Duration::from_millis(16)); }
         self.screenshot = dialog;
     }
 }
@@ -403,16 +438,28 @@ fn screenshot_preview(
 // Preserve the viewport's effective shadows, materials, theme and fog colors.
 // Export hides editing aids without silently choosing a different render style.
 fn capture_document(doc: &Document, dark: bool) -> Document {
-    let mut source = doc.clone();
-    source.display = display_scene::effective_display(&doc.display, &doc.model, dark);
+    // Rendering needs the current scene, not the undo/import history or the
+    // other viewport cameras. Large imports can have more history than geometry.
+    let mut source = Document {
+        name: doc.name.clone(),
+        model: doc.model.clone(),
+        camera: doc.camera.clone(),
+        display: capture_display(doc, dark),
+        ..Default::default()
+    };
     source.model.edit_context = None;
     source.selection.clear();
     source.selection_context = None;
-    source.display.axes = false;
-    source.display.grid = false;
-    source.display.guides = false;
-    source.display.group_emphasis = false;
     source
+}
+
+fn capture_display(doc: &Document, dark: bool) -> benchup_core::DisplaySettings {
+    let mut display = display_scene::effective_display(&doc.display, &doc.model, dark);
+    display.axes = false;
+    display.grid = false;
+    display.guides = false;
+    display.group_emphasis = false;
+    display
 }
 
 struct Readback {
@@ -431,13 +478,21 @@ struct Capture {
     started: f64,
 }
 impl Capture {
+    #[cfg(test)]
     fn new(
+        device: &wgpu::Device, queue: &wgpu::Queue, parent: &egui::Context,
+        doc: &Document, settings: &Settings, export: bool,
+    ) -> Result<Self, String> {
+        Self::with_scene(device, queue, parent, doc, settings, export, None)
+    }
+    fn with_scene(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         parent: &egui::Context,
         doc: &Document,
         settings: &Settings,
         export: bool,
+        retained: Option<(renderer::CaptureScene, Vec<DVec3>)>,
     ) -> Result<Self, String> {
         if export {
             settings.validate()?;
@@ -474,10 +529,14 @@ impl Capture {
             / 96.)
             .max(0.1);
         ctx.set_pixels_per_point(scale);
-        let source = capture_document(doc, parent.global_style().visuals.dark_mode);
-        let current = source.camera.clone();
-        let mut app = BenchUpApp::with_document(source, None, true);
-        app.doc.display.group_emphasis = false;
+        let current = doc.camera.clone();
+        let (mut retained, points) = match retained {
+            Some((scene, points)) => (Some(scene), points),
+            None => (None, screenshots::visible_points(&doc.model)),
+        };
+        let mut app = retained.is_none().then(|| BenchUpApp::with_document(
+            capture_document(doc, parent.global_style().visuals.dark_mode), None, true,
+        ));
         let mut views = Vec::new();
         for view in settings.selected() {
             let logical = egui::vec2(size[0] as f32, size[1] as f32) / scale;
@@ -485,8 +544,8 @@ impl Capture {
             // Leave a title and a margin around every view, including sheets.
             let scene =
                 Rect::from_min_max(rect.min + egui::vec2(16., 36.), rect.max - Vec2::splat(16.));
-            app.doc.camera = screenshots::view_camera(
-                &app.doc.model,
+            let camera = screenshots::fitted_camera(
+                &points,
                 &current,
                 view,
                 [scene.width().max(1.) as u32, scene.height().max(1.) as u32],
@@ -497,7 +556,12 @@ impl Capture {
                     ..Default::default()
                 },
                 |ui| {
-                    app.paint_scene_with_background(ui, scene, false);
+                    if let Some(retained) = &mut retained {
+                        retained.paint(ui, scene, &camera);
+                    } else if let Some(app) = &mut app {
+                        app.doc.camera = camera.clone();
+                        app.paint_scene_with_background(ui, scene, false);
+                    }
                     ui.painter().text(
                         egui::pos2(16., 16.),
                         Align2::LEFT_CENTER,
@@ -706,6 +770,22 @@ mod tests {
         assert!(doc.selection.contains(&123));
     }
 
+
+    #[test]
+    fn capture_omits_history_and_other_viewports() {
+        let mut doc = Document::default();
+        let before = doc.model.clone();
+        doc.model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+        doc.history.record("Import", before, &doc.model);
+        doc.viewport_cameras.insert(8, Camera::default());
+        let captured = capture_document(&doc, false);
+        assert_eq!(captured.model, doc.model);
+        assert_eq!(captured.camera, doc.camera);
+        assert!(captured.history.is_empty());
+        assert!(captured.viewport_cameras.is_empty());
+        assert!(!doc.history.is_empty());
+        assert_eq!(doc.viewport_cameras.len(), 1);
+    }
 
     #[test]
     #[ignore = "Requires GPU; verifies an isometric shadow interior does not stripe"]

@@ -115,7 +115,7 @@ pub fn decode(bytes: &[u8]) -> Result<Document, String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn run(
+pub(crate) fn run(
     ctx: &eframe::egui::Context,
     action: impl FnOnce() -> Result<Outcome, String> + Send + 'static,
 ) -> Pending {
@@ -380,28 +380,55 @@ fn blob_url(contents: &[u8], mime: &str) -> Result<String, eframe::wasm_bindgen:
     web_sys::Url::create_object_url_with_blob(&blob)
 }
 
+/// Reserve the viewer during the click's user activation. Generation can then
+/// run asynchronously without triggering the browser's popup blocker.
 #[cfg(target_arch = "wasm32")]
-fn open_pdf(contents: &[u8]) -> Result<(), eframe::wasm_bindgen::JsValue> {
-    use eframe::wasm_bindgen::JsValue;
-    let window = web_sys::window().ok_or_else(|| JsValue::from_str(tr!("project_files.no_browser_window")))?;
-    let url = blob_url(contents, "application/pdf")?;
-    // Keep this synchronous with Generate PDF so user activation is available.
-    let opened = window.open_with_url_and_target(&url, "_blank");
-    match opened {
-        Ok(Some(tab)) => {
+pub(crate) struct PdfViewer(Option<web_sys::Window>);
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct PdfViewer;
+
+impl PdfViewer {
+    pub(crate) fn reserve() -> Result<Self, String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        { Ok(Self) }
+        #[cfg(target_arch = "wasm32")]
+        {
+            use eframe::wasm_bindgen::JsValue;
+            let window = web_sys::window().ok_or_else(|| tr!("project_files.no_browser_window").to_string())?;
+            let tab = window.open_with_url_and_target("about:blank", "_blank")
+                .map_err(|error| error.as_string().unwrap_or_else(|| tr!("project_files.the_browser_could_not_open_this_pdf").into()))?
+                .ok_or_else(|| tr!("project_files.allow_pop_ups_for_benchup_then_generate_the").to_string())?;
             let _ = tab.set_opener(&JsValue::NULL);
-            release_pdf_when_closed(window, tab, url);
-            Ok(())
-        }
-        result => {
-            let _ = web_sys::Url::revoke_object_url(&url);
-            match result {
-                Err(error) => Err(error),
-                _ => Err(JsValue::from_str(
-                    tr!("project_files.allow_pop_ups_for_benchup_then_generate_the"),
-                )),
+            if let Some(document) = tab.document() {
+                document.set_title(tr!("project_files.preparing_pdf"));
+                if let Some(body) = document.body() {
+                    body.set_text_content(Some(tr!("project_files.preparing_pdf")));
+                    let _ = body.set_attribute("style", "margin:0;min-height:100vh;display:grid;place-content:center;font:18px system-ui,sans-serif;color:#26332b;background:#f4f6f2");
+                }
             }
+            Ok(Self(Some(tab)))
         }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn show(mut self, contents: &[u8]) -> Result<(), String> {
+        let window = web_sys::window().ok_or_else(|| tr!("project_files.no_browser_window").to_string())?;
+        let tab = self.0.as_ref().unwrap();
+        if tab.closed().unwrap_or(true) { return Err("The PDF viewer was closed before generation finished.".into()); }
+        let url = blob_url(contents, "application/pdf").map_err(|error| format!("{error:?}"))?;
+        if let Err(error) = js_sys::Reflect::set(tab, &"location".into(), &url.clone().into()) {
+            let _ = web_sys::Url::revoke_object_url(&url);
+            return Err(format!("{error:?}"));
+        }
+        release_pdf_when_closed(window, self.0.take().unwrap(), url);
+        Ok(())
+    }
+}
+#[cfg(target_arch = "wasm32")]
+impl Drop for PdfViewer {
+    fn drop(&mut self) {
+        // Warnings and failed generation must not leave an empty loading tab.
+        if let Some(tab) = self.0.take() { let _ = tab.close(); }
     }
 }
 
@@ -581,7 +608,7 @@ pub fn prepare_import(
     Ok(Outcome::Imported(Box::new(model), selected))
 }
 
-fn render_cut_report(
+pub(crate) fn render_cut_report(
     report: CutReport,
     name: &str,
     model: &benchup_core::Model,
@@ -597,66 +624,6 @@ fn render_cut_report(
         CutReport::CuttingPlan => Ok(plan.pdf_with_layout(name, selection, true, layout_settings)),
         CutReport::WorkshopLabels => plan.workshop_labels_pdf(name, selection),
     }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn export_cut_report(
-    ctx: &eframe::egui::Context,
-    report: CutReport,
-    name: String,
-    model: benchup_core::Model,
-    selected: std::collections::BTreeSet<u64>,
-    layout_settings: crate::cutting_layout::Settings,
-) -> Pending {
-    run(ctx, move || {
-        let contents = render_cut_report(report, &name, &model, &selected, layout_settings)?;
-        let (title, suffix) = match report {
-            CutReport::CuttingPlan => (tr!("project_files.export_woodworking_cutting_plan"), tr!("project_files.cutting_plan")),
-            CutReport::WorkshopLabels => (tr!("project_files.export_workshop_labels"), tr!("project_files.workshop_labels")),
-        };
-        let Some(path) = rfd::FileDialog::new()
-            .set_title(title)
-            .add_filter(tr!("project_files.pdf_document"), &["pdf"])
-            .set_file_name(exchange_name(&tr!("project_files.report_name", name = name, suffix = suffix), "pdf"))
-            .save_file()
-        else {
-            return Ok(Outcome::Cancelled);
-        };
-        let path = extension_path(path, "pdf")?;
-        write(&path, &contents)?;
-        open_pdf(&path).map_err(|error| {
-            tr!(
-                "project_files.pdf_saved_to_but_its_viewer_could_not",
-                path.display(),
-                error = error,
-            )
-        })?;
-        Ok(Outcome::Exported)
-    })
-}
-
-#[cfg(target_arch = "wasm32")]
-pub fn export_cut_report(
-    ctx: &eframe::egui::Context,
-    report: CutReport,
-    name: String,
-    model: benchup_core::Model,
-    selected: std::collections::BTreeSet<u64>,
-    layout_settings: crate::cutting_layout::Settings,
-) -> Pending {
-    let (sender, receiver) = mpsc::channel();
-    let result = render_cut_report(report, &name, &model, &selected, layout_settings)
-        .and_then(|contents| {
-            open_pdf(&contents)
-                .map(|_| Outcome::Exported)
-                .map_err(|e| {
-                    e.as_string()
-                        .unwrap_or_else(|| tr!("project_files.the_browser_could_not_open_this_pdf").into())
-                })
-        });
-    let _ = sender.send(result);
-    ctx.request_repaint();
-    receiver
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -710,49 +677,23 @@ pub fn export_screenshots(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn export_estimate_pdf(
-    ctx: &eframe::egui::Context,
-    name: String,
-    contents: Vec<u8>,
-) -> Pending {
-    run(ctx, move || {
-        let Some(path) = rfd::FileDialog::new()
-            .set_title(tr!("project_files.export_time_and_cost_estimates"))
-            .add_filter(tr!("project_files.pdf_document"), &["pdf"])
-            .set_file_name(exchange_name(&tr!("project_files.estimates", name = name), "pdf"))
-            .save_file()
-        else {
-            return Ok(Outcome::Cancelled);
-        };
-        let path = extension_path(path, "pdf")?;
-        write(&path, &contents)?;
-        open_pdf(&path).map_err(|error| {
-            tr!(
-                "project_files.pdf_saved_to_but_its_viewer_could_not",
-                path.display(),
-                error = error,
-            )
-        })?;
-        Ok(Outcome::Exported)
-    })
-}
-
-#[cfg(target_arch = "wasm32")]
-pub fn export_estimate_pdf(
-    ctx: &eframe::egui::Context,
-    _name: String,
-    contents: Vec<u8>,
-) -> Pending {
-    let (sender, receiver) = mpsc::channel();
-    // Opening synchronously preserves browser user activation for the PDF viewer.
-    let result = open_pdf(&contents)
-        .map(|_| Outcome::Exported)
-        .map_err(|error| {
-            error
-                .as_string()
-                .unwrap_or_else(|| tr!("project_files.the_browser_could_not_open_this_pdf").into())
-        });
-    let _ = sender.send(result);
-    ctx.request_repaint();
-    receiver
+pub(crate) fn save_pdf_contents(name: &str, report: Option<CutReport>, contents: &[u8]) -> Result<Outcome, String> {
+    let (title, file_name) = match report {
+        Some(report) => {
+            let (title, suffix) = match report {
+                CutReport::CuttingPlan => (tr!("project_files.export_woodworking_cutting_plan"), tr!("project_files.cutting_plan")),
+                CutReport::WorkshopLabels => (tr!("project_files.export_workshop_labels"), tr!("project_files.workshop_labels")),
+            };
+            (title, tr!("project_files.report_name", name = name, suffix = suffix))
+        }
+        None => (tr!("project_files.export_time_and_cost_estimates"), tr!("project_files.estimates", name = name)),
+    };
+    let Some(path) = rfd::FileDialog::new().set_title(title)
+        .add_filter(tr!("project_files.pdf_document"), &["pdf"])
+        .set_file_name(exchange_name(&file_name, "pdf")).save_file()
+    else { return Ok(Outcome::Cancelled) };
+    let path = extension_path(path, "pdf")?;
+    write(&path, contents)?;
+    open_pdf(&path).map_err(|error| tr!("project_files.pdf_saved_to_but_its_viewer_could_not", path.display(), error = error))?;
+    Ok(Outcome::Exported)
 }

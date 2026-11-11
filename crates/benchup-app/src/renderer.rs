@@ -12,7 +12,7 @@ mod scale_handles;
 mod scene_buffers;
 use scene_buffers::GpuBuffers;
 pub(crate) use scale_handles::{Cache as ScaleHandleCache, paint as paint_scale_handles};
-pub(crate) use resident::{edited_geometry as geometry_changes, supported as resident_supported};
+pub(crate) use resident::{CaptureScene, edited_geometry as geometry_changes, supported as resident_supported};
 
 /// Shared reference geometry fade, measured along the camera's forward axis.
 pub(crate) struct ReferenceFade {

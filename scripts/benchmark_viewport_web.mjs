@@ -10,11 +10,11 @@ import {fileURLToPath} from 'node:url';
 const args=process.argv.slice(2);
 const option=(key, fallback)=>{const i=args.indexOf(key);return i<0?fallback:args[i+1]};
 const project=option('--project');
-const usage='Usage: node scripts/benchmark_viewport_web.mjs --project FILE [--mode orbit|sun|select|scale|box-select|groups|draw-line|draw-rectangle|measure-tape|walk|erase-edge|erase-face|erase-object] [--scope root|group|leaf] [--repeat-actions] [--flatten] [--reverse-box] [--seconds 20] [--url http://127.0.0.1:8080] [--output /tmp/viewport.json] [--browser PATH] [--headed] [--unsafe-webgpu] [--x11] [--preferences FILE] [--legacy] [--profile] [--min-fps FPS] [--min-selected-fps FPS] [--validate-shader] [--validate-shadows] [--validate-markers] [--require-shadows] [--validate-state] [--validate-snapping] [--after-walk] [--require-pointer-lock] [--erase-with-key]';
+const usage='Usage: node scripts/benchmark_viewport_web.mjs --project FILE [--mode orbit|sun|select|scale|screenshot|box-select|groups|draw-line|draw-rectangle|measure-tape|walk|erase-edge|erase-face|erase-object] [--scope root|group|leaf] [--repeat-actions] [--flatten] [--reverse-box] [--seconds 20] [--url http://127.0.0.1:8080] [--output /tmp/viewport.json] [--browser PATH] [--headed] [--unsafe-webgpu] [--x11] [--preferences FILE] [--legacy] [--profile] [--max-open-ms MS] [--min-fps FPS] [--min-selected-fps FPS] [--validate-shader] [--validate-shadows] [--validate-markers] [--require-shadows] [--validate-state] [--validate-snapping] [--after-walk] [--require-pointer-lock] [--erase-with-key]';
 if(args.includes('--help')){console.log(usage);process.exit(0)}
 if(!project)throw Error(usage);
 const mode=option('--mode','orbit');
-if(!['orbit','sun','select','box-select','groups','draw-line','draw-rectangle','measure-tape','walk','scale','erase-edge','erase-face','erase-object'].includes(mode))throw Error('--mode must be orbit, sun, select, groups, draw-line, draw-rectangle, measure-tape, walk, or erase-edge');
+if(!['screenshot','orbit','sun','select','box-select','groups','draw-line','draw-rectangle','measure-tape','walk','scale','erase-edge','erase-face','erase-object'].includes(mode))throw Error('--mode must be orbit, sun, select, groups, draw-line, draw-rectangle, measure-tape, walk, or erase-edge');
 const projectBytes=await readFile(project);
 const model=(projectBytes[0]===0x1f&&projectBytes[1]===0x8b?gunzipSync(projectBytes):projectBytes).toString('utf8');
 const projectData=JSON.parse(model);
@@ -183,7 +183,7 @@ if d.property(d.root,'_NET_ACTIVE_WINDOW') != [window]: raise RuntimeError('The 
  const getContext=HTMLCanvasElement.prototype.getContext;
  HTMLCanvasElement.prototype.getContext=function(kind,...args){const context=getContext.call(this,kind,...args);if(context&&kind==='webgl2'&&this.id==='benchup-canvas'){const info=context.getExtension('WEBGL_debug_renderer_info');const renderer=context.getParameter(info?info.UNMASKED_RENDERER_WEBGL:context.RENDERER);window.benchupViewportAdapter={backend:'webgl2',vendor:context.getParameter(info?info.UNMASKED_VENDOR_WEBGL:context.VENDOR),renderer,isFallbackAdapter:/swiftshader|llvmpipe|software/i.test(renderer)}}return context};}
  const get=Storage.prototype.getItem, set=Storage.prototype.setItem; Storage.prototype.getItem=function(k){return k==='benchup.document.v1'?value:k==='benchup.inspector.v1'&&${JSON.stringify(inspectorPreferences)}!==null?${JSON.stringify(inspectorPreferences)}:get.call(this,k)}; Storage.prototype.setItem=function(k,v){recordRecovery(k,v);if(k!=='benchup.document.v1')set.call(this,k,v)}; if(navigator.gpu){const prototype=Object.getPrototypeOf(navigator.gpu), request=prototype.requestAdapter; prototype.requestAdapter=async function(...args){const adapter=await request.apply(this,args);if(adapter)window.benchupViewportAdapter={backend:'webgpu',...Object.fromEntries(['vendor','architecture','device','description','isFallbackAdapter'].map(k=>[k,adapter.info[k]]))};return adapter;}} window.benchupViewportBenchmarkMode=${JSON.stringify(mode)}; window.benchupViewportBenchmarkCamera=${JSON.stringify(projectData.camera)}; window.benchupViewportBenchmark=${seconds}; window.benchupViewportBenchmarkLegacy=${args.includes("--legacy")};}`});
- let seed=await installSeed(boxDocument?JSON.stringify(boxDocument):eraseSetup?JSON.stringify(eraseSetup.document):model,(mode==='box-select'||mode.startsWith('draw-')||mode==='measure-tape'||mode==='walk'||mode.startsWith('erase-'))?'observe':mode);
+ let seed=await installSeed(boxDocument?JSON.stringify(boxDocument):eraseSetup?JSON.stringify(eraseSetup.document):model,(mode==='screenshot'||mode==='box-select'||mode.startsWith('draw-')||mode==='measure-tape'||mode==='walk'||mode.startsWith('erase-'))?'observe':mode);
  await call('Page.navigate',{url:option('--url','http://127.0.0.1:8080/')});
  await call('Page.bringToFront');
  const evaluate=async expression=>{
@@ -210,7 +210,9 @@ if d.property(d.root,'_NET_ACTIVE_WINDOW') != [window]: raise RuntimeError('The 
   const restored=await until(async()=>{const state=await evaluate(`window.benchupViewportBenchmarkState`);return state?.tool==='Select'?state:null},'leaving Walk');
   if(!Object.keys(projectData.camera).every(key=>JSON.stringify(restored.camera?.[key])===JSON.stringify(projectData.camera[key])))throw Error('Walk did not restore the original camera');
  }
- if(mode==='box-select'){
+ if(mode==='screenshot'){
+  drawingResult=await benchmarkScreenshot(call,evaluate,output);
+ }else if(mode==='box-select'){
   drawingResult=await benchmarkBoxSelection(call,evaluate,seconds);
  }else if(mode.startsWith('erase-')){
   drawingResult=await benchmarkErase(call,evaluate,seconds,eraseSetup);
@@ -305,6 +307,59 @@ if d.property(d.root,'_NET_ACTIVE_WINDOW') != [window]: raise RuntimeError('The 
  socket?.close();browser.kill();
  await new Promise(resolve=>{if(browser.exitCode!==null)resolve();else{browser.once('exit',resolve);setTimeout(()=>{browser.kill('SIGKILL');resolve()},3000).unref()}});
  await rm(profile,{recursive:true,force:true,maxRetries:5,retryDelay:200});
+}
+
+// Open the actual screenshot modal and wait for completed GPU readback rather
+// than timing only the menu click. Every run uses an isolated project/profile.
+async function benchmarkScreenshot(call,evaluate,output) {
+ const wait=async(fn,label)=>{const deadline=Date.now()+30000;while(Date.now()<deadline){const value=await fn();if(value)return value;await pause(10)}throw Error('Timed out waiting for '+label)};
+ const state=()=>evaluate('window.benchupViewportBenchmarkState');
+ const click=async(x,y)=>{await call('Input.dispatchMouseEvent',{type:'mouseMoved',x,y});for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,x,y,button:'left',clickCount:1});};
+ const painted=()=>evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+ const ready=()=>wait(async()=>{const current=await state();if(current.screenshot?.error)throw Error(current.screenshot.error);return current.screenshot?.ready?current:null},'screenshot preview');
+ const shot=async(suffix)=>{await painted();const {data}=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(output+suffix+'.png',Buffer.from(data,'base64'));};
+ await painted();
+ const before=await state();
+ const downloadDirectory=join(profile,'downloads');await mkdir(downloadDirectory);
+ await call('Browser.setDownloadBehavior',{behavior:'allow',downloadPath:downloadDirectory});
+ await evaluate('window.benchupDrawingProbe.record=true;window.benchupDrawingProbe.samples=[]');
+ const opens=[];
+ for(let i=0;i<3;i++){
+  await click(357,32);await painted();
+  const start=Date.now();await click(411,220);const click_ms=Date.now()-start;
+  const current=await ready();await painted();opens.push({click_ms,preview_ms:Date.now()-start,pages:current.screenshot.pages});
+  if(i===0)await shot('.preview');
+  if(i===1)await shot('.selected');
+  if(i<2){for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27});await wait(async()=>!(await state()).screenshot.open,'closing screenshot modal');}
+  if(i===0){await click(600,500);await painted();if(!((await state()).selected_count>0))throw Error('Selection regression did not select the model');}
+ }
+ const expectedSelection=(await state()).selected;
+ const positions=[[197,258],[276,258],[197,294],[276,294],[197,330],[276,330],[197,365],[276,365]];
+ const changes=[];
+ const selected=new Set((await state()).screenshot.views);
+ for(let view=0;view<8;view++)if(!selected.has(view)){
+  const start=Date.now();await click(...positions[view]);await painted();await ready();changes.push({view,preview_ms:Date.now()-start});
+ }
+ await shot('.all-views');
+ const start=Date.now();await click(197,460);await painted();const individual=await ready();
+ if(individual.screenshot.pages!==8||individual.screenshot.combined)throw Error('Individual preview did not render all eight views');
+ const layout_ms=Date.now()-start;
+ await shot('.individual');
+ const exportStart=Date.now();await click(1146,794);
+ const exported=await wait(async()=>{const files=(await readdir(downloadDirectory)).filter(name=>!name.endsWith('.crdownload'));return files.length===1?files[0]:null},'screenshot export');
+ const export_ms=Date.now()-exportStart;
+ const bytes=await readFile(join(downloadDirectory,exported));
+ if(bytes.readUInt32LE(0)!==0x04034b50)throw Error('Eight-view export is not a ZIP archive');
+ const export_file=output+'.export.zip';await writeFile(export_file,bytes);
+ await wait(async()=>!(await state()).screenshot.open,'completed export');await painted();
+ const after=await state();
+ if(JSON.stringify(after.selected)!==JSON.stringify(expectedSelection))throw Error('Screenshot capture changed selection');
+ if(after.history_position!==before.history_position||after.faces!==before.faces||after.edges!==before.edges||JSON.stringify(after.camera)!==JSON.stringify(before.camera))throw Error('Screenshot capture changed the source document');
+ const samples=await evaluate('window.benchupDrawingProbe.record=false;window.benchupDrawingProbe.samples');
+ const limit=Number(option('--max-open-ms','500'));
+ if(!Number.isFinite(limit)||limit<=0)throw Error('--max-open-ms must be positive');
+ if(opens.some(run=>run.preview_ms>limit))throw Error('Screenshot opening exceeded '+limit+' ms: '+JSON.stringify(opens));
+ return {mode:'screenshot',draws:samples.length,opens,changes,layout_ms,export_ms,export_file,export_bytes:bytes.length};
 }
 
 // Exercise the actual visibility helper on a hardware GPU: an unrelated front

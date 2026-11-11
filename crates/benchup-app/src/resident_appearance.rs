@@ -25,6 +25,7 @@ struct Key {
     erasing: BTreeSet<u64>,
     removed: BTreeSet<u64>,
 }
+#[derive(Clone)]
 pub(super) struct Hierarchy {
     slots: BTreeMap<u64, u32>,
     parents: BTreeMap<u64, u64>,

@@ -302,6 +302,12 @@ impl Layout {
 }
 
 impl Workspace {
+    pub(super) fn capture_resident(
+        &self, display: &benchup_core::DisplaySettings, model: std::sync::Arc<Model>, revision: u64,
+    ) -> Option<renderer::CaptureScene> {
+        self.scene_caches.get(&self.active)?.capture_resident(display, model, revision)
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub(super) fn resident_builds(&self) -> usize {
         self.scene_caches.values().map(renderer::SceneCache::resident_builds).sum()

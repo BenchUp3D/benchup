@@ -14,7 +14,7 @@ type MaterialKey = (
     benchup_core::StockMaterial,
 );
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum CutReport {
     CuttingPlan,
     WorkshopLabels,

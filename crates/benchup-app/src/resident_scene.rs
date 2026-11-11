@@ -87,7 +87,7 @@ pub(super) struct Cache {
     source: Option<Model>,
     removed: std::collections::BTreeSet<u64>,
     bounds_index: bounds::Index,
-    hierarchy: Option<appearance::Hierarchy>,
+    hierarchy: Option<Arc<appearance::Hierarchy>>,
     overlay: Option<Arc<Geometry>>,
     bounds: Option<(DVec3, DVec3)>,
     states: Arc<OnceLock<appearance::StateTexture>>,
@@ -162,6 +162,10 @@ fn geometry_key(key: &SceneKey) -> SceneKey {
         outliner_hover: Default::default(), erasing: Default::default(),
     };
     key.display.group_emphasis = false;
+    // Reference overlays are submitted separately from the retained geometry.
+    key.display.axes = false;
+    key.display.grid = false;
+    key.display.guides = false;
     key.display.edges = true;
     // Light, intensity and filtering affect the cached shadow map/uniform,
     // never the retained world geometry.
@@ -401,7 +405,6 @@ pub(crate) fn supported(key: &SceneKey, model: &Model, faces: &FaceCache) -> boo
     let d = &key.display;
     model.faces.len() >= 1024
         && faces.max_edge_faces <= 4
-        && (key.camera.projection == benchup_core::Projection::Perspective || key.tool == benchup_core::Tool::Scale)
         && matches!(
             d.face_style,
             benchup_core::FaceStyle::Materials | benchup_core::FaceStyle::Shaded
@@ -429,7 +432,47 @@ pub(crate) fn supported(key: &SceneKey, model: &Model, faces: &FaceCache) -> boo
         )
 }
 
+/// An immutable geometry snapshot with its own interaction state. Offscreen
+/// rendering shares GPU buffers and sunlight without changing viewport selection.
+pub(crate) struct CaptureScene {
+    cache: SceneCache,
+    key: SceneKey,
+    model: Arc<Model>,
+}
+impl CaptureScene {
+    pub(crate) fn paint(&mut self, ui: &egui::Ui, rect: Rect, camera: &Camera) {
+        self.key.camera = camera.clone();
+        self.key.size = DVec2::new(f64::from(rect.width()), f64::from(rect.height()));
+        self.key.pixels_per_point = ui.ctx().pixels_per_point();
+        let references = self.cache.resident_reference_mesh(&self.key, &self.model);
+        self.cache.paint_prepared_resident(&self.key, &self.model, ui, rect, references);
+    }
+}
+
 impl SceneCache {
+    pub(crate) fn capture_resident(
+        &self, display: &benchup_core::DisplaySettings, model: Arc<Model>, revision: u64,
+    ) -> Option<CaptureScene> {
+        let previous = self.resident.key.as_ref()?;
+        let mut key = previous.clone();
+        key.display = display.clone();
+        // Match the scene's authoritative revision and baked appearance before
+        // sharing anything; unsupported styles continue through the full renderer.
+        key.model_revision = revision;
+        if geometry_key(&key) != *previous || self.scale_transform.is_some() {
+            return None;
+        }
+        let mut cache = SceneCache::default();
+        cache.resident.key = Some(previous.clone());
+        cache.resident.geometry = self.resident.geometry.clone();
+        cache.resident.overlay = self.resident.overlay.clone();
+        cache.resident.removed = self.resident.removed.clone();
+        cache.resident.hierarchy = self.resident.hierarchy.clone();
+        cache.resident.bounds = self.resident.bounds;
+        cache.resident.shadows = self.resident.shadows.clone();
+        Some(CaptureScene { cache, key, model })
+    }
+
     pub(crate) fn resident_context_bounds(
         &mut self,
         context: u64,
@@ -443,7 +486,7 @@ impl SceneCache {
     pub(crate) fn resident_builds(&self) -> usize {
         self.resident.builds
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(test, target_arch = "wasm32"))]
     pub(crate) fn resident_shadow_builds(&self) -> usize {
         self.resident.shadow_builds
     }
@@ -472,7 +515,7 @@ impl SceneCache {
                 .flatten();
             if let Some(dirty) = dirty {
                 let source = self.resident.source.as_ref().unwrap();
-                let hierarchy = self.resident.hierarchy.as_mut().unwrap();
+                let hierarchy = Arc::make_mut(self.resident.hierarchy.as_mut().unwrap());
                 let touched = self.resident.removed.union(&dirty).copied().collect();
                 hierarchy.synchronize(source, model, entities, &touched);
                 self.resident
@@ -503,7 +546,7 @@ impl SceneCache {
                 self.resident.geometry = Some(Arc::new(Geometry::subset(
                     key, model, faces, entities, ui, &hierarchy, None, None,
                 )));
-                self.resident.hierarchy = Some(hierarchy);
+                self.resident.hierarchy = Some(Arc::new(hierarchy));
                 self.resident.bounds_index = bounds::Index::new(model, entities, &key.display);
                 self.resident.source = Some(model.clone());
                 self.resident.overlay = None;
@@ -526,6 +569,11 @@ impl SceneCache {
         references: Mesh,
     ) {
         self.prepare_resident(key, model, faces, entities, ui);
+        self.paint_prepared_resident(key, model, ui, rect, references);
+    }
+    fn paint_prepared_resident(
+        &mut self, key: &SceneKey, model: &Model, ui: &egui::Ui, rect: Rect, references: Mesh,
+    ) {
         let geometry = Arc::clone(self.resident.geometry.as_ref().unwrap());
         let source_bounds = self.resident.bounds.unwrap_or(geometry.bounds);
         let bounds = self.scale_transform.map_or(source_bounds, |scale| {
@@ -1679,7 +1727,6 @@ mod tests {
             |k| k.display.back_edges = true,
             |k| k.display.profiles = true,
             |k| k.display.grain_direction = true,
-            |k| k.camera.projection = benchup_core::Projection::Parallel,
         ] {
             let mut changed = key.clone();
             modify(&mut changed);
@@ -1687,6 +1734,75 @@ mod tests {
         }
         faces.max_edge_faces = 5;
         assert!(!supported(&key, &model, &faces));
+    }
+
+    #[test]
+    fn capture_shares_geometry_with_independent_selection_and_rejects_stale_scenes() {
+        let model = Arc::new(model(1024));
+        let mut faces = FaceCache::default();
+        faces.update(&model);
+        let mut entities = EntityCache::default();
+        entities.update(&model);
+        let ctx = egui::Context::default();
+        let mut cache = SceneCache::default();
+        let mut key = key();
+        key.selected.insert(*model.faces.keys().next().unwrap());
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let references = cache.resident_reference_mesh(&key, &model);
+            cache.paint_resident(&key, &model, &faces, &entities, ui,
+                Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800., 600.)), references);
+        });
+        output.textures_delta.clear();
+        let original_appearance = cache.resident.appearance.values.clone();
+        let mut display = key.display.clone();
+        display.axes = false;
+        display.grid = false;
+        display.guides = false;
+        let mut capture = cache.capture_resident(&display, model.clone(), key.model_revision).unwrap();
+        assert!(capture.key.selected.is_empty());
+        assert!(capture.key.edit_context.is_none());
+        assert!(Arc::ptr_eq(cache.resident.geometry.as_ref().unwrap(),
+            capture.cache.resident.geometry.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(cache.resident.hierarchy.as_ref().unwrap(),
+            capture.cache.resident.hierarchy.as_ref().unwrap()));
+        assert!(!Arc::ptr_eq(&cache.resident.states, &capture.cache.resident.states));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            capture.paint(ui, Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800., 600.)), &key.camera);
+        });
+        output.textures_delta.clear();
+        assert_eq!(capture.cache.resident.builds, 0);
+        assert_eq!(cache.resident.appearance.values, original_appearance);
+        assert!(cache.capture_resident(&display, model.clone(), key.model_revision + 1).is_none());
+        display.color_by_tag = !display.color_by_tag;
+        assert!(cache.capture_resident(&display, model, key.model_revision).is_none());
+    }
+
+    #[test]
+    fn standard_screenshot_views_retain_geometry_and_shadows_on_the_gpu() {
+        let model = model(1024);
+        let mut faces = FaceCache::default();
+        faces.update(&model);
+        let mut entities = EntityCache::default();
+        entities.update(&model);
+        let mut cache = SceneCache::default();
+        let ctx = egui::Context::default();
+        let mut key = key();
+        key.display.shadows = true;
+        for view in 0..8 {
+            key.camera = crate::screenshots::view_camera(
+                &model, &Camera::default(), view, [800, 600],
+            );
+            assert!(supported(&key, &model, &faces), "view {view}");
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                cache.prepare_resident(&key, &model, &faces, &entities, ui);
+                let references = cache.resident_reference_mesh(&key, &model);
+                cache.paint_resident(&key, &model, &faces, &entities, ui,
+                    Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800., 600.)), references);
+            });
+            output.textures_delta.clear();
+            assert_eq!(cache.resident_builds(), 1, "geometry rebuilt for view {view}");
+            assert_eq!(cache.resident_shadow_builds(), 1, "sunlight rebuilt for view {view}");
+        }
     }
 
     #[test]
