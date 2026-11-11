@@ -7,6 +7,7 @@ use std::{path::PathBuf, sync::mpsc::TryRecvError};
 pub(super) enum Action {
     New,
     Open,
+    #[cfg(not(target_arch = "wasm32"))]
     Recent(usize),
     #[cfg(not(target_arch = "wasm32"))]
     RestartForUpdate,
@@ -244,6 +245,7 @@ impl BenchUpApp {
                 self.project.operation = Operation::Open;
                 self.project.pending = Some(project_files::open(ctx));
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Action::Recent(index) => {
                 let Some(entry) = self.project.recent.get(index).cloned() else { return; };
                 if let Some(path) = entry.path {
