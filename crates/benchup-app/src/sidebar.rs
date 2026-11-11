@@ -1321,6 +1321,38 @@ mod preference_tests {
     }
 
     #[test]
+    fn export_scales_survive_reload_without_a_model_edit() {
+        let ctx = egui::Context::default();
+        let mut storage = SavedPreferences::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        app.general_settings.section = settings::Section::ExportScales;
+        let scales = &mut app.general_settings.export_scale;
+        scales.presets[0].name = "Workshop miniature".into();
+        scales.presets[0].model = 20.;
+        scales.presets.pop();
+        scales.choice = export_scale::Choice::Preset(scales.presets[0].id);
+        scales.custom_output = "2.5".into();
+        scales.custom_model = "7".into();
+        let expected = scales.clone();
+        storage.flushed = false;
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        assert!(storage.flushed);
+        assert!(!app.project.modified);
+        assert!(app.dirty_since.is_none());
+        let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        assert_eq!(restored.general_settings.export_scale, expected);
+        assert_eq!(restored.general_settings.section, settings::Section::ExportScales);
+        app.general_settings.export_scale.choice = export_scale::Choice::Custom;
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        assert_eq!(restored.general_settings.export_scale.factor(), Some(2.5 / 7.));
+        let old: InspectorPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.general.export_scale, export_scale::Preferences::default());
+    }
+
+    #[test]
     fn exchange_choices_survive_reload_without_a_model_edit() {
         let ctx = egui::Context::default();
         let mut storage = SavedPreferences::default();

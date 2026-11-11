@@ -97,6 +97,8 @@ pub(crate) mod screenshot_dialog;
 mod searchable_selector;
 #[path = "settings.rs"]
 mod settings;
+#[path = "export_scale.rs"]
+mod export_scale;
 #[path = "shortcut_input.rs"]
 mod shortcut_input;
 #[path = "shortcuts.rs"]
@@ -6723,6 +6725,7 @@ impl eframe::App for BenchUpApp {
         self.release_notes.show(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
         self.update_window(&ctx);
+        self.export_scale_window(&ctx);
         self.project_dialogs(&ctx);
         self.screenshot_dialog(&ctx);
         self.sync_walk_cursor(&ctx);

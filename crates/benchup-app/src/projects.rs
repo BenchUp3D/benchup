@@ -32,6 +32,7 @@ pub(super) struct Project {
     pub recent: Vec<RecentProject>,
     pub import_format: String,
     pub export_stl: bool,
+    pub export_scale_open: bool,
     pub modified: bool,
     pub pending: Option<project_files::Pending>,
     pub preview_save: Option<(super::screenshot_dialog::Capture, Option<PathBuf>, String)>,
@@ -52,6 +53,7 @@ impl Default for Project {
             recent: Vec::new(),
             import_format: "skp".into(),
             export_stl: false,
+            export_scale_open: false,
             modified: false,
             pending: None,
             preview_save: None,
@@ -300,13 +302,28 @@ impl BenchUpApp {
         if self.project.blocked() {
             return;
         }
+        if self.project.export_stl {
+            self.project.export_scale_open = true;
+            return;
+        }
+        self.export_model_at_scale(ctx, 1.);
+    }
+
+    pub(super) fn export_model_at_scale(&mut self, ctx: &egui::Context, scale: f64) {
+        if self.project.blocked() {
+            return;
+        }
         let geometry=self.doc.model.evaluate_joinery();
         if !geometry.errors.is_empty() {
             self.project.error=Some(geometry.errors.into_iter().map(|(id,error)|tr!("projects.wood_joint", id = id, error = error)).collect::<Vec<_>>().join(tr!("projects.joint_error_separator")));
             return;
         }
         match if self.project.export_stl {
-            crate::mesh_exchange::export_stl(&geometry.model)
+            if scale == 1. {
+                crate::mesh_exchange::export_stl(&geometry.model)
+            } else {
+                crate::mesh_exchange::export_stl_scaled(&geometry.model, scale)
+            }
         } else {
             crate::interchange::export_obj(&geometry.model).map(String::into_bytes)
         } {

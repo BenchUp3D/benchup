@@ -406,6 +406,14 @@ fn dxf(text: &str) -> Result<Mesh, String> {
 }
 /// STL has no unit metadata: write millimetres, matching our import convention.
 pub fn export_stl(model: &Model) -> Result<Vec<u8>, String> {
+    export_stl_scaled(model, 1.)
+}
+
+/// Apply a uniform export-only ratio; the authoritative model stays unchanged.
+pub fn export_stl_scaled(model: &Model, scale: f64) -> Result<Vec<u8>, String> {
+    if !scale.is_finite() || scale <= 0. {
+        return Err("Export scale must be finite and greater than zero.".into());
+    }
     let mut out = vec![0u8; 84];
     let header = b"BenchUp STL; units: millimetres";
     out[..header.len()].copy_from_slice(header);
@@ -419,9 +427,15 @@ pub fn export_stl(model: &Model) -> Result<Vec<u8>, String> {
             if !normal.is_finite() || normal.length_squared() <= 1e-24 {
                 return Err(tr!("mesh_exchange.cannot_export_degenerate_stl_triangle").into());
             }
-            for p in
-                std::iter::once(normal.normalize()).chain(triangle.into_iter().map(|p| p * 1000.))
-            {
+            let vertices = triangle.map(|p| (p * (1000. * scale)).as_vec3());
+            if vertices.iter().any(|p| !p.is_finite()) {
+                return Err(tr!("mesh_exchange.stl_coordinate_overflow").into());
+            }
+            let rounded = vertices.map(|p| p.as_dvec3());
+            if (rounded[1] - rounded[0]).cross(rounded[2] - rounded[0]).length_squared() == 0. {
+                return Err("Export scale is too small to preserve STL triangle geometry.".into());
+            }
+            for p in std::iter::once(normal.normalize()).chain(rounded) {
                 for n in p.to_array() {
                     let value = n as f32;
                     if !value.is_finite() {
@@ -473,6 +487,24 @@ mod tests {
             assert!(import(bytes, "obj", "Bad").is_err());
         }
     }
+    #[test]
+    fn scaled_stl_changes_only_output_coordinates() {
+        let model = import(include_bytes!("../tests/fixtures/triangle-mm.stl"), "stl", "Part").unwrap();
+        let original = export_stl(&model).unwrap();
+        for scale in [1., 1. / 160., 1. / 87.1, 2.] {
+            let bytes = export_stl_scaled(&model, scale).unwrap();
+            assert_eq!(&bytes[..96], &original[..96]); // header, count and normal
+            for offset in (96..132).step_by(4) {
+                let read = |data: &[u8]| f32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) as f64;
+                assert!((read(&bytes) - read(&original) * scale).abs() < 0.001);
+            }
+            assert_eq!(export_stl(&model).unwrap(), original);
+        }
+        for scale in [0., -1., f64::NAN, f64::INFINITY, f64::MAX, f64::MIN_POSITIVE] {
+            assert!(export_stl_scaled(&model, scale).is_err());
+        }
+    }
+
     #[test]
     fn stl_ascii_binary_roundtrip_and_truncation() {
         let m = import(

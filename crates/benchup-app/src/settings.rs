@@ -19,6 +19,7 @@ pub(super) enum Section {
     Diagnostics,
     Rendering,
     Tools,
+    ExportScales,
 }
 
 impl Section {
@@ -38,12 +39,12 @@ impl Section {
             ),
             (
                 tr!("settings.system"),
-                &[Self::Diagnostics, Self::Rendering],
+                &[Self::Diagnostics, Self::Rendering, Self::ExportScales],
             ),
         ]
     }
     #[cfg(test)]
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::Units,
         Self::Navigation,
         Self::Shortcuts,
@@ -54,6 +55,7 @@ impl Section {
         Self::Diagnostics,
         Self::Rendering,
         Self::Tools,
+        Self::ExportScales,
     ];
     fn label(self) -> &'static str {
         match self {
@@ -67,6 +69,7 @@ impl Section {
             Self::Diagnostics => tr!("settings.diagnostics"),
             Self::Rendering => tr!("settings.rendering"),
             Self::Tools => tr!("settings.tools"),
+            Self::ExportScales => "Export scales",
         }
     }
 
@@ -82,6 +85,7 @@ impl Section {
             Self::Diagnostics => "diagnostics",
             Self::Rendering => "settings_colors",
             Self::Tools => "settings_shortcuts",
+            Self::ExportScales => "units",
         }
     }
 
@@ -198,6 +202,7 @@ pub(super) struct GeneralSettings {
     pub default_units: benchup_core::UnitSettings,
     pub tool_keys: Vec<String>,
     pub stock: stock_settings::Settings,
+    pub export_scale: export_scale::Preferences,
 }
 
 impl Default for GeneralSettings {
@@ -219,6 +224,7 @@ impl Default for GeneralSettings {
             show_fps: false,
             default_units: Default::default(),
             stock: Default::default(),
+            export_scale: Default::default(),
             tool_keys: TOOLS.iter().map(|(_, key)| key.to_string()).collect(),
         }
     }
@@ -274,6 +280,7 @@ impl GeneralSettings {
         self.walk.normalize();
         self.space_mouse.normalize();
         self.stock.normalize();
+        self.export_scale.normalize();
         if !languages().iter().any(|&(code, _)| code == self.language.as_str()) {
             self.language = DEFAULT_LANGUAGE.into();
         }
@@ -523,6 +530,7 @@ impl BenchUpApp {
                                     Section::Diagnostics => "settings/diagnostics",
                                     Section::Rendering => "settings/rendering",
                                     Section::Tools => "settings/tools",
+                                    Section::ExportScales => "settings/export_scales",
                                 };
                                 let scroll = sidebar::restored_scroll_area(
                                     ui,
@@ -576,6 +584,7 @@ impl BenchUpApp {
 
     fn settings_contents(&mut self, ui: &mut egui::Ui) {
         match self.general_settings.section {
+            Section::ExportScales => self.general_settings.export_scale.settings_ui(ui),
             Section::Tools => {
                 ui.checkbox(
                     &mut self.general_settings.reset_axis_locks_on_action,
