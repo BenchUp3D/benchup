@@ -1,0 +1,26 @@
+name: Set up compiler cache
+description: Share Rust and native C/C++ compilation results with release jobs.
+
+runs:
+  using: composite
+  steps:
+    - name: Install pinned sccache
+      uses: mozilla-actions/sccache-action@v0.0.11
+      with:
+        version: v0.19.0
+
+    - name: Configure shared compiler cache
+      shell: bash
+      env:
+        # Tags can read main's entries but cannot share their own entries with
+        # future releases. Branch/PR entries can still speed up their reruns.
+        CACHE_MODE: ${{ startsWith(github.ref, 'refs/tags/') && 'READ_ONLY' || 'READ_WRITE' }}
+      run: |
+        # cc also recognizes RUSTC_WRAPPER=sccache, covering the SketchUp
+        # reader's C/C++ compilation without overriding platform compilers.
+        printf '%s\n' \
+          'CARGO_INCREMENTAL=0' \
+          'RUSTC_WRAPPER=sccache' \
+          'SCCACHE_GHA_ENABLED=on' \
+          'SCCACHE_GHA_VERSION=benchup-v1' \
+          "SCCACHE_GHA_RW_MODE=$CACHE_MODE" >> "$GITHUB_ENV"

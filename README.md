@@ -45,7 +45,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request guidelines
 
 ## Prerequisites
 
-- Rust 1.95 or newer, installed with rustup; the repository was checked with Rust 1.97.1.
+- Rust installed with rustup. `rust-toolchain.toml` pins Rust 1.97.1 for development and CI; the workspace minimum supported version is 1.95.
 - A C/C++17 compiler for the native SketchUp reader (GCC/Clang on Linux, Xcode Clang on macOS, or MSVC on Windows). Browser builds do not require it.
 - A GPU/driver supported by wgpu. The browser prefers WebGPU and falls back to WebGL2.
 - On Linux, development libraries for X11/Wayland, xkbcommon, and libudev. For Debian/Ubuntu: `sudo apt install build-essential pkg-config libx11-dev libxcb1-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libudev-dev`.
@@ -150,8 +150,8 @@ The executable is `target/release/benchup-app` (`benchup-app.exe` on Windows). T
 [Build releases](.github/workflows/build.yml) runs when a `v*` tag is pushed
 (for example, `git push origin v0.1.0`). The tag must be a stable `vX.Y.Z`
 version matching `[workspace.package].version` in `Cargo.toml`. It builds with
-stable Rust and the committed `Cargo.lock`, runs update regression tests, then
-packages the desktop app with Velopack and the browser app with Trunk:
+the pinned Rust toolchain and committed `Cargo.lock`, runs update regression
+tests, and packages the desktop app with Velopack and the browser app with Trunk:
 
 | Artifact | Platform | Install / run |
 |---|---|---|
@@ -168,15 +168,32 @@ update channels.
 
 [Warm release caches](.github/workflows/cache.yml) populates dependency caches
 on relevant pushes to `main`, or manually from that branch. It uses the same Rust
-toolchain, runners, release profile, targets, and shared cache keys as releases,
-and skips compilation on an exact cache hit. Release tags and manual Pages builds
-restore these caches without saving duplicate tag caches. GitHub permits tags to
+toolchain, runners, profiles, targets, and shared cache keys as releases. It also
+refreshes an sccache compiler cache for workspace Rust libraries and the native
+SketchUp reader, even when the dependency cache already matches. It warms release
+libraries without linking the final application, plus the desktop compatibility
+test dependencies. Release tags restore compiler-cache entries from `main`
+without writing duplicate tag caches. Branch and PR runs also populate their
+own scoped compiler caches for subsequent runs. The shared
+[compiler-cache action](.github/actions/setup-compiler-cache/action.yml) pins
+sccache and prints cache statistics at the end of each job.
+
+Desktop compatibility tests run in parallel with packaging, on all four desktop
+targets, using `ci-test`: release assertion and overflow behavior, optimization
+level 1, and no LTO. Shipped applications retain release optimization level 2 and
+Thin LTO. Both profiles are warmed on `main`. To change Rust, update
+`rust-toolchain.toml` and the matching toolchain action versions in the release,
+cache-warming, Pages, and PR workflows together, then rewarm the caches.
+
+Release tags and manual Pages builds restore the dependency caches without
+saving duplicate tag caches. GitHub permits tags to
 restore caches from the default branch, but not from other tags. Keep `main` as
 the default branch and let cache warming finish before tagging a release to get
 the benefit. Cache warming does not package or publish a release.
 
-After all desktop and WebAssembly builds succeed, the workflow creates a GitHub Release for the
-pushed tag with the prepared release notes, installers, portable packages, full
+After all desktop builds, compatibility tests, and WebAssembly builds succeed,
+the workflow creates a GitHub Release for the pushed tag with the prepared
+release notes, installers, portable packages, full
 `.nupkg` updates, one `releases.<platform>.json` feed per OS/architecture, the browser app ZIP, and
 `SHA256SUMS`. It validates the packages against their feed hashes and publishes
 only after every platform succeeds and all assets have uploaded. Reruns can

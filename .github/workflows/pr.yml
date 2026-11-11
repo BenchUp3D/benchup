@@ -25,7 +25,10 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/setup-compiler-cache
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -46,9 +49,12 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust and WebAssembly target
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: wasm32-unknown-unknown
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/setup-compiler-cache
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2

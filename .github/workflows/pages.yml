@@ -62,9 +62,13 @@ jobs:
 
       - name: Install Rust and WebAssembly target
         if: github.event_name == 'workflow_dispatch'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: wasm32-unknown-unknown
+
+      - name: Set up compiler cache
+        if: github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/setup-compiler-cache
 
       - name: Cache Rust dependencies
         if: github.event_name == 'workflow_dispatch'

@@ -8,6 +8,7 @@ on:
       - 'Cargo.lock'
       - 'rust-toolchain*'
       - '.cargo/**'
+      - '.github/actions/setup-compiler-cache/**'
       - 'crates/**'
       - 'assets/**'
       - 'scripts/install_linux_dependencies.py'
@@ -72,27 +73,32 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: ${{ matrix.target }}
 
+      - name: Set up compiler cache
+        uses: ./.github/actions/setup-compiler-cache
+
       - name: Cache Rust dependencies
-        id: rust-cache
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ${{ matrix.cache-key }}
 
       - name: Install Linux dependencies
-        if: steps.rust-cache.outputs.cache-hit != 'true' && runner.os == 'Linux' && matrix.platform != 'wasm'
+        if: runner.os == 'Linux' && matrix.platform != 'wasm'
         run: |
           sudo python3 scripts/install_linux_dependencies.py \
             build-essential pkg-config libx11-dev libxcb1-dev \
             libxkbcommon-dev libwayland-dev libegl1-mesa-dev libudev-dev
 
-      - name: Warm release dependencies
-        if: steps.rust-cache.outputs.cache-hit != 'true'
-        run: cargo build -p benchup-app --bin benchup-app --release --locked --target "${{ matrix.target }}"
+      # Workspace source changes do not change the dependency cache key. Always
+      # refresh their compiler-cache entries; final release linking is not cached.
+      - name: Warm release libraries
+        run: cargo build -p benchup-app --lib --release --locked --target "${{ matrix.target }}"
 
-      - name: Warm desktop release test dependencies
-        if: steps.rust-cache.outputs.cache-hit != 'true' && matrix.platform != 'wasm'
-        run: cargo test -p benchup-app --lib --release --locked --no-run --target "${{ matrix.target }}"
+      - name: Warm desktop compatibility test dependencies
+        if: matrix.platform != 'wasm'
+        run: |
+          cargo test -p benchup-app --lib --profile ci-test --locked --no-run --target "${{ matrix.target }}"
+          cargo test -p benchup-io -p benchup-skp --profile ci-test --locked --no-run --target "${{ matrix.target }}"
