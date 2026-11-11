@@ -80,6 +80,7 @@ impl RecentProject {
         }
         other.path.is_none() && other.browser_file.is_none() && self.server == other.server
     }
+    #[cfg(not(target_arch = "wasm32"))]
     fn description(&self) -> String {
         let location = if let Some(path) = &self.path { path.display().to_string() }
         else if let Some(file) = &self.browser_file { tr!("projects.browser_file_browser_hides_the_full_path_reselect", file = file) }
@@ -118,6 +119,7 @@ impl BenchUpApp {
         self.project.recent.truncate(10);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn recent_projects_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         Self::menu_submenu(ui, tr!("projects.recent_projects"), None, |ui| {
             if self.project.recent.is_empty() { ui.label(tr!("projects.no_recent_projects")); }
@@ -137,15 +139,19 @@ impl BenchUpApp {
                     ..Default::default()
                 });
                 ui.horizontal(|ui| {
-                    if ui.add(Self::menu_item_button(ui, label, None).wrap()).on_hover_text(detail).clicked() {
-                        chosen = Some(index);
-                    }
-                    if ui.small_button(tr!("common.remove"))
-                        .on_hover_text(tr!("projects.remove_from_recent_projects"))
-                        .clicked()
-                    {
-                        remove = Some(index);
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button(tr!("common.remove"))
+                            .on_hover_text(tr!("projects.remove_from_recent_projects"))
+                            .clicked()
+                        {
+                            remove = Some(index);
+                        }
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            if ui.add(Self::menu_item_button(ui, label, None).wrap()).on_hover_text(detail).clicked() {
+                                chosen = Some(index);
+                            }
+                        });
+                    });
                 });
             }
             if let Some(index) = remove {

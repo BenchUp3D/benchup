@@ -2855,6 +2855,7 @@ impl BenchUpApp {
                                     }
                                     ui.close();
                                 }
+                                #[cfg(not(target_arch = "wasm32"))]
                                 if action == 1 {
                                     self.recent_projects_menu(ui, &ctx);
                                 }
