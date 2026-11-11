@@ -218,6 +218,77 @@ fn initial_and_subsequent_points_can_snap_to_visible_world_axes() {
 }
 
 #[test]
+fn nearby_world_axes_snap_to_their_shared_origin_without_geometry_snapping() {
+    let model = Model::default();
+    let size = DVec2::new(1000., 700.);
+    for projection in [Projection::Perspective, Projection::Parallel] {
+        for standard in [
+            StandardView::Top,
+            StandardView::Front,
+            StandardView::Right,
+            StandardView::Iso,
+        ] {
+            let mut camera = Camera {
+                projection,
+                ..Camera::default()
+            };
+            camera.set_standard_view(standard);
+            let cursor = camera.project(DVec3::ZERO, size).unwrap() + DVec2::new(3., 2.);
+            for start in [
+                None,
+                Some(DVec3::new(-4., -3., 2.)),
+                Some(DVec3::X * 3.),
+                Some(DVec3::Y * 3.),
+                Some(DVec3::Z * 3.),
+            ] {
+                let snap =
+                    infer_with_snapping(&model, &camera, size, cursor, start, None, false, true)
+                        .unwrap();
+                assert_eq!(snap.kind, Inference::Origin, "{projection:?}, {standard:?}");
+                assert_eq!(snap.point, DVec3::ZERO);
+            }
+            let free = infer_with_snapping(
+                &model,
+                &camera,
+                size,
+                cursor,
+                Some(DVec3::ZERO),
+                None,
+                false,
+                false,
+            );
+            assert!(free.is_none_or(|snap| snap.kind == Inference::Plane));
+        }
+    }
+}
+
+#[test]
+fn combined_world_axes_do_not_collapse_short_segments_starting_at_the_origin() {
+    let camera = Camera::default();
+    let size = DVec2::new(1000., 700.);
+    let model = Model::default();
+    let origin = camera.project(DVec3::ZERO, size).unwrap();
+    for axis in [Axis::X, Axis::Y, Axis::Z] {
+        let direction = (camera.project(axis.vector(), size).unwrap() - origin).normalize();
+        let cursor = origin + direction * 9.;
+        let snap = infer_with_snapping(
+            &model,
+            &camera,
+            size,
+            cursor,
+            Some(DVec3::ZERO),
+            None,
+            false,
+            true,
+        )
+        .unwrap();
+        assert_eq!(snap.kind, Inference::Axis(axis));
+        assert!(snap.point.length() > 1e-3);
+        assert!(snap.point.cross(axis.vector()).length() < 1e-7);
+    }
+}
+
+#[test]
 fn inferred_direction_can_also_snap_exactly_to_an_existing_edge() {
     let camera = Camera::default();
     let size = DVec2::new(1000., 700.);
