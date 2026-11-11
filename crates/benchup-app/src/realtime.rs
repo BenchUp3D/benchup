@@ -52,7 +52,7 @@ impl Socket {
         {
             let (outgoing, commands) = mpsc::channel::<Value>();
             let ctx = ctx.clone();
-            std::thread::spawn(move || {
+            benchup_core::i18n::spawn_localized(move || {
                 let result = (|| -> Result<(), String> {
                     use std::{
                         io::ErrorKind,

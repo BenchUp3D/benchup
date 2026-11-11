@@ -1,3 +1,4 @@
+use benchup_core::tr;
 use super::*;
 #[path = "walk_physics.rs"]
 mod physics;
@@ -55,12 +56,12 @@ impl BenchUpApp {
         });
         let response = ui
             .add(
-                egui::Button::new((icon, "Walk"))
+                egui::Button::new((icon, tr!("walk.walk")))
                     .min_size(egui::vec2(0., 32.))
                     .selected(self.tool == Tool::Walk),
             )
             .on_hover_text(
-                "Walk through the model. Click a floor face to place yourself at eye level.",
+                tr!("walk.walk_through_the_model_click_a_floor_face_to_place_yourself_at_eye_level"),
             );
         if response.clicked() {
             response.surrender_focus();
@@ -118,10 +119,10 @@ impl BenchUpApp {
         match self.walk.person.as_ref() {
             None => Tool::Walk.instructions(),
             Some(person) if person.sitting => {
-                "Seated · Move mouse to look (180°) · Alt: stand · Tab: sidebar · Escape: exit Walk"
+                tr!("walk.seated_move_mouse_to_look_180_alt_stand_tab_sidebar_escape_exit_walk")
             }
             Some(_) => {
-                "WASD / arrows: walk · Move mouse to look · Shift: crouch · Space: jump · Alt: sit · Tab: sidebar · Escape: exit Walk"
+                tr!("walk.walking_controls")
             }
         }
     }
@@ -237,11 +238,11 @@ impl BenchUpApp {
         };
         let hit = picking.nearest_unscoped(faces, entities, ray);
         let Some((id, _, point)) = hit else {
-            self.say(ctx, "Click a floor face to place the walking person.");
+            self.say(ctx, tr!("walk.click_a_floor_face_to_place_the_walking_person"));
             return;
         };
         if faces.get(id).normal.z.abs() + 1e-10 < std::f64::consts::FRAC_1_SQRT_2 {
-            self.say(ctx, "Choose a floor or a slope of 45° or less.");
+            self.say(ctx, tr!("walk.choose_a_floor_or_a_slope_of_45_or_less"));
             return;
         }
         let settings = &self.general_settings.walk;
@@ -254,7 +255,7 @@ impl BenchUpApp {
         ) else {
             self.say(
                 ctx,
-                "There is not enough space here for the configured body size and eye height.",
+                tr!("walk.there_is_not_enough_space_here_for_the_configured_body_size_and_eye_height"),
             );
             return;
         };
@@ -337,7 +338,7 @@ impl BenchUpApp {
                 self.walk.person = None;
                 self.say(
                     ctx,
-                    "The new body dimensions do not fit here. Click a floor face to reposition.",
+                    tr!("walk.the_new_body_dimensions_do_not_fit_here_click_a_floor_face_to_reposition"),
                 );
             }
             self.walk.settings = Some(self.general_settings.walk.clone());
@@ -366,7 +367,7 @@ impl BenchUpApp {
         if alt && !self.walk.alt_down {
             if !person.toggle_sit(&self.walk.world, &settings) {
                 self.notice = Some((
-                    "Cannot change posture here: check head clearance and floor support.".into(),
+                    tr!("walk.cannot_change_posture_here_check_head_clearance_and_floor_support").into(),
                     now + 5.,
                 ));
             }

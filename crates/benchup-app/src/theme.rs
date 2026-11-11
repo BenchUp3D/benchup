@@ -163,6 +163,13 @@ pub fn apply(ctx: &egui::Context) {
         ))
         .into(),
     );
+    fonts.font_data.insert(
+        "benchup.chinese".into(),
+        egui::FontData::from_static(include_bytes!("../../../assets/fonts/NotoSansSC-Regular.otf")).into(),
+    );
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        fonts.families.entry(family).or_default().push("benchup.chinese".into());
+    }
     let mut title_fonts = fonts.families[&FontFamily::Proportional].clone();
     title_fonts.insert(0, PROJECT_TITLE_FONT.into());
     fonts.families.insert(project_title_font(), title_fonts);

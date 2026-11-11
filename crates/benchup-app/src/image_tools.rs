@@ -1,4 +1,5 @@
 //! Image placement uses the same rectangle inference and locks as drawing.
+use benchup_core::tr;
 use super::*;
 use benchup_core::{ImageAsset, ImageSettings, ReferenceImage};
 use std::{
@@ -58,7 +59,7 @@ fn decode_image(
     preferences: &Preferences,
 ) -> Result<ImportedImage, String> {
     if bytes.len() > 32 * 1024 * 1024 {
-        return Err("Choose an image smaller than 32 MB.".into());
+        return Err(tr!("image_tools.choose_an_image_smaller_than_32_mb").into());
     }
     let mut reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
@@ -69,12 +70,12 @@ fn decode_image(
     use image::ImageDecoder as _;
     let mut decoder = reader
         .into_decoder()
-        .map_err(|e| format!("Could not open image: {e}"))?;
+        .map_err(|e| tr!("image_tools.could_not_open_image", e = e))?;
     let orientation = decoder
         .orientation()
         .unwrap_or(image::metadata::Orientation::NoTransforms);
     let mut source = image::DynamicImage::from_decoder(decoder)
-        .map_err(|e| format!("Could not open image: {e}"))?;
+        .map_err(|e| tr!("image_tools.could_not_open_image", e = e))?;
     source.apply_orientation(orientation);
     let source = if source.width() > 4096 || source.height() > 4096 {
         source.resize(4096, 4096, image::imageops::FilterType::Lanczos3)
@@ -87,7 +88,7 @@ fn decode_image(
         .write_to(&mut png, image::ImageFormat::Png)
         .map_err(|e| e.to_string())?;
     if png.get_ref().len() > 32 * 1024 * 1024 {
-        return Err("The decoded image is too large. Choose a smaller image.".into());
+        return Err(tr!("image_tools.the_decoded_image_is_too_large_choose_a_smaller_image").into());
     }
     Ok(ImportedImage {
         image: ReferenceImage {
@@ -211,7 +212,7 @@ impl BenchUpApp {
             .get_mut(&edit.id)
             .unwrap()
             .settings = edit.settings;
-        self.finish_context_state_edit("Edit reference image", before, ctx);
+        self.finish_context_state_edit(tr!("image_tools.edit_reference_image"), before, ctx);
     }
 
     fn adjust_image_appearance(
@@ -250,7 +251,7 @@ impl BenchUpApp {
         replace: Option<u64>,
     ) -> bool {
         if self.images.pending.is_some() {
-            self.say(ctx, "Finish or cancel the current image picker first.");
+            self.say(ctx, tr!("image_tools.finish_or_cancel_the_current_image_picker_first"));
             return false;
         }
         let (sender, result) = mpsc::channel();
@@ -264,17 +265,17 @@ impl BenchUpApp {
             let _ = sender.send(Ok(None));
         }
         #[cfg(all(not(test), not(target_arch = "wasm32")))]
-        std::thread::spawn(move || {
+        benchup_core::i18n::spawn_localized(move || {
             let result = (|| {
                 let Some(path) = rfd::FileDialog::new()
-                    .set_title("Choose reference image")
-                    .add_filter("Images (PNG, JPEG, WebP)", &["png", "jpg", "jpeg", "webp"])
+                    .set_title(tr!("image_tools.choose_reference_image"))
+                    .add_filter(tr!("image_tools.images_png_jpeg_webp"), &["png", "jpg", "jpeg", "webp"])
                     .pick_file()
                 else {
                     return Ok(None);
                 };
                 if std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > 32 * 1024 * 1024 {
-                    return Err("Choose an image smaller than 32 MB.".into());
+                    return Err(tr!("image_tools.choose_an_image_smaller_than_32_mb").into());
                 }
                 let name = path
                     .file_name()
@@ -294,8 +295,8 @@ impl BenchUpApp {
         #[cfg(all(not(test), target_arch = "wasm32"))]
         wasm_bindgen_futures::spawn_local(async move {
             let result = if let Some(file) = rfd::AsyncFileDialog::new()
-                .set_title("Choose reference image")
-                .add_filter("Images (PNG, JPEG, WebP)", &["png", "jpg", "jpeg", "webp"])
+                .set_title(tr!("image_tools.choose_reference_image"))
+                .add_filter(tr!("image_tools.images_png_jpeg_webp"), &["png", "jpg", "jpeg", "webp"])
                 .pick_file()
                 .await
             {
@@ -322,7 +323,7 @@ impl BenchUpApp {
         let result = match pending.result.try_recv() {
             Ok(result) => result,
             Err(mpsc::TryRecvError::Empty) => return,
-            Err(_) => Err("The image picker could not finish.".into()),
+            Err(_) => Err(tr!("image_tools.the_image_picker_could_not_finish").into()),
         };
         let pending = self.images.pending.take().unwrap();
         match result {
@@ -332,14 +333,14 @@ impl BenchUpApp {
                 {
                     self.say(
                         ctx,
-                        "Image import cancelled because the project or editing context changed.",
+                        tr!("image_tools.image_import_cancelled_because_the_project_or_editing_context_changed"),
                     );
                     return;
                 }
                 let before = self.doc.model.clone();
                 if let Some(face) = pending.replace {
                     if self.doc.model.is_locked(face) {
-                        self.say(ctx, "Unlock the image before replacing it.");
+                        self.say(ctx, tr!("image_tools.unlock_the_image_before_replacing_it"));
                         return;
                     }
                     if let Some(old) = self.doc.model.reference_images.get(&face) {
@@ -348,14 +349,14 @@ impl BenchUpApp {
                         image.placement_offset = old.placement_offset;
                         self.doc.model.image_assets.insert(image.asset, asset);
                         self.doc.model.reference_images.insert(face, image);
-                        self.finish_context_state_edit("Replace reference image", before, ctx);
+                        self.finish_context_state_edit(tr!("image_tools.replace_reference_image"), before, ctx);
                     }
                 } else {
                     let points = pending.points.map(|p| p + image.placement_offset);
                     match self.doc.model.add_reference_image(points, image, asset) {
                         Ok(id) => {
                             self.selected = BTreeSet::from([id]);
-                            self.finish_edit("Add reference image", before, ctx);
+                            self.finish_edit(tr!("image_tools.add_reference_image"), before, ctx);
                         }
                         Err(message) => self.say(ctx, message),
                     }
@@ -408,28 +409,28 @@ impl BenchUpApp {
             let previous = edited.settings.clone();
             let mut active = None;
             let locked = self.doc.model.is_locked(id);
-            ui.heading("Reference image");
-            Self::property_row(ui, "File", &source.name);
+            ui.heading(tr!("image_tools.reference_image"));
+            Self::property_row(ui, tr!("app.file"), &source.name);
             let pixels = self.doc.model.image_assets[&source.asset].pixels;
-            Self::property_row(ui, "Resolution", &format!("{} × {}", pixels[0], pixels[1]));
+            Self::property_row(ui, tr!("screenshot_dialog.resolution"), &format!("{} × {}", pixels[0], pixels[1]));
             ui.add_enabled_ui(!locked, |ui| {
-                sidebar::inspector_section(ui, "Image", "reference_image_appearance", true, |ui| {
+                sidebar::inspector_section(ui, tr!("image_tools.image"), "reference_image_appearance", true, |ui| {
                     active = appearance_fields(ui, &mut edited.settings);
                 });
             });
             if locked {
-                ui.label("Unlock the image to edit its properties.");
+                ui.label(tr!("image_tools.unlock_the_image_to_edit_its_properties"));
             }
             if edited.settings != previous {
                 self.adjust_image_appearance(id, edited.settings, active, ui.ctx());
             }
             true
         } else if self.tool == Tool::Image {
-            ui.heading("Image tool");
-            ui.label("Draw two opposite corners, then choose a PNG, JPEG or WebP image. Images are embedded in the project.");
+            ui.heading(tr!("image_tools.image_tool"));
+            ui.label(tr!("image_tools.draw_two_opposite_corners_then_choose_a_png_jpeg_or_webp_image_images_are_embedded_in_the_project"));
             sidebar::inspector_section(
                 ui,
-                "Image defaults",
+                tr!("image_tools.image_defaults"),
                 "reference_image_defaults",
                 true,
                 |ui| {
@@ -444,11 +445,12 @@ impl BenchUpApp {
 }
 fn field(
     ui: &mut egui::Ui,
+    key: &str,
     label: &str,
     content: impl FnOnce(&mut egui::Ui) -> egui::Response,
 ) -> Option<(egui::Id, egui::Rect, bool)> {
     let mut active = None;
-    crate::inspector_table::inspector_field(ui, ("reference_image", label), label, |ui| {
+    crate::inspector_table::inspector_field(ui, ("reference_image", key), label, |ui| {
         let response = content(ui);
         if response.changed() && (response.dragged() || response.has_focus()) {
             active = Some((response.id, response.rect, response.dragged()));
@@ -463,7 +465,7 @@ fn appearance_fields(
 ) -> Option<(egui::Id, egui::Rect, bool)> {
     let mut active = None;
     for response in [
-        field(ui, "Zoom", |ui| {
+        field(ui, "Zoom", tr!("image_tools.zoom"), |ui| {
             ui.add(
                 egui::DragValue::new(&mut settings.zoom)
                     .speed(0.01)
@@ -471,7 +473,7 @@ fn appearance_fields(
                     .suffix("×"),
             )
         }),
-        field(ui, "Rotation", |ui| {
+        field(ui, "Rotation", tr!("image_tools.rotation"), |ui| {
             ui.add(
                 egui::DragValue::new(&mut settings.rotation)
                     .speed(1.)
@@ -479,24 +481,24 @@ fn appearance_fields(
                     .suffix("°"),
             )
         }),
-        field(ui, "Opacity", |ui| {
+        field(ui, "Opacity", tr!("image_tools.opacity"), |ui| {
             ui.add(egui::Slider::new(&mut settings.opacity, 0. ..=1.))
         }),
-        field(ui, "Brightness", |ui| {
+        field(ui, "Brightness", tr!("image_tools.brightness"), |ui| {
             ui.add(egui::Slider::new(&mut settings.brightness, 0. ..=2.))
         }),
-        field(ui, "Contrast", |ui| {
+        field(ui, "Contrast", tr!("image_tools.contrast"), |ui| {
             ui.add(egui::Slider::new(&mut settings.contrast, 0. ..=2.))
         }),
     ] {
         active = active.or(response);
     }
-    for (label, value) in [
-        ("Flip horizontal", &mut settings.flip_horizontal),
-        ("Flip vertical", &mut settings.flip_vertical),
-        ("Grayscale", &mut settings.grayscale),
+    for (key, label, value) in [
+        ("Flip horizontal", tr!("image_tools.flip_horizontal"), &mut settings.flip_horizontal),
+        ("Flip vertical", tr!("image_tools.flip_vertical"), &mut settings.flip_vertical),
+        ("Grayscale", tr!("image_tools.grayscale"), &mut settings.grayscale),
     ] {
-        field(ui, label, |ui| ui.checkbox(value, ""));
+        field(ui, key, label, |ui| ui.checkbox(value, ""));
     }
     active
 }
@@ -734,7 +736,7 @@ mod tests {
                         |(_, settings)| settings.clone(),
                     );
                     let previous = settings.clone();
-                    let active = field(ui, "Brightness", |ui| {
+                    let active = field(ui, "Brightness", "Brightness", |ui| {
                         let response =
                             ui.add(egui::Slider::new(&mut settings.brightness, 0. ..=2.));
                         rect = response.rect;

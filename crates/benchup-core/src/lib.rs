@@ -1,5 +1,5 @@
 #[macro_use]
-mod i18n;
+pub mod i18n;
 pub mod reference_images;
 pub use reference_images::{ImageAsset, ImageFit, ImageSettings, ReferenceImage};
 

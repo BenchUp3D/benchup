@@ -1,6 +1,6 @@
 //! Support diagnostics captured on demand and copied only by user action.
-use benchup_core::tr;
 use crate::{modal::Modal, natural_text::TextUi as _};
+use benchup_core::tr;
 use eframe::egui;
 use std::fmt::Write as _;
 
@@ -38,10 +38,9 @@ fn issue_url(report: &str) -> String {
             .max(2)
             + 1,
     );
-    let body = tr!(
-        "system_info.describe_your_feature_suggestion_or_bug_here_system",
-        fence = fence,
-        report = report,
+    // Support reports and issue templates always use English, regardless of UI language.
+    let body = format!(
+        "Describe your feature suggestion or bug here.\n\n---\n\n## System Information\n\n{fence}text\n{report}\n{fence}\n"
     );
     let mut url = String::from("https://github.com/BenchUp3D/editor/issues/new?body=");
     // Percent-encode UTF-8 bytes as a query value, including newlines and reserved characters.
@@ -55,21 +54,22 @@ fn issue_url(report: &str) -> String {
     url
 }
 
+// Keep diagnostic output in English so it can be shared directly with support.
 fn collect(ctx: &egui::Context, frame: &eframe::Frame) -> String {
-    let mut text = tr!(
-        "system_info.benchup_build",
+    let mut text = format!(
+        "BenchUp {}\nBuild: {}\n",
         env!("CARGO_PKG_VERSION"),
         if cfg!(debug_assertions) {
-            tr!("system_info.debug")
+            "Debug"
         } else {
-            tr!("system_info.release")
+            "Release"
         }
     );
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = writeln!(
             text,
-            tr!("system_info.runtime_desktop_os_architecture"),
+            "Runtime: Desktop\nOS: {}\nArchitecture: {}",
             std::env::consts::OS,
             std::env::consts::ARCH
         );
@@ -79,41 +79,40 @@ fn collect(ctx: &egui::Context, frame: &eframe::Frame) -> String {
                 .lines()
                 .find_map(|line| line.strip_prefix("PRETTY_NAME="))
         {
-            let _ = writeln!(text, tr!("system_info.os_version"), name.trim_matches('"'));
+            let _ = writeln!(text, "OS version: {}", name.trim_matches('"'));
         }
         if let Ok(threads) = std::thread::available_parallelism() {
-            let _ = writeln!(text, tr!("system_info.available_logical_cpus"), threads = threads);
+            let _ = writeln!(text, "Available logical CPUs: {threads}");
         }
     }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = writeln!(
             text,
-            tr!("system_info.runtime_browser_webassembly_browser_os"),
+            "Runtime: Browser (WebAssembly)\nBrowser / OS: {}",
             frame.info().web_info.user_agent
         );
     }
-    let _ = writeln!(text, tr!("system_info.platform"), ctx.os());
+    let _ = writeln!(text, "Platform: {:?}", ctx.os());
     let bounds = ctx.viewport_rect();
     let scale = ctx.pixels_per_point();
     let _ = writeln!(
         text,
-        tr!("system_info.window_pixels_ui_scale_pixels_point_ui_zoom"),
+        "Window: {:.0} × {:.0} pixels\nUI scale: {scale:.2} pixels/point\nUI zoom: {:.0}%\nTheme: {}",
         bounds.width() * scale,
         bounds.height() * scale,
         ctx.zoom_factor() * 100.,
         if ctx.global_style().visuals.dark_mode {
-            tr!("system_info.dark")
+            "Dark"
         } else {
-            tr!("system_info.light")
+            "Light"
         },
-        scale = scale,
     );
     if let Some(render) = frame.wgpu_render_state() {
         let adapter = render.adapter.get_info();
         let _ = writeln!(
             text,
-            tr!("system_info.renderer_wgpu_graphics_backend_gpu_gpu_type_gpu"),
+            "Renderer: wgpu\nGraphics backend: {:?}\nGPU: {}\nGPU type: {:?}\nGPU vendor/device: {:04x}/{:04x}\nDriver: {}\nDriver details: {}\nSurface format: {:?}",
             adapter.backend,
             adapter.name,
             adapter.device_type,
@@ -124,7 +123,7 @@ fn collect(ctx: &egui::Context, frame: &eframe::Frame) -> String {
             render.target_format
         );
     } else {
-        text.push_str(tr!("system_info.graphics_adapter_information_unavailable"));
+        text.push_str("Graphics adapter information: unavailable\n");
     }
     text
 }
@@ -147,7 +146,9 @@ pub(crate) fn show(ctx: &egui::Context, frame: &eframe::Frame) {
             ui.text_heading(tr!("system_info.system_information"));
         });
         modal.body(|ui| {
-            ui.text_label(tr!("system_info.include_these_details_when_reporting_a_bug"));
+            ui.text_label(tr!(
+                "system_info.include_these_details_when_reporting_a_bug"
+            ));
             ui.add_space(8.);
             egui::ScrollArea::vertical()
                 .max_height(400.)
@@ -189,6 +190,30 @@ pub(crate) fn show(ctx: &egui::Context, frame: &eframe::Frame) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostics_and_issue_text_stay_english_with_chinese_ui() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                benchup_core::i18n::set_language("en");
+            }
+        }
+        let _reset = Reset;
+        let ctx = egui::Context::default();
+        ctx.set_visuals(egui::Visuals::light());
+        let frame = eframe::Frame::_new_kittest();
+        benchup_core::i18n::set_language("en");
+        let english = collect(&ctx, &frame);
+        let english_url = issue_url(&english);
+        benchup_core::i18n::set_language("zh_CN");
+        assert_eq!(tr!("system_info.system_information"), "系统信息");
+        let chinese_ui_report = collect(&ctx, &frame);
+        assert_eq!(chinese_ui_report, english);
+        assert!(chinese_ui_report.contains("Theme: Light\n"));
+        assert!(chinese_ui_report.contains("Graphics adapter information: unavailable\n"));
+        assert_eq!(issue_url(&chinese_ui_report), english_url);
+    }
 
     #[test]
     fn issue_body_round_trips_utf8_and_reserved_characters() {

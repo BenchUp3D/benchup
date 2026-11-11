@@ -22,15 +22,26 @@ pub(super) enum Section {
 }
 
 impl Section {
-    const GROUPS: [(&'static str, &'static [Self]); 4] = [
-        (tr!("settings.workspace"), &[Self::Units, Self::Grid, Self::Colors]),
-        (tr!("settings.controls"), &[Self::Navigation, Self::Shortcuts, Self::Tools]),
-        (
-            tr!("settings.materials_estimates"),
-            &[Self::StockPricing, Self::SurfaceTreatment],
-        ),
-        (tr!("settings.system"), &[Self::Diagnostics, Self::Rendering]),
-    ];
+    fn groups() -> [(&'static str, &'static [Self]); 4] {
+        [
+            (
+                tr!("settings.workspace"),
+                &[Self::Units, Self::Grid, Self::Colors],
+            ),
+            (
+                tr!("settings.controls"),
+                &[Self::Navigation, Self::Shortcuts, Self::Tools],
+            ),
+            (
+                tr!("settings.materials_estimates"),
+                &[Self::StockPricing, Self::SurfaceTreatment],
+            ),
+            (
+                tr!("settings.system"),
+                &[Self::Diagnostics, Self::Rendering],
+            ),
+        ]
+    }
     #[cfg(test)]
     const ALL: [Self; 10] = [
         Self::Units,
@@ -137,7 +148,12 @@ pub(super) const TOOLS: [(Tool, &str); 18] = [
 ];
 
 const DEFAULT_LANGUAGE: &str = "en";
-const LANGUAGES: &[(&str, &str)] = &[(DEFAULT_LANGUAGE, tr!("settings.language_english"))];
+fn languages() -> [(&'static str, &'static str); 2] {
+    [
+        (DEFAULT_LANGUAGE, tr!("settings.language_english")),
+        ("zh_CN", tr!("settings.language_simplified_chinese")),
+    ]
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub(super) enum NavigationType {
@@ -149,8 +165,8 @@ pub(super) enum NavigationType {
 impl NavigationType {
     fn label(self) -> &'static str {
         match self {
-            Self::MouseTrackpad => "Mouse/Trackpad",
-            Self::SpaceMouse => "3D Mouse",
+            Self::MouseTrackpad => tr!("settings.mouse_trackpad"),
+            Self::SpaceMouse => tr!("settings.3d_mouse"),
         }
     }
 }
@@ -251,7 +267,7 @@ impl GeneralSettings {
         self.walk.normalize();
         self.space_mouse.normalize();
         self.stock.normalize();
-        if !LANGUAGES.iter().any(|&(code, _)| code == self.language.as_str()) {
+        if !languages().iter().any(|&(code, _)| code == self.language.as_str()) {
             self.language = DEFAULT_LANGUAGE.into();
         }
         for speed in [
@@ -329,7 +345,7 @@ impl BenchUpApp {
 
     fn navigation_settings_contents(&mut self, ui: &mut egui::Ui) {
         let navigation_type = &mut self.general_settings.navigation_type;
-        inspector_field(ui, "settings/navigation/type", "Navigation type", |ui| {
+        inspector_field(ui, "settings/navigation/type", tr!("settings.navigation_type"), |ui| {
             egui::ComboBox::from_id_salt("settings_navigation_type")
                 .width(ui.available_width())
                 .selected_text(navigation_type.label())
@@ -340,17 +356,17 @@ impl BenchUpApp {
                 })
                 .response
         });
-        ui.text_weak("Adjust navigation sensitivity for the selected device.");
+        ui.text_weak(tr!("settings.adjust_navigation_sensitivity_for_the_selected_device"));
         let navigation_type = self.general_settings.navigation_type;
         if navigation_type == NavigationType::SpaceMouse {
             let space_mouse = &mut self.general_settings.space_mouse;
-            ui.checkbox(&mut space_mouse.enabled, "Enable 3D Mouse");
+            ui.checkbox(&mut space_mouse.enabled, tr!("settings.enable_3d_mouse"));
             #[cfg(target_arch = "wasm32")]
             ui.add_enabled_ui(space_mouse.enabled, |ui| {
                 if ui
                     .add_enabled(
                         self.space_mouse.browser_can_connect(),
-                        egui::Button::new("Connect 3D Mouse"),
+                        egui::Button::new(tr!("settings.connect_3d_mouse")),
                     )
                     .clicked()
                 {
@@ -358,7 +374,7 @@ impl BenchUpApp {
                 }
             });
             let status = if !space_mouse.enabled {
-                "Disabled".to_owned()
+                tr!("settings.disabled").to_owned()
             } else {
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -367,19 +383,19 @@ impl BenchUpApp {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     match self.space_mouse.device() {
-                        Some(device) => format!("Connected: {device}"),
-                        None => "No device detected".to_owned(),
+                        Some(device) => tr!("settings.connected", device = device),
+                        None => tr!("settings.no_device_detected").to_owned(),
                     }
                 }
             };
             ui.text_weak(status);
-            ui.text_weak("Tilt or twist the cap to orbit, slide it to pan, and push or pull it to zoom. The Fit button frames the model.");
+            ui.text_weak(tr!("settings.tilt_or_twist_the_cap_to_orbit_slide_it_to_pan_and_push_or_pull_it_to_zoom_the_fit_button_frames_the_model"));
         }
         let enabled = navigation_type == NavigationType::MouseTrackpad
             || self.general_settings.space_mouse.enabled;
         ui.add_enabled_ui(enabled, |ui| {
             ui.push_id(("settings/navigation/inversions", navigation_type), |ui| {
-                for (label, value) in ["Invert tilt and twist", "Invert pan", "Invert zoom"]
+                for (label, value) in [tr!("settings.invert_tilt_and_twist"), tr!("settings.invert_pan"), tr!("settings.invert_zoom")]
                     .into_iter()
                     .zip(self.general_settings.navigation_inversions_mut())
                 {
@@ -406,6 +422,7 @@ impl BenchUpApp {
     }
 
     pub(super) fn settings_window(&mut self, ctx: &egui::Context) {
+        benchup_core::i18n::set_language(&self.general_settings.language);
         let response = Modal::new("general_settings", 950.)
             .resizable(true)
             .dismissible(self.material_removal.is_none())
@@ -415,19 +432,22 @@ impl BenchUpApp {
                         ui.text_heading(tr!("settings.settings"));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let language = &mut self.general_settings.language;
-                            let selected = LANGUAGES
+                            let languages = languages();
+                            let selected = languages
                                 .iter()
                                 .find(|&&(code, _)| code == language.as_str())
-                                .unwrap_or(&LANGUAGES[0]);
+                                .unwrap_or(&languages[0]);
                             let picker = egui::ComboBox::from_id_salt("settings_language")
                                 .selected_text(selected.1)
                                 .show_ui(ui, |ui| {
-                                    for &(code, name) in LANGUAGES {
+                                    for &(code, name) in &languages {
                                         if ui
                                             .selectable_label(code == language.as_str(), name)
                                             .clicked()
                                         {
                                             *language = code.into();
+                                            benchup_core::i18n::set_language(language);
+                                            ui.ctx().request_repaint();
                                         }
                                     }
                                 });
@@ -455,7 +475,7 @@ impl BenchUpApp {
                                         ui.set_min_height((size.y - 28.).max(24.));
                                         ui.spacing_mut().item_spacing.y = 8.;
                                         for (index, (title, sections)) in
-                                            Section::GROUPS.iter().enumerate()
+                                            Section::groups().iter().enumerate()
                                         {
                                             if index > 0 {
                                                 ui.add_space(12.);
@@ -607,27 +627,27 @@ impl BenchUpApp {
             Section::Navigation => {
                 self.navigation_settings_contents(ui);
                 ui.separator();
-                ui.text_label(RichText::new("Walking person").strong());
-                inspector_field(ui, "walk_speed", "Walking speed", |ui| {
+                ui.text_label(RichText::new(tr!("settings.walking_person")).strong());
+                inspector_field(ui, "walk_speed", tr!("settings.walking_speed"), |ui| {
                     ui.add(egui::DragValue::new(&mut self.general_settings.walk.speed_kmh)
                         .speed(0.1).range(0.5..=12.).suffix(" km/h"))
                 });
-                inspector_field(ui, "walk_look_sensitivity", "Look sensitivity", |ui| {
+                inspector_field(ui, "walk_look_sensitivity", tr!("settings.look_sensitivity"), |ui| {
                     let mut percent = self.general_settings.walk.look_sensitivity * 100.;
                     let response = ui.add(egui::DragValue::new(&mut percent)
                         .speed(1.).range(10. ..=200.).suffix(" %"))
-                        .on_hover_text("Scales mouse look while walking. 100% matches Orbit sensitivity.");
+                        .on_hover_text(tr!("settings.scales_mouse_look_while_walking_100_matches_orbit_sensitivity"));
                     if response.changed() {
                         self.general_settings.walk.look_sensitivity = percent / 100.;
                     }
                     response
                 });
-                ui.text_weak("Eye height is measured above the floor. Body width and depth determine obstacle clearance; allow 12 cm above the eyes for the head.");
+                ui.text_weak(tr!("settings.eye_height_is_measured_above_the_floor_body_width_and_depth_determine_obstacle_clearance_allow_12_cm_above_the_eyes_for_the_head"));
                 let unit = self.doc.display.units.length;
                 for (key, label, value, min, max) in [
-                    ("walk_eye_height", "Eye height", &mut self.general_settings.walk.eye_height, 0.5, 2.3),
-                    ("walk_width", "Body width", &mut self.general_settings.walk.width, 0.2, 1.2),
-                    ("walk_depth", "Body depth (length)", &mut self.general_settings.walk.depth, 0.15, 1.2),
+                    ("walk_eye_height", tr!("settings.eye_height"), &mut self.general_settings.walk.eye_height, 0.5, 2.3),
+                    ("walk_width", tr!("settings.body_width"), &mut self.general_settings.walk.width, 0.2, 1.2),
+                    ("walk_depth", tr!("settings.body_depth_length"), &mut self.general_settings.walk.depth, 0.15, 1.2),
                 ] {
                     inspector_field(ui, key, label, |ui| {
                         let mut displayed = *value / unit.factor();
@@ -641,7 +661,7 @@ impl BenchUpApp {
                         response
                     });
                 }
-                ui.text_weak("WASD / arrows: walk · Shift: crouch · Space: jump · Alt: sit / stand · Move mouse: look · Escape: exit");
+                ui.text_weak(tr!("settings.wasd_arrows_walk_shift_crouch_space_jump_alt_sit_stand_move_mouse_look_escape_exit"));
             }
             Section::Shortcuts => {
                 ui.text_weak(tr!("settings.click_a_shortcut_then_press_a_letter_or"));
@@ -915,7 +935,7 @@ mod tests {
 
     #[test]
     fn settings_groups_include_every_section_once() {
-        let grouped: Vec<_> = super::Section::GROUPS
+        let grouped: Vec<_> = super::Section::groups()
             .iter()
             .flat_map(|(_, sections)| sections.iter().copied())
             .collect();
@@ -1086,6 +1106,43 @@ mod tests {
             );
             output.textures_delta.clear();
             assert!(app.settings_open);
+        }
+    }
+
+    #[test]
+    fn supported_languages_include_simplified_chinese() {
+        assert!(languages().contains(&("zh_CN", "Simplified Chinese")));
+        let mut settings = GeneralSettings::default();
+        settings.language = "zh_CN".into();
+        settings.normalize();
+        assert_eq!(settings.language, "zh_CN");
+    }
+
+    #[test]
+    fn settings_labels_switch_languages_in_the_same_window() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) { benchup_core::i18n::set_language("en"); }
+        }
+        let _reset = Reset;
+        let ctx = egui::Context::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        app.settings_open = true;
+        for (language, title, group) in [
+            ("en", "Settings", "Workspace"),
+            ("zh_CN", "设置", "工作区"),
+            ("en", "Settings", "Workspace"),
+        ] {
+            app.general_settings.language = language.into();
+            let input = || egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1100., 800.))),
+                ..Default::default()
+            };
+            ctx.run_test_ui(input(), |_| app.settings_window(&ctx));
+            let output = ctx.run_test_ui(input(), |_| app.settings_window(&ctx));
+            let text = rendered_text(&output.shapes);
+            assert!(text.iter().any(|label| label == title));
+            assert!(text.iter().any(|label| label == group));
         }
     }
 
