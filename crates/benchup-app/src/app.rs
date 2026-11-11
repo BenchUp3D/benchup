@@ -1732,7 +1732,7 @@ impl BenchUpApp {
             .edges
             .values()
             .filter(|edge| {
-                if face.is_some() {
+                if face.is_some() && self.tool != Tool::PushPull {
                     vertices.contains(&edge.a) && vertices.contains(&edge.b)
                 } else {
                     vertices.contains(&edge.a) || vertices.contains(&edge.b)
@@ -1742,7 +1742,8 @@ impl BenchUpApp {
             .collect();
         if let Some(face) = face {
             excluded.insert(face);
-        } else {
+        }
+        if face.is_none() || self.tool == Tool::PushPull {
             // Connected surfaces also change when any of their vertices move.
             excluded.extend(
                 model.faces.values().filter(|face| {
@@ -1869,6 +1870,19 @@ impl BenchUpApp {
                 snap
             }
         });
+        // A reference is only a snap target if the resulting extrusion is
+        // valid. Reuse its preview below rather than applying the edit twice.
+        let (pull_snap, pull_preview) = pull_snap.map_or((None, None), |snap| {
+            let edit = self.modeling.as_ref().unwrap();
+            let value = (snap.point - edit.anchor).dot(edit.direction);
+            if value.abs() < 1e-7 {
+                return (Some(snap), None);
+            }
+            match Self::modeling_result(Tool::PushPull, edit, value) {
+                Ok(model) => (Some(snap), Some(model)),
+                Err(_) => (None, None),
+            }
+        });
         let offset_snap = (self.tool == Tool::Offset && self.length_input.trim().is_empty())
             .then(|| self.offset_snap(pos))
             .flatten();
@@ -1887,8 +1901,13 @@ impl BenchUpApp {
                 pull_snap
                     .map(|snap| (snap.point - edit.anchor).dot(edit.direction))
                     .unwrap_or_else(|| {
+                        // Snapping can move the anchor away from the click ray.
+                        // Measure free movement from that ray so a snapped start
+                        // does not introduce an extrusion before the cursor moves.
+                        let start_ray = self.doc.camera.ray(dv(edit.pixel - self.viewport.min), size);
                         ray.axis(edit.anchor, edit.direction)
-                            .map(|p| (p - edit.anchor).dot(edit.direction))
+                            .zip(start_ray.axis(edit.anchor, edit.direction))
+                            .map(|(p, start)| (p - start).dot(edit.direction))
                             .unwrap_or(
                                 (edit.pixel.y - pos.y) as f64 * self.doc.camera.distance / size.y,
                             )
@@ -2045,7 +2064,7 @@ impl BenchUpApp {
                 return;
             }
         }
-        match Self::modeling_result(self.tool, edit, value) {
+        match pull_preview.map(Ok).unwrap_or_else(|| Self::modeling_result(self.tool, edit, value)) {
             Ok(model) => {
                 edit.preview = Some(model);
                 edit.error = None;
@@ -4159,7 +4178,10 @@ impl BenchUpApp {
                 &self
                     .picking_cache
                     .snap_query(&self.face_cache, &self.entity_cache)
-                    .excluding(self.modeling.as_ref().map(|edit| &edit.snap_excluded)),
+                    .excluding(self.modeling.as_ref().map(|edit| &edit.snap_excluded))
+                    .perpendicular_to(self.modeling.as_ref()
+                        .filter(|_| self.tool == Tool::PushPull)
+                        .map(|edit| edit.direction)),
             ),
             self.snap_targets(),
         );

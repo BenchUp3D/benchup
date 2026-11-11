@@ -2,6 +2,42 @@ use super::*;
 use benchup_core::{DVec3, Edge, Face, Vertex};
 use std::collections::BTreeMap;
 
+#[test]
+fn perpendicular_face_queries_filter_surfaces_and_centers_but_keep_edges() {
+    use benchup_core::inference::{FaceQuery, Inference, SnapTargets, infer_with_targets};
+    let size = DVec2::new(1000., 800.);
+    let center = DVec3::new(3., 3., 3.);
+    let camera = Camera { target: center, ..Default::default() };
+    for normal in [DVec3::Z, -DVec3::Z, DVec3::X, (DVec3::X + DVec3::Z).normalize()] {
+        let mut model = Model::default();
+        let u = DVec3::Y;
+        let v = normal.cross(u);
+        let ring = [center - u - v, center + u - v, center + u + v, center - u + v];
+        for i in 0..4 {
+            model.add_edge(ring[i], ring[(i + 1) % 4]).unwrap();
+        }
+        let face = *model.faces.keys().next().unwrap();
+        let mut faces = FaceCache::default();
+        let mut entities = EntityCache::default();
+        let mut picking = PickingCache::default();
+        faces.update(&model);
+        entities.update(&model);
+        picking.prepare_snapping(&model, &faces, &entities, &camera, size);
+        let query = picking.snap_query(&faces, &entities).perpendicular_to(Some(DVec3::Z));
+        let allowed = normal.z.abs() > 1. - 1e-6;
+        assert_eq!(query.is_hidden(&model, face), !allowed);
+        assert!(model.edges.keys().all(|id| !query.is_hidden(&model, *id)));
+        for face_centers in [false, true] {
+            let snap = infer_with_targets(
+                &model, &camera, size, camera.view(size).project(center).unwrap(),
+                None, None, true, false, Some(&query),
+                SnapTargets { edges: false, faces: true, face_centers, only_visible: false },
+            );
+            assert_eq!(snap.is_some_and(|snap| matches!(snap.kind, Inference::OnFace | Inference::FaceCenter)), allowed);
+        }
+    }
+}
+
 pub(crate) fn triangle_grid(count: usize) -> Model {
     let mut vertices = BTreeMap::new();
     let mut edges = BTreeMap::new();

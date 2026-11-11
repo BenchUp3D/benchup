@@ -67,8 +67,20 @@ pub struct SnapQuery<'a> {
     faces: &'a FaceCache,
     entities: &'a EntityCache,
     excluded: Option<&'a std::collections::BTreeSet<u64>>,
+    perpendicular_to: Option<DVec3>,
 }
 impl<'a> SnapQuery<'a> {
+    pub fn perpendicular_to(mut self, direction: Option<DVec3>) -> Self {
+        self.perpendicular_to = direction;
+        self
+    }
+
+    fn allows_face(&self, id: u64) -> bool {
+        self.perpendicular_to.is_none_or(|direction| {
+            self.faces.get(id).normal.cross(direction).length_squared() < 1e-12
+        })
+    }
+
     pub fn excluding(mut self, excluded: Option<&'a std::collections::BTreeSet<u64>>) -> Self {
         self.excluded = excluded;
         self
@@ -118,7 +130,7 @@ impl benchup_core::inference::FaceQuery for SnapQuery<'_> {
         cursor: DVec2,
         targets: benchup_core::inference::SnapTargets,
     ) -> Option<benchup_core::inference::SnapGeometry> {
-        if self.excluded.is_some()
+        if self.excluded.is_some() || self.perpendicular_to.is_some()
             || !self
                 .picking
                 .snapping
@@ -138,7 +150,7 @@ impl benchup_core::inference::FaceQuery for SnapQuery<'_> {
         size: DVec2,
         cursor: DVec2,
     ) -> Option<[Vec<DVec3>; 3]> {
-        if self.excluded.is_some()
+        if self.excluded.is_some() || self.perpendicular_to.is_some()
             || !self
                 .picking
                 .snapping
@@ -164,12 +176,13 @@ impl benchup_core::inference::FaceQuery for SnapQuery<'_> {
             false,
             scoped,
             &mut 0,
-            |id| self.excluded.is_none_or(|ids| !ids.contains(&id)),
+            |id| self.excluded.is_none_or(|ids| !ids.contains(&id)) && self.allows_face(id),
         )
     }
 
-    fn is_hidden(&self, _model: &Model, id: u64) -> bool {
+    fn is_hidden(&self, model: &Model, id: u64) -> bool {
         self.entities.get(id).hidden || self.excluded.is_some_and(|ids| ids.contains(&id))
+            || (model.faces.contains_key(&id) && !self.allows_face(id))
     }
 }
 impl PickingCache {
@@ -300,6 +313,7 @@ impl PickingCache {
             faces,
             entities,
             excluded: None,
+            perpendicular_to: None,
         }
     }
     pub fn update(&mut self, faces: &FaceCache) {

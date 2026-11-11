@@ -99,6 +99,31 @@ fn face_anchors_obey_edge_face_center_and_axis_preferences() {
 }
 
 #[test]
+fn push_pull_free_drag_starts_at_the_click_when_the_anchor_is_grid_snapped() {
+    let mut h = Harness::new();
+    modeling_rectangle(&mut h);
+    h.app.set_tool(Tool::PushPull);
+    h.app.doc.snap_to_geometry = false;
+    h.app.doc.snap_to_axes = false;
+    h.app.snap_to_grid = true;
+    h.app.doc.display.grid_auto_size = false;
+    h.app.doc.display.grid_spacing = 0.7;
+    let point = DVec3::new(1.13, 0.83, 0.);
+    let (cursor, snap) = hover_anchor(&mut h, point);
+    assert!(snap.point.distance(point) > 0.05);
+    h.click(cursor);
+    // Isolate free dragging from distance quantization and reference snaps.
+    h.app.snap_to_grid = false;
+    h.app.update_modeling(cursor);
+    assert!(h.app.modeling.as_ref().unwrap().value.abs() < 1e-6);
+    let direction = h.app.modeling.as_ref().unwrap().direction;
+    for distance in [-0.5, 0.5] {
+        h.app.update_modeling(h.at(point + direction * distance));
+        assert!((h.app.modeling.as_ref().unwrap().value - distance).abs() < 1e-6);
+    }
+}
+
+#[test]
 fn face_anchor_grid_snapping_stays_on_vertical_and_tilted_faces() {
     for tool in [Tool::Offset, Tool::PushPull] {
         for normal in [DVec3::X, DVec3::new(1., 1., 1.).normalize()] {

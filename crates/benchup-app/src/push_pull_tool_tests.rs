@@ -250,6 +250,63 @@ fn pull_readout_includes_existing_depth_and_signed_difference() {
 }
 
 #[test]
+fn pull_snapping_excludes_its_boundary_even_through_connected_geometry() {
+    let mut h = Harness::new();
+    let face = modeling_rectangle(&mut h);
+    // A connected edge must not reintroduce the face's corner as an endpoint.
+    h.app.doc.model.add_edge(DVec3::new(4., 4., 0.), DVec3::new(4., 4., 2.)).unwrap();
+    let reference = DVec3::new(1., 1., 3.);
+    h.app.doc.model.add_edge(reference, reference + DVec3::X).unwrap();
+    h.app.doc.snap_to_axes = false;
+    h.app.set_tool(Tool::PushPull);
+    h.app.begin_modeling(h.at(DVec3::new(1.3, 1.7, 0.)), &h.ctx);
+    assert_eq!(h.app.modeling.as_ref().unwrap().face, Some(face));
+    for point in [DVec3::new(4., 4., 0.), DVec3::new(2., 4., 0.)] {
+        let cursor = h.at(point);
+        h.app.update_modeling(cursor);
+        let edit = h.app.modeling.as_ref().unwrap();
+        assert!(edit.snap.is_none(), "self snap at {point:?}: {:?}", edit.snap);
+        let ray = h.app.doc.camera.ray(dv(cursor - h.app.viewport.min), dv(h.app.viewport.size()));
+        let expected = (ray.axis(edit.anchor, edit.direction).unwrap() - edit.anchor).dot(edit.direction);
+        assert!((edit.value - expected).abs() < 1e-5);
+    }
+    h.app.update_modeling(h.at(reference));
+    let edit = h.app.modeling.as_ref().unwrap();
+    assert_eq!(edit.snap.unwrap().kind, Inference::Endpoint);
+    assert!(edit.snap.unwrap().point.distance(reference) < 1e-7);
+    assert!((edit.value.abs() - 3.).abs() < 1e-7);
+}
+
+#[test]
+fn invalid_pull_reference_falls_back_to_free_drag_without_a_warning() {
+    let (mut h, _) = block();
+    let invalid = DVec3::new(6., 2., 0.);
+    let valid = DVec3::new(6., 2., 3.);
+    for point in [invalid, valid] {
+        h.app.doc.model.add_edge(point, point + DVec3::X).unwrap();
+    }
+    h.app.begin_modeling(h.at(DVec3::new(2., 2., 2.)), &h.ctx);
+    let before = h.app.doc.model.clone();
+    let edit = h.app.modeling.as_ref().unwrap();
+    let invalid_value = (invalid - edit.anchor).dot(edit.direction);
+    assert!(BenchUpApp::modeling_result(Tool::PushPull, edit, invalid_value).is_err());
+    h.app.doc.snap_to_geometry = true;
+    h.app.update_modeling(h.at(invalid));
+    let edit = h.app.modeling.as_ref().unwrap();
+    assert!(edit.snap.is_none());
+    assert!(edit.error.is_none());
+    assert!(edit.preview.is_some());
+    assert!((edit.value - invalid_value).abs() > 1e-5);
+    assert_eq!(h.app.doc.model, before);
+
+    h.app.update_modeling(h.at(valid));
+    let edit = h.app.modeling.as_ref().unwrap();
+    assert_eq!(edit.snap.unwrap().kind, Inference::Endpoint);
+    assert!(edit.preview.is_some());
+    assert!(edit.error.is_none());
+}
+
+#[test]
 fn flat_face_starts_with_zero_pull_depth() {
     let mut h = Harness::new();
     let face = modeling_rectangle(&mut h);
