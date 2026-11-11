@@ -20,20 +20,6 @@ ROOT = Path(__file__).resolve().parents[1]
 WIDTH, HEIGHT = 1920, 1080
 
 
-class KeyEvent(C.Structure):
-    _fields_ = [
-        ("type", C.c_int), ("serial", C.c_ulong), ("send_event", C.c_int),
-        ("display", C.c_void_p), ("window", C.c_ulong), ("root", C.c_ulong),
-        ("subwindow", C.c_ulong), ("time", C.c_ulong),
-        ("x", C.c_int), ("y", C.c_int), ("x_root", C.c_int), ("y_root", C.c_int),
-        ("state", C.c_uint), ("keycode", C.c_uint), ("same_screen", C.c_int),
-    ]
-
-
-class Event(C.Union):
-    _fields_ = [("key", KeyEvent), ("padding", C.c_long * 24)]
-
-
 class Desktop:
     def __init__(self):
         self.x = C.CDLL(ctypes.util.find_library("X11") or "libX11.so.6")
@@ -49,9 +35,9 @@ class Desktop:
                 C.POINTER(C.c_ulong), C.POINTER(C.POINTER(C.c_ulong)), C.POINTER(C.c_uint)]),
             "XMoveResizeWindow": (C.c_int, [C.c_void_p, C.c_ulong, C.c_int, C.c_int,
                 C.c_uint, C.c_uint]),
+            "XRaiseWindow": (C.c_int, [C.c_void_p, C.c_ulong]),
             "XSetInputFocus": (C.c_int, [C.c_void_p, C.c_ulong, C.c_int, C.c_ulong]),
             "XKeysymToKeycode": (C.c_ubyte, [C.c_void_p, C.c_ulong]),
-            "XSendEvent": (C.c_int, [C.c_void_p, C.c_ulong, C.c_int, C.c_long, C.POINTER(Event)]),
             "XWarpPointer": (C.c_int, [C.c_void_p, C.c_ulong, C.c_ulong, C.c_int,
                 C.c_int, C.c_uint, C.c_uint, C.c_int, C.c_int]),
             "XFlush": (C.c_int, [C.c_void_p]),
@@ -101,20 +87,25 @@ class Desktop:
 
     def prepare(self, window):
         self.x.XMoveResizeWindow(self.display, window, 0, 0, WIDTH, HEIGHT)
+        self.x.XRaiseWindow(self.display, window)
         self.x.XWarpPointer(self.display, 0, window, 0, 0, 0, 0, 0, HEIGHT - 1)
         self.x.XFlush(self.display)
 
     def dismiss_modals(self, window):
+        # Winit can ignore XSendEvent keyboard events. XTest delivers input
+        # through the server so Escape also reaches existing desktop binaries.
+        xtest = C.CDLL(ctypes.util.find_library("Xtst") or "libXtst.so.6")
+        xtest.XTestFakeKeyEvent.argtypes = [C.c_void_p, C.c_uint, C.c_int, C.c_ulong]
+        xtest.XTestFakeKeyEvent.restype = C.c_int
         self.x.XSetInputFocus(self.display, window, 2, 0)
+        self.x.XFlush(self.display)
         keycode = self.x.XKeysymToKeycode(self.display, 0xFF1B)
         # Escape closes the top popup/modal. Allow a frame between presses so
         # nested popups and dialogs, including release notes, can all dismiss.
         for _ in range(4):
-            for type_, mask in ((2, 1), (3, 2)):
-                event = Event()
-                event.key = KeyEvent(type=type_, send_event=1, display=self.display,
-                    window=window, root=self.root, keycode=keycode, same_screen=1)
-                self.x.XSendEvent(self.display, window, 0, mask, C.byref(event))
+            for pressed in (1, 0):
+                if not xtest.XTestFakeKeyEvent(self.display, keycode, pressed, 0):
+                    raise RuntimeError("Could not dismiss desktop modals through XTest.")
             self.x.XFlush(self.display)
             time.sleep(0.2)
 

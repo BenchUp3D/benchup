@@ -1,5 +1,31 @@
 [
   {
+    "version": "0.6.8",
+    "date": "2026-11-11",
+    "title": "Simplified Chinese and responsive exports",
+    "sections": [
+      {
+        "title": "Language support",
+        "changes": [
+          "Choose Simplified Chinese in Settings, with bundled Chinese fonts and translated controls, navigation, and modeling messages."
+        ]
+      },
+      {
+        "title": "Reports and screenshots",
+        "changes": [
+          "Generate time and cost estimates, cutting reports, cutting plans, and workshop-label PDFs in the background on desktop and in the browser, with immediate progress feedback.",
+          "Prepare screenshot previews and exports more efficiently by reusing viewport scene data and avoiding copies of project history."
+        ]
+      },
+      {
+        "title": "Project menus",
+        "changes": [
+          "Keep the Recent Projects menu exclusive to desktop, where saved project paths can be reopened, and improve the layout of recent-project entries."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.6.7",
     "date": "2026-11-10",
     "title": "Reference images, scale handles, and 3D Mouse navigation",
