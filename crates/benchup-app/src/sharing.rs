@@ -1406,7 +1406,7 @@ fn presence_anchor(model: &Model, entity: u64) -> Option<DVec3> {
             );
         }
         if let Some(dimension) = model.dimensions.get(&id) {
-            points.extend(dimension.layout(model));
+            points.extend(dimension.annotation_points(model));
         }
         if let Some(text) = model.texts.get(&id) {
             points.extend(text.layout(model));

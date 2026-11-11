@@ -201,7 +201,7 @@ pub(crate) fn visible_points_with_entities(model: &Model, entities: &crate::rend
     let mut points: Vec<_> = model.vertices.iter().filter(|(id, _)| vertices.contains(id))
         .map(|(_, vertex)| vertex.position).collect();
     for dimension in model.dimensions.values().filter(|d| !entities.get(d.id).hidden) {
-        points.extend(dimension.layout(model));
+        points.extend(dimension.annotation_points(model));
     }
     for text in model.texts.values().filter(|t| !entities.get(t.id).hidden) {
         points.extend(text.layout(model));

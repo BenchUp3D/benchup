@@ -4015,6 +4015,7 @@ fn tape_measure_snaps_reads_distance_and_restarts_without_editing_geometry() {
 #[test]
 fn protractor_uses_three_snapped_points_and_measures_in_three_dimensions() {
     let mut h = Harness::new();
+    h.app.create_guides = false;
     let center = DVec3::ZERO;
     let baseline = DVec3::Z * 3.;
     let target = DVec3::new(2., 0., 2.);
@@ -4032,10 +4033,13 @@ fn protractor_uses_three_snapped_points_and_measures_in_three_dimensions() {
     h.click(h.at(target));
     assert!(h.app.measurement.as_ref().unwrap().complete);
     assert_eq!(h.app.measurement_value().as_deref(), Some("45.00°"));
-    assert_eq!(h.app.doc.model, before);
-    assert!(h.app.doc.history.undo_label().is_none());
+    assert_eq!(h.app.doc.model.edges, before.edges);
+    assert_eq!(h.app.doc.model.faces, before.faces);
+    assert_eq!(h.app.doc.model.dimensions.len(), 1);
+    assert_eq!(h.app.doc.history.undo_label(), Some("Add angle dimension"));
     h.key(Key::M);
     assert!(h.app.measurement.is_none());
+    assert_eq!(h.app.doc.model.dimensions.len(), 1);
 }
 
 #[test]
@@ -5284,6 +5288,7 @@ fn dimensions_locked_during_selection_or_placement_keep_three_lines_and_a_label(
                 offset: h.app.measurement.as_ref().unwrap().offset,
                 axis: Some(axis),
                 plane: None,
+                vertex: None,
             };
             let layout = dimension.layout(&h.app.doc.model).map(|point| h.at(point));
             let lines = [
@@ -6701,4 +6706,94 @@ fn space_mouse_fit_button_frames_the_model() {
     h.app.space_mouse.inject(space_mouse::Axes::default(), 1 << 1);
     h.frame(vec![], egui::Modifiers::NONE);
     assert!(h.app.doc.camera.target.abs_diff_eq(DVec3::ZERO, 1e-6));
+}
+
+#[test]
+fn protractor_automatically_keeps_a_persistent_selectable_undoable_dimension() {
+    let mut h = Harness::new();
+    h.app.create_guides = false;
+    h.app.doc.model.add_edge(DVec3::ZERO, DVec3::X * 4.).unwrap();
+    h.app.doc.model.add_edge(DVec3::ZERO, DVec3::Y * 4.).unwrap();
+    h.key(Key::A);
+    h.click(h.at(DVec3::ZERO));
+    h.click(h.at(DVec3::X * 4.));
+    assert!(h.app.doc.model.dimensions.is_empty());
+    assert_eq!(h.app.measurement.as_ref().unwrap().points.len(), 2);
+    h.app.doc.display.dimensions = false;
+    h.click(h.at(DVec3::Y * 4.));
+    assert!(h.app.measurement.as_ref().unwrap().complete);
+    let id = *h.app.doc.model.dimensions.keys().next().unwrap();
+    assert_eq!(h.app.doc.model.dimensions[&id].angle(&h.app.doc.model), Some(90.));
+    assert_eq!(h.app.selected, BTreeSet::from([id]));
+    assert!(h.app.doc.display.dimensions);
+    assert!(h.app.project.modified);
+    assert_eq!(h.app.measurement.as_ref().unwrap().dimension_id, Some(id));
+    for _ in 0..3 { h.frame(vec![], egui::Modifiers::NONE); }
+    assert_eq!(h.app.doc.model.dimensions.len(), 1);
+    h.key(Key::Escape);
+    assert!(h.app.measurement.is_none());
+    assert!(h.app.doc.model.dimensions.contains_key(&id));
+    assert_eq!(h.app.doc.history.undo_label(), Some("Add angle dimension"));
+    assert!(h.app.doc.model.guides.is_empty());
+    let saved = Document::from_json(&serde_json::to_string(&h.app.doc).unwrap()).unwrap();
+    h.key(Key::Space);
+    let label = h.app.doc.model.dimensions[&id].label_position(&h.app.doc.model);
+    h.app.selected.clear();
+    h.click(h.at(label));
+    assert_eq!(h.app.selected, BTreeSet::from([id]));
+    h.key(Key::Delete);
+    assert!(h.app.doc.model.dimensions.is_empty());
+    assert!(h.app.doc.history.undo(&mut h.app.doc.model));
+    assert!(h.app.doc.model.dimensions.contains_key(&id));
+    h.app.replace_project(saved, None, &h.ctx);
+    assert_eq!(h.app.doc.model.dimensions[&id].angle(&h.app.doc.model), Some(90.));
+    assert!(h.app.measurement.is_none());
+}
+
+#[test]
+fn protractor_automatically_keeps_precise_angles_and_adjusts_them_without_duplicates() {
+    for create_guides in [false, true] {
+        let mut h = Harness::new();
+        h.app.set_tool(Tool::Protractor);
+        h.app.create_guides = create_guides;
+        h.app.measurement = Some(measurement_tools::Measurement {
+            points: vec![DVec3::ZERO, DVec3::X * 4.],
+            normal: DVec3::Z,
+            ..Default::default()
+        });
+        h.app.length_input = "30".into();
+        h.app.commit_measurement_value(&h.ctx);
+        assert_eq!(h.app.doc.model.guides.len(), usize::from(create_guides));
+        assert_eq!(h.app.doc.model.dimensions.len(), 1);
+        let id = h.app.measurement.as_ref().unwrap().dimension_id.unwrap();
+        assert!((h.app.doc.model.dimensions[&id].angle(&h.app.doc.model).unwrap() - 30.).abs() < 1e-8);
+        assert_eq!(h.app.doc.history.undo_label(), Some("Add angle dimension"));
+        assert!(h.app.measurement_precision_available());
+        h.app.length_input = "60".into();
+        h.app.commit_measurement_value(&h.ctx);
+        assert_eq!(h.app.doc.model.dimensions.len(), 1);
+        assert_eq!(h.app.measurement.as_ref().unwrap().dimension_id, Some(id));
+        assert!((h.app.doc.model.dimensions[&id].angle(&h.app.doc.model).unwrap() - 60.).abs() < 1e-8);
+        assert_eq!(h.app.doc.model.guides.len(), usize::from(create_guides));
+        assert_eq!(h.app.doc.history.undo_label(), Some("Adjust angle dimension"));
+        h.app.undo(&h.ctx, false);
+        assert!((h.app.doc.model.dimensions[&id].angle(&h.app.doc.model).unwrap() - 30.).abs() < 1e-8);
+        assert_eq!(h.app.doc.model.guides.len(), usize::from(create_guides));
+        h.app.undo(&h.ctx, false);
+        assert!(h.app.doc.model.dimensions.is_empty());
+        assert!(h.app.doc.model.guides.is_empty());
+    }
+}
+
+#[test]
+fn cancelling_an_unfinished_angle_leaves_no_dimension() {
+    let mut h = Harness::new();
+    h.app.set_tool(Tool::Protractor);
+    h.click(h.at(DVec3::ZERO));
+    h.click(h.at(DVec3::X));
+    h.key(Key::Escape);
+    assert!(h.app.measurement.is_none());
+    assert!(h.app.doc.model.dimensions.is_empty());
+    assert!(h.app.doc.model.guides.is_empty());
+    assert!(!h.app.project.modified);
 }

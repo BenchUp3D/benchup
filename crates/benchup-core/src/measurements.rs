@@ -1,4 +1,4 @@
-//! Measurements and persistent, geometry-attached linear dimensions.
+//! Measurements and persistent, geometry-attached linear and angular dimensions.
 use crate::{Axis, DVec3, Model, document::EPS};
 use serde::{Deserialize, Serialize};
 
@@ -29,7 +29,9 @@ impl DimensionAnchor {
         if !self.weights.is_empty()
             && (self.weights.iter().map(|(_, w)| w).sum::<f64>() - 1.).abs() > EPS
         {
-            return Err(tr!("core.measurements.invalid_dimension_attachment_weights"));
+            return Err(tr!(
+                "core.measurements.invalid_dimension_attachment_weights"
+            ));
         }
         if !valid_point(self.position(model)) {
             return Err(tr!("core.measurements.invalid_dimension_position"));
@@ -58,6 +60,10 @@ pub struct Dimension {
     pub start: DimensionAnchor,
     pub end: DimensionAnchor,
     pub offset: DVec3,
+    /// An angular dimension measures start/end rays around this attached vertex.
+    /// Absent in older documents and in linear dimensions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertex: Option<DimensionAnchor>,
     /// When set, measure the separation along this world axis. A perpendicular
     /// axis keeps the full span instead of collapsing it to a zero-length line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -67,6 +73,66 @@ pub struct Dimension {
     pub plane: Option<Axis>,
 }
 impl Dimension {
+    pub fn anchors(&self) -> impl Iterator<Item = &DimensionAnchor> {
+        [&self.start, &self.end]
+            .into_iter()
+            .chain(self.vertex.iter())
+    }
+    pub fn anchors_mut(&mut self) -> impl Iterator<Item = &mut DimensionAnchor> {
+        [&mut self.start, &mut self.end]
+            .into_iter()
+            .chain(self.vertex.iter_mut())
+    }
+    pub fn angle(&self, model: &Model) -> Option<f64> {
+        let center = self.vertex.as_ref()?.position(model);
+        let (a, b) = self.points(model);
+        angle_degrees(center, a, b)
+    }
+    pub fn arc(&self, model: &Model) -> Vec<DVec3> {
+        let Some(vertex) = &self.vertex else {
+            return vec![];
+        };
+        let center = vertex.position(model);
+        let (a, b) = self.points(model);
+        let radius = self.offset.length();
+        angle_arc(center, a, b)
+            .into_iter()
+            .map(|p| center + (p - center).normalize_or_zero() * radius)
+            .collect()
+    }
+    pub fn label_position(&self, model: &Model) -> DVec3 {
+        if let Some(vertex) = &self.vertex {
+            let center = vertex.position(model);
+            let (a, b) = self.points(model);
+            let Some((u, v, angle)) = angle_frame(center, a, b) else {
+                return center;
+            };
+            center + self.offset.length() * (u * (angle * 0.5).cos() + v * (angle * 0.5).sin())
+        } else {
+            let [_, _, a, b] = self.layout(model);
+            (a + b) * 0.5
+        }
+    }
+    pub fn annotation_points(&self, model: &Model) -> Vec<DVec3> {
+        let mut points = self.layout(model).to_vec();
+        if let Some(vertex) = &self.vertex {
+            points.push(vertex.position(model));
+            points.extend(self.arc(model));
+        }
+        points
+    }
+    pub fn segments(&self, model: &Model) -> Vec<(DVec3, DVec3)> {
+        if let Some(vertex) = &self.vertex {
+            let center = vertex.position(model);
+            let (a, b) = self.points(model);
+            let mut lines = vec![(center, a), (center, b)];
+            lines.extend(self.arc(model).windows(2).map(|p| (p[0], p[1])));
+            lines
+        } else {
+            let [a, b, c, d] = self.layout(model);
+            vec![(a, c), (b, d), (c, d)]
+        }
+    }
     pub fn points(&self, model: &Model) -> (DVec3, DVec3) {
         (self.start.position(model), self.end.position(model))
     }
@@ -95,6 +161,15 @@ impl Dimension {
     }
     pub fn layout(&self, model: &Model) -> [DVec3; 4] {
         let (a, b) = self.points(model);
+        if self.vertex.is_some() {
+            let arc = self.arc(model);
+            return [
+                a,
+                b,
+                arc.first().copied().unwrap_or(a),
+                arc.last().copied().unwrap_or(b),
+            ];
+        }
         let direction = self.line_direction(model);
         let offset = self.offset - direction * self.offset.dot(direction);
         if self.projected_axis(a, b).is_some() || self.projected_plane(a, b).is_some() {
@@ -128,22 +203,24 @@ pub fn angle_degrees(center: DVec3, baseline: DVec3, target: DVec3) -> Option<f6
     Some(a.cross(b).length().atan2(a.dot(b)).to_degrees())
 }
 
-pub fn angle_arc(center: DVec3, baseline: DVec3, target: DVec3) -> Vec<DVec3> {
-    let Some(u) = (baseline - center).try_normalize() else {
-        return vec![];
-    };
-    let Some(angle) = angle_degrees(center, baseline, target) else {
-        return vec![];
-    };
+fn angle_frame(center: DVec3, baseline: DVec3, target: DVec3) -> Option<(DVec3, DVec3, f64)> {
+    let u = (baseline - center).try_normalize()?;
+    let angle = angle_degrees(center, baseline, target)?.to_radians();
     let normal = u.cross(target - center).try_normalize().unwrap_or_else(|| {
         u.cross(if u.z.abs() < 0.9 { DVec3::Z } else { DVec3::X })
             .normalize()
     });
-    let v = normal.cross(u);
+    Some((u, normal.cross(u), angle))
+}
+
+pub fn angle_arc(center: DVec3, baseline: DVec3, target: DVec3) -> Vec<DVec3> {
+    let Some((u, v, angle)) = angle_frame(center, baseline, target) else {
+        return vec![];
+    };
     let radius = baseline.distance(center).min(target.distance(center)) * 0.3;
     (0..=32)
         .map(|i| {
-            let t = angle.to_radians() * i as f64 / 32.;
+            let t = angle * i as f64 / 32.;
             center + radius * (u * t.cos() + v * t.sin())
         })
         .collect()
@@ -246,10 +323,14 @@ impl Model {
             });
         }
         if !valid_point(start) || !valid_point(end) || !valid_point(offset) {
-            return Err(tr!("core.measurements.dimension_coordinates_must_be_finite_and_within_the"));
+            return Err(tr!(
+                "core.measurements.dimension_coordinates_must_be_finite_and_within_the"
+            ));
         }
         if start.distance(end) < EPS {
-            return Err(tr!("core.measurements.choose_two_different_dimension_endpoints"));
+            return Err(tr!(
+                "core.measurements.choose_two_different_dimension_endpoints"
+            ));
         }
         let (start, end) = (self.dimension_anchor(start), self.dimension_anchor(end));
         let mut dimension = Dimension {
@@ -259,14 +340,113 @@ impl Model {
             offset,
             axis,
             plane,
+            vertex: None,
         };
         if dimension.layout(self).iter().any(|p| !valid_point(*p)) {
-            return Err(tr!("core.measurements.dimension_is_outside_the_model_limits"));
+            return Err(tr!(
+                "core.measurements.dimension_is_outside_the_model_limits"
+            ));
         }
         let id = self.id();
         dimension.id = id;
         self.dimensions.insert(id, dimension);
         Ok(id)
+    }
+    /// Save a spatial angle without introducing model edges or faces.
+    pub fn add_angular_dimension(
+        &mut self,
+        vertex: DVec3,
+        baseline: DVec3,
+        target: DVec3,
+    ) -> Result<u64, &'static str> {
+        if self.edit_context.is_some() {
+            return self
+                .edit_in_context(|model| model.add_angular_dimension(vertex, baseline, target));
+        }
+        let mut dimension = self.angular_dimension(vertex, baseline, target)?;
+        let id = self.id();
+        dimension.id = id;
+        self.dimensions.insert(id, dimension);
+        Ok(id)
+    }
+
+    /// Adjust a completed angle without changing its ID or entity assignments.
+    pub fn update_angular_dimension(
+        &mut self,
+        id: u64,
+        vertex: DVec3,
+        baseline: DVec3,
+        target: DVec3,
+    ) -> Result<(), &'static str> {
+        if self.edit_context.is_some() {
+            return self.edit_in_context(|model| {
+                model.update_angular_dimension(id, vertex, baseline, target)
+            });
+        }
+        let previous = self
+            .dimensions
+            .get(&id)
+            .filter(|d| d.vertex.is_some())
+            .ok_or(tr!("core.measurements.invalid_dimension"))?;
+        if self.is_locked(id) {
+            return Err(tr!("core.modeling.unlock_the_selection_before_editing_it"));
+        }
+        let mut dimension = self.angular_dimension(vertex, baseline, target)?;
+        dimension.id = id;
+        dimension.offset = previous.offset;
+        if dimension
+            .annotation_points(self)
+            .iter()
+            .any(|p| !valid_point(*p))
+        {
+            return Err(tr!(
+                "core.measurements.dimension_is_outside_the_model_limits"
+            ));
+        }
+        self.dimensions.insert(id, dimension);
+        Ok(())
+    }
+
+    fn angular_dimension(
+        &self,
+        vertex: DVec3,
+        baseline: DVec3,
+        target: DVec3,
+    ) -> Result<Dimension, &'static str> {
+        if [vertex, baseline, target]
+            .into_iter()
+            .any(|p| !valid_point(p))
+        {
+            return Err(tr!(
+                "core.measurements.dimension_coordinates_must_be_finite_and_within_the"
+            ));
+        }
+        if vertex.distance(baseline) < EPS || vertex.distance(target) < EPS {
+            return Err(tr!(
+                "core.measurements.choose_angle_points_away_from_vertex"
+            ));
+        }
+        let dimension = Dimension {
+            id: 0,
+            start: self.dimension_anchor(baseline),
+            end: self.dimension_anchor(target),
+            vertex: Some(self.dimension_anchor(vertex)),
+            offset: (baseline - vertex).normalize()
+                * vertex.distance(baseline).min(vertex.distance(target))
+                * 0.3,
+            axis: None,
+            plane: None,
+        };
+        if dimension
+            .annotation_points(self)
+            .into_iter()
+            .any(|p| !valid_point(p))
+        {
+            return Err(tr!(
+                "core.measurements.dimension_is_outside_the_model_limits"
+            ));
+        }
+        Ok(dimension)
     }
     /// Snapshot attachments before topology is removed; detached annotations retain their last positions.
     pub(crate) fn sync_dimensions(&mut self) {
@@ -274,13 +454,19 @@ impl Model {
         let updates: Vec<_> = self
             .dimensions
             .values()
-            .map(|d| (d.id, d.points(self)))
+            .map(|d| {
+                (
+                    d.id,
+                    d.anchors()
+                        .map(|anchor| anchor.position(self))
+                        .collect::<Vec<_>>(),
+                )
+            })
             .collect();
-        for (id, (a, b)) in updates {
+        for (id, points) in updates {
             let d = self.dimensions.get_mut(&id).unwrap();
-            d.start.point = a;
-            d.end.point = b;
-            for anchor in [&mut d.start, &mut d.end] {
+            for (anchor, point) in d.anchors_mut().zip(points) {
+                anchor.point = point;
                 if anchor
                     .weights
                     .iter()
@@ -296,11 +482,13 @@ impl Model {
             if *id != d.id || !valid_point(d.offset) {
                 return Err(tr!("core.measurements.invalid_dimension"));
             }
-            for anchor in [&d.start, &d.end] {
+            for anchor in d.anchors() {
                 anchor.validate(self)?;
             }
-            if d.layout(self).iter().any(|p| !valid_point(*p)) {
-                return Err(tr!("core.measurements.dimension_is_outside_the_model_limits"));
+            if d.annotation_points(self).iter().any(|p| !valid_point(*p)) {
+                return Err(tr!(
+                    "core.measurements.dimension_is_outside_the_model_limits"
+                ));
             }
         }
         Ok(())

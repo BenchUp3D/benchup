@@ -103,12 +103,39 @@ pub fn pick_dimension(
     point: DVec2,
     radius: f64,
 ) -> Option<u64> {
+    pick_dimension_with_visibility(model, camera, size, point, radius,
+        |position| visible(model, camera, size, position))
+}
+
+/// Allow viewport callers to reuse their retained face BVH for label/arc occlusion.
+pub fn pick_dimension_with_visibility(
+    model: &Model,
+    camera: &Camera,
+    size: DVec2,
+    point: DVec2,
+    radius: f64,
+    mut visible: impl FnMut(crate::DVec3) -> bool,
+) -> Option<u64> {
     model
         .dimensions
         .values()
         .filter(|d| !model.is_hidden(d.id))
         .filter_map(|d| {
             let id = model.entity_in_context(d.id)?;
+            if d.vertex.is_some() {
+                let center = d.label_position(model);
+                let label = camera.project(center, size).is_some_and(|at| {
+                    (point.x - at.x).abs() < 38. && (point.y - at.y).abs() < 11.
+                        && visible(center)
+                });
+                if label { return Some((id, 0.)); }
+                let distance = d.segments(model).into_iter().filter_map(|(a, b)| {
+                    let (screen_a, screen_b) = camera.segment(a, b, size)?;
+                    let distance = distance_to_segment(point, screen_a, screen_b);
+                    (distance <= radius && visible(camera.ray(point, size).segment_point(a, b))).then_some(distance)
+                }).min_by(f64::total_cmp);
+                return distance.map(|distance| (id, distance));
+            }
             let [_, _, a, b] = d.layout(model);
             let (a, b) = camera.segment(a, b, size)?;
             let center = (a + b) * 0.5;
@@ -342,7 +369,7 @@ pub fn box_select_with_state(
             &mut selected,
             || {
                 dimension
-                    .layout(model)
+                    .annotation_points(model)
                     .iter()
                     .all(|p| view.project(*p).is_some_and(inside))
             },

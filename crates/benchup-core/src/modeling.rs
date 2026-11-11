@@ -29,7 +29,7 @@ impl Model {
             entities
                 .iter()
                 .filter_map(|id| self.dimensions.get(id))
-                .flat_map(|d| d.layout(self)),
+                .flat_map(|d| d.annotation_points(self)),
         );
         let points = points.chain(
             entities
@@ -105,8 +105,9 @@ impl Model {
             let changed = next.dimensions.get_mut(&id).unwrap();
             changed.start.point = f(a);
             changed.end.point = f(b);
+            if let Some(vertex) = &mut changed.vertex { vertex.point = f(d.vertex.as_ref().unwrap().position(self)); }
             changed.offset = f(a + d.offset) - f(a);
-            for anchor in [&mut changed.start, &mut changed.end] {
+            for anchor in changed.anchors_mut() {
                 if anchor.weights.iter().any(|(id, _)| !vertices.contains(id)) {
                     anchor.weights.clear();
                 }
@@ -860,7 +861,8 @@ impl MovePreview {
                 let (a, b) = d.points(model);
                 d.start.point = a;
                 d.end.point = b;
-                for anchor in [&mut d.start, &mut d.end] {
+                if let Some(vertex) = &mut d.vertex { vertex.point = vertex.position(model); }
+                for anchor in d.anchors_mut() {
                     if anchor.weights.iter().any(|(id, _)| !vertices.contains(id)) {
                         anchor.weights.clear();
                     }
@@ -942,6 +944,7 @@ impl MovePreview {
             d.clone_from(source);
             d.start.point += delta;
             d.end.point += delta;
+            if let Some(vertex) = &mut d.vertex { vertex.point += delta; }
             d.offset = (source.start.point + source.offset + delta) - (source.start.point + delta);
         }
         for source in &self.texts {
@@ -1116,6 +1119,7 @@ impl ScalePreview {
             dimension.clone_from(source);
             dimension.start.point = scale(source.start.point);
             dimension.end.point = scale(source.end.point);
+            if let Some(vertex) = &mut dimension.vertex { vertex.point = scale(source.vertex.as_ref().unwrap().point); }
             dimension.offset =
                 scale(source.start.point + source.offset) - scale(source.start.point);
         }

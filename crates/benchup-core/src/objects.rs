@@ -428,6 +428,7 @@ impl Model {
             let (a, b) = dimension.points(self);
             dimension.start.point = a;
             dimension.end.point = b;
+            if let Some(vertex) = &mut dimension.vertex { vertex.point = vertex.position(self); }
         }
         for text in copy.texts.values_mut() { text.anchor.point = text.anchor.position(self); }
         copy.sync_dimensions();
@@ -467,7 +468,7 @@ impl Model {
             || source
                 .dimensions
                 .values()
-                .flat_map(|d| d.layout(source))
+                .flat_map(|d| d.annotation_points(source))
                 .chain(source.texts.values().flat_map(|t| t.layout(source)))
                 .chain(source.guides.values().map(|g| g.origin))
                 .any(|p| !(p + offset).is_finite() || (p + offset).abs().max_element() > 1e10)
@@ -517,7 +518,7 @@ impl Model {
         for dimension in source.dimensions.values() {
             let mut dimension = dimension.clone();
             dimension.id = ids[&dimension.id];
-            for anchor in [&mut dimension.start, &mut dimension.end] {
+            for anchor in dimension.anchors_mut() {
                 anchor.point += offset;
                 if anchor.weights.iter().all(|(id, _)| ids.contains_key(id)) {
                     for (id, _) in &mut anchor.weights {

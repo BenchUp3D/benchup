@@ -44,6 +44,7 @@ impl Hierarchy {
             .keys()
             .chain(model.faces.keys())
             .chain(model.edges.keys())
+            .chain(model.dimensions.keys())
             .enumerate()
             .map(|(i, id)| (*id, i as u32 + 1))
             .collect();

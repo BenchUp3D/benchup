@@ -421,7 +421,7 @@ impl Model {
             self.dimensions
                 .values()
                 .filter(|d| !hidden.contains(&d.id))
-                .flat_map(|d| d.layout(self)),
+                .flat_map(|d| d.annotation_points(self)),
         );
         let vertices = vertices.chain(
             self.texts

@@ -334,6 +334,7 @@ impl Model {
         for d in self.dimensions.values_mut() {
             d.start.point = linear * d.start.point + translation;
             d.end.point = linear * d.end.point + translation;
+            if let Some(vertex) = &mut d.vertex { vertex.point = linear * vertex.point + translation; }
             d.offset = linear * d.offset;
         }
         for text in self.texts.values_mut() {
@@ -517,7 +518,7 @@ impl Model {
                         }
                     }
                     if let Some(dimension) = self.dimensions.get_mut(id) {
-                        for anchor in [&mut dimension.start, &mut dimension.end] {
+                        for anchor in dimension.anchors_mut() {
                             for (vertex, _) in &mut anchor.weights {
                                 *vertex = vertex_remap.get(vertex).copied().unwrap_or(*vertex);
                             }

@@ -70,7 +70,7 @@ impl Model {
         let protected: BTreeSet<_> = self
             .dimensions
             .values()
-            .flat_map(|d| d.start.weights.iter().chain(&d.end.weights))
+            .flat_map(|d| d.anchors().flat_map(|anchor| &anchor.weights))
             .chain(
                 self.texts
                     .values()

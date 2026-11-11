@@ -600,3 +600,30 @@ fn crossing_and_inset_rectangles_match_full_context_drawing_transactions() {
         model.validate().unwrap();
     }
 }
+
+#[test]
+fn scoped_angular_dimensions_remap_the_vertex_and_rays_in_scaled_component_peers() {
+    let mut model = Model::default();
+    rectangle(&mut model);
+    let component = object(&mut model, true, "Angles");
+    let copy = model.copy_entities(&BTreeSet::from([component]));
+    let peer = *model.paste_entities(&copy, DVec3::X * 5.).first().unwrap();
+    model.scale_selection(&BTreeSet::from([peer]), DVec3::X * 5., 2.).unwrap();
+    assert!(model.enter_object(component));
+    let id = model.add_angular_dimension(DVec3::ZERO, DVec3::X * 2., DVec3::Y * 2.).unwrap();
+    assert_eq!(model.parent(id), Some(component));
+    let contents = model.object_contents(peer).unwrap();
+    let angle = contents.dimensions.values().next().unwrap();
+    assert_eq!(angle.angle(&contents), Some(90.));
+    assert!(angle.vertex.as_ref().unwrap().position(&contents).distance(DVec3::X * 5.) < 1e-8);
+    assert!(angle.anchors().all(|anchor| !anchor.weights.is_empty()));
+    assert!((angle.offset.length() - 1.2).abs() < 1e-8);
+    model.update_angular_dimension(id, DVec3::ZERO, DVec3::X * 2., DVec3::new(2., 2., 0.)).unwrap();
+    let contents = model.object_contents(peer).unwrap();
+    assert_eq!(contents.dimensions.len(), 1);
+    let angle = contents.dimensions.values().next().unwrap();
+    assert!((angle.angle(&contents).unwrap() - 45.).abs() < 1e-8);
+    model.erase(&BTreeSet::from([id]));
+    assert!(model.object_contents(peer).unwrap().dimensions.is_empty());
+    model.validate().unwrap();
+}

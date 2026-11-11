@@ -4797,7 +4797,7 @@ impl BenchUpApp {
             model
                 .dimensions
                 .values()
-                .flat_map(|dimension| dimension.layout(&model)),
+                .flat_map(|dimension| dimension.annotation_points(&model)),
         );
         let mut points = points.chain(model.texts.values().flat_map(|t| t.layout(&model)));
         let Some(first) = points.next() else {

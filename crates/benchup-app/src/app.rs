@@ -4375,7 +4375,7 @@ impl BenchUpApp {
                     .dimensions
                     .values()
                     .filter(|d| display.dimensions && entities.get(d.id).displayed(display))
-                    .flat_map(|d| d.layout(model)),
+                    .flat_map(|d| d.annotation_points(model)),
             );
         let mut points = points.chain(
             model
@@ -5236,7 +5236,9 @@ impl BenchUpApp {
         // Plain model redraws retain the complete CPU/GPU mesh until an input
         // affecting its appearance changes. Screen overlays below stay live.
         let cache_static = self.drawing.is_none() && self.line_start.is_none()
-            && self.measurement.is_none();
+            && self.measurement.as_ref().is_none_or(|m| {
+                m.complete && m.dimension_id.is_some() && self.length_input.trim().is_empty()
+            });
         let key = ((self.modeling.is_none() || self.tool == Tool::Scale)
             && self.grain_anchor.is_none()
             && self.paste_preview.is_none()
@@ -5291,6 +5293,8 @@ impl BenchUpApp {
             }
             self.add_drawing_preview(&mut references, camera, ui);
             self.scene_cache.paint_resident(key, model, &self.face_cache, entities, ui, rect, references);
+            self.picking_cache.update(&self.face_cache);
+            self.paint_resident_angle_labels(&p, rect, model);
         } else if !(cache_static && key
             .as_ref()
             .is_some_and(|key| self.scene_cache.repaint(key, &p, rect)))

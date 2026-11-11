@@ -3773,7 +3773,7 @@ impl FaceCache {
                     .dimensions
                     .values()
                     .filter(|d| active(d.id))
-                    .flat_map(|d| d.layout(model)),
+                    .flat_map(|d| d.annotation_points(model)),
             );
         let mut points = points.chain(
             model

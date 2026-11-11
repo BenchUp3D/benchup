@@ -577,7 +577,8 @@ impl PickingCache {
             if let Some(id) = selection::pick_text(model, camera, size, pixel, radius) {
                 return Some(id);
             }
-            if let Some(id) = selection::pick_dimension(model, camera, size, pixel, radius) {
+            if let Some(id) = selection::pick_dimension_with_visibility(model, camera, size, pixel, radius,
+                |position| self.visible(faces, entities, camera, size, position)) {
                 return Some(id);
             }
         }

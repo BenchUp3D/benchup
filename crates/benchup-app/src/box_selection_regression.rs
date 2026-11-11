@@ -24,6 +24,9 @@ pub(super) fn validate() -> Result<usize, String> {
             .add_dimension(p, p + DVec3::X, DVec3::Y * 0.4)
             .map_err(str::to_owned)?;
         model
+            .add_angular_dimension(p, p + DVec3::X, p + DVec3::Y)
+            .map_err(str::to_owned)?;
+        model
             .add_text(p, DVec3::Z * 0.5, "Selection label")
             .map_err(str::to_owned)?;
         model
@@ -165,7 +168,7 @@ fn reference(
         }
     }
     for dimension in model.dimensions.values().filter(|d| !model.is_hidden(d.id)) {
-        let points = dimension.layout(model);
+        let points = dimension.annotation_points(model);
         let hit = points
             .iter()
             .all(|p| camera.project(*p, size).is_some_and(inside));

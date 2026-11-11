@@ -71,6 +71,7 @@ impl Index {
             .edges
             .keys()
             .chain(model.faces.keys())
+            .chain(model.dimensions.keys())
             .copied()
             .collect();
         index.update(model, entities, display, &dirty);
@@ -117,6 +118,12 @@ impl Index {
             } else if let Some(edge) = model.edges.get(id) {
                 let (a, b) = model.points(edge);
                 Some((entities.parent(*id), (a.min(b), a.max(b))))
+            } else if let Some(dimension) = model.dimensions.get(id).filter(|_| display.dimensions) {
+                let mut points = dimension.annotation_points(model).into_iter();
+                points.next().map(|first| {
+                    let bounds = points.fold((first, first), |(a, b), p| (a.min(p), b.max(p)));
+                    (entities.parent(*id), bounds)
+                })
             } else {
                 model.faces.get(id).and_then(|face| {
                     let mut points = face

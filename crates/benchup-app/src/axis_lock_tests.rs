@@ -83,7 +83,7 @@ fn completed_measurements_reset_locks_only_when_enabled() {
                 h.app.plane_lock(),
                 if enabled { None } else { Some(Axis::Z) },
             );
-            assert!(!h.app.project.modified);
+            assert_eq!(h.app.project.modified, tool == Tool::Protractor);
         }
     }
 }

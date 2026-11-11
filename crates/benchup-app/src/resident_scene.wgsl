@@ -179,7 +179,8 @@ fn edge_vertex(@location(0) world_a: vec3<f32>, @location(1) world_b: vec3<f32>,
     output.lateral = 0.0;
     output.position = vec4<f32>(2.0,2.0,2.0,1.0);
     if (state&64u)!=0u && (camera.interaction.w&4u)==0u {return output;}
-    if camera.interaction.z==0u && camera.interaction.y==0u && !stroke_active {return output;}
+    // Negative widths mark annotations, independent of the Edges option.
+    if width>=0.0 && camera.interaction.z==0u && camera.interaction.y==0u && !stroke_active {return output;}
     if a.z < 0.0 && b.z < 0.0 { return output; }
     if a.z < 0.0 { a = mix(a,b,a.z/(a.z-b.z)); }
     if b.z < 0.0 { b = mix(b,a,b.z/(b.z-a.z)); }
@@ -187,7 +188,7 @@ fn edge_vertex(@location(0) world_a: vec3<f32>, @location(1) world_b: vec3<f32>,
     if dot(screen_delta,screen_delta) < 0.01 { return output; }
     let normal = normalize(vec2<f32>(-screen_delta.y,screen_delta.x));
     let fringe = (abs(normal.x) + abs(normal.y)) / camera.viewport.z;
-    let stroke_width=select(select(width,3.0,stroke_active),1.0,outside);
+    let stroke_width=select(select(abs(width),3.0,stroke_active),1.0,outside);
     let radius = (stroke_width + fringe) * 0.5;
     let offsets = array<vec2<f32>,12>(
         vec2<f32>(0.0,1.0),vec2<f32>(0.0,0.0),vec2<f32>(1.0,1.0),

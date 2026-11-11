@@ -323,6 +323,12 @@ pub(crate) fn edited_geometry(
         );
     }
     let mut edges = changed(&source.edges, &model.edges);
+    edges.extend(changed(&source.dimensions, &model.dimensions));
+    if !vertices.is_empty() {
+        edges.extend(model.dimensions.values().filter(|d| {
+            d.anchors().any(|anchor| anchor.weights.iter().any(|(id, _)| vertices.contains(id)))
+        }).map(|d| d.id));
+    }
     if !vertices.is_empty() {
         edges.extend(
             model
@@ -423,7 +429,7 @@ pub(crate) fn supported(key: &SceneKey, model: &Model, faces: &FaceCache) -> boo
             || d.hidden_objects
             || d.section_planes
             || d.section_cuts)
-        && model.dimensions.is_empty()
+        && model.dimensions.values().all(|d| d.vertex.is_some())
         && model.texts.is_empty()
         && model.connections.is_empty()
         && !matches!(
@@ -526,7 +532,7 @@ impl SceneCache {
                     .resident
                     .removed
                     .iter()
-                    .any(|id| model.faces.contains_key(id) || model.edges.contains_key(id));
+                    .any(|id| model.faces.contains_key(id) || model.edges.contains_key(id) || model.dimensions.contains_key(id));
                 self.resident.overlay = live.then(|| {
                     Arc::new(Geometry::subset(
                         key,
@@ -862,6 +868,22 @@ impl Geometry {
                 faces: [f0, f1, f2, f3],
                 interaction: hierarchy.pair(edge.id),
             });
+        }
+        // Angular strokes share the retained edge buffers, camera uniforms,
+        // interaction texture and fragment depth clipping. Tessellate only
+        // when their geometry changes, never during camera movement.
+        for dimension in model.dimensions.values().filter(|d| {
+            key.display.dimensions && d.vertex.is_some()
+                && dirty.is_none_or(|dirty| dirty.contains(&d.id))
+                && entities.get(d.id).displayed(&key.display)
+        }) {
+            for (a, b) in dimension.segments(model) {
+                edges.push(EdgeInstance {
+                    a: point(a), b: point(b), color: palette.ink.to_array(), width: -1.,
+                    interaction: hierarchy.pair(dimension.id),
+                    ..bytemuck::Zeroable::zeroed()
+                });
+            }
         }
         let markers = endpoints.into_iter().flat_map(|(id, edges)| {
             let position = point(model.vertices[&id].position);
@@ -1453,6 +1475,49 @@ mod tests {
             outliner_hover: Default::default(),
             erasing: Default::default(),
         }
+    }
+
+    #[test]
+    fn angular_dimensions_keep_world_geometry_resident_and_update_only_their_strokes() {
+        let ctx = egui::Context::default();
+        let mut model = model(1024);
+        let mut snapshot = ModelSnapshot::default();
+        let mut faces = FaceCache::default();
+        let mut entities = EntityCache::default();
+        let mut cache = SceneCache::default();
+        let mut key = key();
+        let mut render = |model: &Model, key: &mut SceneKey, cache: &mut SceneCache| {
+            key.model_revision = snapshot.update_scene(model);
+            faces.update_for_revision(model, key.model_revision);
+            entities.update_for_revision(model, key.model_revision);
+            assert!(supported(key, model, &faces));
+            let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
+                cache.prepare_resident(key, model, &faces, &entities, ui);
+            });
+        };
+        render(&model, &mut key, &mut cache);
+        let geometry = cache.resident.geometry.as_ref().unwrap().clone();
+        let id = model.add_angular_dimension(DVec3::Z, DVec3::new(4., 0., 1.), DVec3::new(0., 4., 1.)).unwrap();
+        render(&model, &mut key, &mut cache);
+        assert!(Arc::ptr_eq(&geometry, cache.resident.geometry.as_ref().unwrap()));
+        assert_eq!(cache.resident.overlay.as_ref().unwrap().edges.iter().filter(|e| e.width < 0.).count(), 34);
+        key.camera.yaw += 0.5;
+        key.selected.insert(id);
+        key.display.edges = false;
+        render(&model, &mut key, &mut cache);
+        assert!(Arc::ptr_eq(&geometry, cache.resident.geometry.as_ref().unwrap()));
+        model.move_selection(&std::collections::BTreeSet::from([id]), DVec3::Z).unwrap();
+        render(&model, &mut key, &mut cache);
+        assert!(Arc::ptr_eq(&geometry, cache.resident.geometry.as_ref().unwrap()));
+        assert_eq!(cache.resident.builds, 1);
+        assert_eq!(cache.resident.removed, std::collections::BTreeSet::from([id]));
+        assert_eq!(cache.resident.overlay.as_ref().unwrap().edges.len(), 34);
+        key.display.dimensions = false;
+        render(&model, &mut key, &mut cache);
+        assert!(cache.resident.geometry.as_ref().unwrap().edges.iter().all(|e| e.width >= 0.));
+        key.display.dimensions = true;
+        render(&model, &mut key, &mut cache);
+        assert_eq!(cache.resident.geometry.as_ref().unwrap().edges.iter().filter(|e| e.width < 0.).count(), 34);
     }
 
     #[test]

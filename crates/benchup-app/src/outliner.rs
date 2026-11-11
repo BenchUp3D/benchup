@@ -425,6 +425,8 @@ impl Outliner<'_> {
             (tr!("outliner.face"), "face")
         } else if self.model.texts.contains_key(&id) {
             (tr!("outliner.text"), "text")
+        } else if self.model.dimensions.get(&id).is_some_and(|d| d.vertex.is_some()) {
+            (tr!("outliner.angle_dimension"), "dimension")
         } else {
             (tr!("outliner.dimension"), "dimension")
         };

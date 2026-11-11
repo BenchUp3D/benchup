@@ -17,7 +17,7 @@ The workspace includes Select, Line, Rectangle, Circle, Polygon, Freehand, Push/
 
 ## Woodworking features
 
-Model shelves, tables, cabinets, workbenches, and other furniture with precisely sized parts. Use groups, reusable components, and tags to keep the assembly organized, then inspect dimensions and fit from any angle.
+Model shelves, tables, cabinets, workbenches, and other furniture with precisely sized parts. Use groups, reusable components, and tags to keep the assembly organized, then inspect dimensions and fit from any angle. Measure three points with Protractor to place a persistent angle dimension automatically. The arc and label are saved in the project and follow attached geometry.
 
 ### Wood joinery
 

@@ -283,3 +283,156 @@ fn axis_dimensions_preserve_alignment_in_history_clipboard_and_documents() {
     assert_eq!(legacy.model.dimensions[&id].axis, None);
     assert_eq!(legacy.model.dimensions[&id].length(&legacy.model), 5.);
 }
+
+#[test]
+fn angular_dimensions_roundtrip_copy_transform_and_undo_without_extra_geometry() {
+    let mut doc = Document::default();
+    let id = doc.model.add_angular_dimension(DVec3::ZERO, DVec3::X * 4., DVec3::Y * 4.).unwrap();
+    assert!(doc.model.edges.is_empty() && doc.model.faces.is_empty());
+    assert_eq!(doc.model.dimensions[&id].angle(&doc.model), Some(90.));
+    assert_eq!(doc.model.dimensions[&id].arc(&doc.model).len(), 33);
+    let saved = Document::from_json(&serde_json::to_string(&doc).unwrap()).unwrap();
+    assert_eq!(saved.model, doc.model);
+
+    let copy = doc.model.copy_entities(&BTreeSet::from([id]));
+    let pasted = doc.model.paste_entities(&copy, DVec3::Z * 2.);
+    let child = *pasted.first().unwrap();
+    let group = doc.model.make_object(&pasted, false, "Angle").unwrap();
+    doc.model.move_selection(&BTreeSet::from([group]), DVec3::X).unwrap();
+    doc.model.scale_selection(&BTreeSet::from([group]), DVec3::ZERO, 2.).unwrap();
+    doc.model.rotate_selection(&BTreeSet::from([group]), DVec3::ZERO, DVec3::Z, 90.).unwrap();
+    let dimension = &doc.model.dimensions[&child];
+    assert!((dimension.angle(&doc.model).unwrap() - 90.).abs() < 1e-8);
+    assert!(dimension.vertex.as_ref().unwrap().position(&doc.model).distance(DVec3::new(0., 2., 4.)) < 1e-8);
+    assert!((dimension.offset.length() - 2.4).abs() < 1e-8);
+    let before = doc.model.clone();
+    doc.model.erase(&BTreeSet::from([group]));
+    let mut history = History::default();
+    history.record("Delete angle", before.clone(), &doc.model);
+    assert!(history.undo(&mut doc.model));
+    assert_eq!(doc.model, before);
+    assert!(history.redo(&mut doc.model));
+    assert!(!doc.model.dimensions.contains_key(&child));
+    doc.model.validate().unwrap();
+}
+
+#[test]
+fn angular_dimension_attachments_follow_geometry_and_detach_at_last_positions() {
+    let mut model = Model::default();
+    let baseline = model.add_edge(DVec3::ZERO, DVec3::X * 4.).unwrap();
+    let target = model.add_edge(DVec3::Y * 4., DVec3::Y * 5.).unwrap();
+    let id = model.add_angular_dimension(DVec3::ZERO, DVec3::X * 4., DVec3::Y * 4.).unwrap();
+    assert!(model.dimensions[&id].anchors().all(|a| a.weights.len() == 1));
+    model.move_selection(&BTreeSet::from([target]), DVec3::X * 4.).unwrap();
+    assert!((model.dimensions[&id].angle(&model).unwrap() - 45.).abs() < 1e-8);
+    model.move_selection(&BTreeSet::from([baseline]), DVec3::Z).unwrap();
+    assert_eq!(model.dimensions[&id].vertex.as_ref().unwrap().position(&model), DVec3::Z);
+    let last: Vec<_> = model.dimensions[&id].anchors().map(|a| a.position(&model)).collect();
+    let detached = model.copy_entities(&BTreeSet::from([id]));
+    assert!(detached.dimensions[&id].anchors().all(|a| a.weights.is_empty()));
+    assert_eq!(detached.dimensions[&id].anchors().map(|a| a.point).collect::<Vec<_>>(), last);
+
+    let copied = model.copy_entities(&BTreeSet::from([baseline, target, id]));
+    let pasted = model.paste_entities(&copied, DVec3::Z * 3.);
+    let pasted_angle = *pasted.iter().find(|id| model.dimensions.contains_key(id)).unwrap();
+    assert!(model.dimensions[&pasted_angle].anchors().all(|a| a.weights.iter().all(|(vertex, _)| {
+        !last.iter().any(|p| p.distance(model.vertices[vertex].position) < 1e-8)
+    })));
+    model.erase(&BTreeSet::from([baseline, target]));
+    assert_eq!(model.dimensions[&id].anchors().map(|a| a.position(&model)).collect::<Vec<_>>(), last);
+    assert!(model.dimensions[&id].anchors().all(|a| a.weights.is_empty()));
+    model.validate().unwrap();
+}
+
+#[test]
+fn angular_dimension_arc_label_and_vertex_participate_in_selection_and_bounds() {
+    let mut model = Model::default();
+    let id = model.add_angular_dimension(DVec3::ZERO, DVec3::X * 4., -DVec3::X * 4.).unwrap();
+    let mut camera = Camera::default();
+    camera.set_standard_view(crate::StandardView::Front);
+    let size = DVec2::new(1000., 800.);
+    let dimension = &model.dimensions[&id];
+    let label = dimension.label_position(&model);
+    assert!(label.distance(DVec3::Z * 1.2) < 1e-8);
+    let cursor = camera.project(label, size).unwrap();
+    assert_eq!(selection::pick_dimension(&model, &camera, size, cursor, 8.), Some(id));
+    assert!(selection::box_select(&model, &camera, size, DVec2::ZERO, size).contains(&id));
+    let (lo, hi) = model.selection_bounds(&BTreeSet::from([id])).unwrap();
+    assert!(lo.cmple(DVec3::ZERO).all() && hi.z >= 1.2 - 1e-8);
+    let a = camera.project(-DVec3::X * 4., size).unwrap();
+    let b = camera.project(DVec3::X * 4., size).unwrap();
+    assert!(!selection::box_select(&model, &camera, size,
+        a.min(b) - DVec2::ONE, a.max(b) + DVec2::ONE).contains(&id));
+    model.hidden.insert(id);
+    assert_eq!(selection::pick_dimension(&model, &camera, size, cursor, 8.), None);
+}
+
+#[test]
+fn angular_dimensions_reject_bad_vertices_atomically_and_linear_documents_keep_their_defaults() {
+    let mut model = Model::default();
+    for (vertex, a, b) in [
+        (DVec3::ZERO, DVec3::ZERO, DVec3::X),
+        (DVec3::ZERO, DVec3::X, DVec3::ZERO),
+        (DVec3::NAN, DVec3::X, DVec3::Y),
+        (DVec3::ZERO, DVec3::splat(1e11), DVec3::Y),
+    ] {
+        let before = model.clone();
+        assert!(model.add_angular_dimension(vertex, a, b).is_err());
+        assert_eq!(model, before);
+    }
+    for (target, expected) in [(DVec3::X * 2., 0.), (-DVec3::X, 180.)] {
+        let id = model.add_angular_dimension(DVec3::ZERO, DVec3::X, target).unwrap();
+        assert_eq!(model.dimensions[&id].angle(&model), Some(expected));
+        model.validate().unwrap();
+    }
+    let id = model.add_dimension(DVec3::ZERO, DVec3::X, DVec3::Y).unwrap();
+    let mut json = serde_json::to_value(&model.dimensions[&id]).unwrap();
+    json.as_object_mut().unwrap().remove("vertex");
+    let legacy: crate::Dimension = serde_json::from_value(json).unwrap();
+    assert!(legacy.vertex.is_none());
+    assert_eq!(legacy.length(&model), 1.);
+    let id = model.add_angular_dimension(DVec3::ZERO, DVec3::X, DVec3::Y).unwrap();
+    model.dimensions.get_mut(&id).unwrap().vertex.as_mut().unwrap().weights = vec![(999, 1.)];
+    assert!(model.validate().is_err());
+}
+
+#[test]
+fn angular_dimension_move_and_scale_previews_transform_all_three_anchors() {
+    let mut source = Model::default();
+    let id = source.add_angular_dimension(DVec3::ZERO, DVec3::X * 4., DVec3::Y * 4.).unwrap();
+    let selected = BTreeSet::from([id]);
+    let mut preview = source.clone();
+    let plan = crate::modeling::MovePreview::new(&source, &selected).unwrap();
+    plan.update(&mut preview, DVec3::Z * 2.).unwrap();
+    assert_eq!(preview.dimensions[&id].vertex.as_ref().unwrap().point, DVec3::Z * 2.);
+    assert_eq!(preview.dimensions[&id].angle(&preview), Some(90.));
+    let scale = crate::modeling::ScalePreview::new(&source, &selected).unwrap();
+    scale.update(&mut preview, DVec3::ZERO, 2., None).unwrap();
+    assert_eq!(preview.dimensions[&id].vertex.as_ref().unwrap().point, DVec3::ZERO);
+    assert_eq!(preview.dimensions[&id].points(&preview), (DVec3::X * 8., DVec3::Y * 8.));
+    assert!((preview.dimensions[&id].offset.length() - 2.4).abs() < 1e-8);
+    assert_eq!(preview.dimensions[&id].angle(&preview), Some(90.));
+    preview.validate().unwrap();
+}
+
+#[test]
+fn precise_angle_updates_keep_the_entity_and_reject_invalid_changes_atomically() {
+    let mut model = Model::default();
+    let id = model.add_angular_dimension(DVec3::ZERO, DVec3::X * 4., DVec3::Y).unwrap();
+    let tag = model.add_tag("Angles").unwrap();
+    model.entity_tags.insert(id, tag);
+    let offset = model.dimensions[&id].offset;
+    model.update_angular_dimension(id, DVec3::ZERO, DVec3::X * 4., DVec3::X + DVec3::Y).unwrap();
+    assert_eq!(model.dimensions.len(), 1);
+    assert_eq!(model.entity_tags[&id], tag);
+    assert_eq!(model.dimensions[&id].offset, offset);
+    assert!((model.dimensions[&id].angle(&model).unwrap() - 45.).abs() < 1e-8);
+    let before = model.clone();
+    assert!(model.update_angular_dimension(id, DVec3::ZERO, DVec3::ZERO, DVec3::Y).is_err());
+    assert_eq!(model, before);
+    model.locked.insert(id);
+    let before = model.clone();
+    assert!(model.update_angular_dimension(id, DVec3::ZERO, DVec3::X, DVec3::Y).is_err());
+    assert_eq!(model, before);
+    model.validate().unwrap();
+}

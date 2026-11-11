@@ -11,6 +11,7 @@ pub(super) struct Measurement {
     pub(super) text: String,
     pub(super) reference_direction: Option<DVec3>,
     pub(super) guide_id: Option<u64>,
+    pub(super) dimension_id: Option<u64>,
 }
 
 impl BenchUpApp {
@@ -32,45 +33,55 @@ impl BenchUpApp {
     pub(super) fn measurement_precision_available(&self) -> bool {
         matches!(self.tool, Tool::TapeMeasure | Tool::Protractor)
             && self.measurement.as_ref().is_some_and(|m| {
-                (!m.complete || m.guide_id.is_some())
+                (!m.complete || m.guide_id.is_some() || m.dimension_id.is_some())
                     && m.points.len() >= if self.tool == Tool::Protractor { 2 } else { 1 }
             })
     }
 
-    fn place_measurement_guide(&mut self, ctx: &egui::Context) {
-        let Some(mut m) = self.measurement.clone().filter(|m| m.complete) else {
-            return;
-        };
-        let Some(guide) = self.measurement_guide() else {
-            return;
-        };
-        if let Some(normal) = self.plane_lock() {
-            m.normal = normal.vector();
-        }
+    fn finish_measurement(&mut self, ctx: &egui::Context) {
+        let Some(mut m) = self.measurement.clone().filter(|m| m.complete) else { return; };
+        let angular = self.tool == Tool::Protractor;
+        if !angular && !self.create_guides { return; }
+        if let Some(normal) = self.plane_lock() { m.normal = normal.vector(); }
+        let guide = self.create_guides.then(|| self.measurement_guide()).flatten();
         let before = self.doc.model.clone();
-        match self.doc.model.add_guide(guide.origin, guide.direction) {
-            Ok(id) => {
-                let adjusting = m.guide_id.is_some();
-                if let Some(previous) = m.guide_id {
-                    self.doc.model.erase(&BTreeSet::from([previous]));
-                }
-                m.guide_id = Some(id);
-                self.finish_edit(
-                    if adjusting {
-                        tr!("measurement_tools.adjust_guide")
-                    } else {
-                        tr!("measurement_tools.add_guide")
-                    },
-                    before,
-                    ctx,
-                );
-                if self.doc.model.guides.contains_key(&id) {
-                    self.doc.display.guides = true;
-                    self.measurement = Some(m);
+        let mut next = before.clone();
+        let adjusting = if angular { m.dimension_id.is_some() } else { m.guide_id.is_some() };
+        let result = (|| -> Result<(), &'static str> {
+            if angular {
+                if let Some(id) = m.dimension_id.filter(|id| next.dimensions.contains_key(id)) {
+                    next.update_angular_dimension(id, m.points[0], m.points[1], m.points[2])?;
+                } else {
+                    m.dimension_id = Some(next.add_angular_dimension(m.points[0], m.points[1], m.points[2])?);
                 }
             }
-            Err(message) => self.say(ctx, message),
+            if let Some(guide) = guide {
+                let id = next.add_guide(guide.origin, guide.direction)?;
+                if let Some(previous) = m.guide_id { next.erase(&BTreeSet::from([previous])); }
+                m.guide_id = Some(id);
+            }
+            Ok(())
+        })();
+        if let Err(message) = result {
+            self.say(ctx, message);
+            return;
         }
+        self.doc.model = next;
+        self.finish_edit(if angular {
+            if adjusting { tr!("measurement_tools.adjust_angle_dimension") }
+            else { tr!("measurement_tools.add_angle_dimension") }
+        } else if adjusting { tr!("measurement_tools.adjust_guide") }
+        else { tr!("measurement_tools.add_guide") }, before, ctx);
+        // Retain the completed measurement for exact-value adjustments. The
+        // persistent annotation is painted by the dimension renderer only.
+        if m.dimension_id.is_some_and(|id| self.doc.model.dimensions.contains_key(&id)) {
+            self.doc.display.dimensions = true;
+            self.selected = BTreeSet::from([m.dimension_id.unwrap()]);
+        } else if angular { return; }
+        if m.guide_id.is_some_and(|id| self.doc.model.guides.contains_key(&id)) {
+            self.doc.display.guides = true;
+        } else if self.create_guides { return; }
+        self.measurement = Some(m);
     }
 
     pub(super) fn commit_measurement_value(&mut self, ctx: &egui::Context) {
@@ -87,9 +98,7 @@ impl BenchUpApp {
         m.points.truncate(count - 1);
         m.points.push(point);
         m.complete = true;
-        if self.create_guides {
-            self.place_measurement_guide(ctx);
-        }
+        self.finish_measurement(ctx);
         self.reset_axis_locks_after_action();
         self.length_input.clear();
     }
@@ -350,11 +359,8 @@ impl BenchUpApp {
         m.complete = (self.tool == Tool::TapeMeasure && m.points.len() == 2)
             || (self.tool == Tool::Protractor && m.points.len() == 3);
         if m.complete {
-            if self.create_guides {
-                self.place_measurement_guide(ctx);
-            } else {
-                self.reset_axis_locks_after_action();
-            }
+            self.finish_measurement(ctx);
+            self.reset_axis_locks_after_action();
             self.length_input.clear();
         }
     }
@@ -395,6 +401,7 @@ impl BenchUpApp {
             offset: self.measurement.as_ref()?.offset,
             axis: self.single_axis_lock(),
             plane: self.plane_lock(),
+            vertex: None,
         })
     }
     pub(super) fn measurement_value(&self) -> Option<String> {
@@ -556,6 +563,10 @@ impl BenchUpApp {
                     point: a + offset,
                     weights: vec![],
                 };
+                dimension.vertex = source.vertex.as_ref().map(|vertex| DimensionAnchor {
+                    point: vertex.position(&preview.clipboard.model) + offset,
+                    weights: vec![],
+                });
                 dimension.end = DimensionAnchor {
                     point: b + offset,
                     weights: vec![],
@@ -590,6 +601,32 @@ impl BenchUpApp {
         }
         shapes
     }
+    /// Egui glyphs require screen layout. Keep this fallback bounded to one
+    /// label and one cached BVH query per dimension; arcs stay on the GPU.
+    pub(super) fn paint_resident_angle_labels(&self, p: &egui::Painter, rect: Rect, model: &Model) {
+        if !self.doc.display.dimensions { return; }
+        let colors = Palette::for_painter(p);
+        for dimension in model.dimensions.values().filter(|d| {
+            d.vertex.is_some() && self.entity_cache.get(d.id).displayed(&self.doc.display)
+        }) {
+            let anchor = dimension.label_position(model);
+            if !self.picking_cache.visible(&self.face_cache, &self.entity_cache,
+                &self.doc.camera, dv(rect.size()), anchor) { continue; }
+            let Some(at) = self.doc.camera.project(anchor, dv(rect.size())) else { continue; };
+            let color = if self.entity_cache.selected(model, dimension.id, &self.selected) {
+                colors.accent
+            } else if self.outliner_hover.contains(&dimension.id)
+                || self.hover.is_some() && self.hover == model.entity_in_context(dimension.id) {
+                colors.green
+            } else if model.entity_in_context(dimension.id).is_none() {
+                colors.muted
+            } else { colors.ink };
+            measurement_label(p, rect.min + pv(at), dimension.angle(model)
+                .map(|angle| self.doc.display.units.format_angle(angle))
+                .unwrap_or_else(|| tr!("measurement_tools.undefined_angle").into()), color);
+        }
+    }
+
     pub(super) fn paint_measurements(&self, p: &egui::Painter, rect: Rect) {
         if !self.doc.display.dimensions {
             return;
@@ -598,6 +635,11 @@ impl BenchUpApp {
         let camera = &self.doc.camera;
         let size = dv(rect.size());
         if !self.tool.is_measuring() || self.tool == Tool::Text {
+            return;
+        }
+        if self.measurement.as_ref().is_some_and(|m| m.complete && m.dimension_id.is_some())
+            && self.length_input.trim().is_empty()
+        {
             return;
         }
         let points = self.measurement_points();
@@ -679,6 +721,22 @@ fn dimension_shapes(
     color: Color32,
     units: benchup_core::UnitSettings,
 ) -> Vec<egui::Shape> {
+    if d.vertex.is_some() {
+        let mut shapes = vec![];
+        for (a, b) in d.segments(model) {
+            for (a, b) in mesh.annotation_line(a, b) {
+                shapes.extend(mesh.annotation_stroke(p, rect, a, b, Stroke::new(1., color)));
+            }
+        }
+        let center = d.label_position(model);
+        if let Some(at) = camera.project(center, dv(rect.size())) {
+            let text = d.angle(model).map(|angle| units.format_angle(angle))
+                .unwrap_or_else(|| tr!("measurement_tools.undefined_angle").into());
+            let (bounds, label) = measurement_label_shape(p, rect.min + pv(at), text, color);
+            shapes.extend(mesh.annotation_label(p, rect, center, bounds, label));
+        }
+        return shapes;
+    }
     let points = d.layout(model);
     let size = dv(rect.size());
     let mut shapes = vec![];
