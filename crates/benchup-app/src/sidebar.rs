@@ -661,6 +661,7 @@ impl BenchUpApp {
         self.account.menu_open = preferences.account_menu_open;
         self.general_settings = preferences.general.clone();
         self.general_settings.normalize();
+        benchup_core::i18n::set_language(&self.general_settings.language);
         preferences.tools.restore(self);
         self.project.recent = preferences.recent_projects.clone();
         self.project.recent.truncate(10);
@@ -2717,6 +2718,7 @@ mod preference_tests {
         assert_eq!(app.general_settings.language, "en");
         assert_eq!(app.general_settings.orbit_speed, 2.);
 
+        app.general_settings.language = "zh_CN".into();
         app.persist_inspector_changes(&ctx, Some(&mut storage), false);
         assert!(storage.flushed);
         assert!(!app.project.modified);
@@ -2725,8 +2727,9 @@ mod preference_tests {
         let mut restored = BenchUpApp::with_document(Document::default(), None, true);
         restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
         let saved: InspectorPreferences = crate::identity::preference_value(&storage, PREFERENCE_KEY).unwrap();
-        assert_eq!(saved.general.language, "en");
-        assert_eq!(restored.general_settings.language, "en");
+        assert_eq!(saved.general.language, "zh_CN");
+        assert_eq!(restored.general_settings.language, "zh_CN");
+        benchup_core::i18n::set_language("en");
     }
 
     #[test]

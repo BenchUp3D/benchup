@@ -1,6 +1,6 @@
 use benchup_core::tr;
 use super::*;
-use crate::screenshots::{self, Format, Paper, Settings, VIEW_LABELS};
+use crate::screenshots::{self, Format, Paper, Settings, view_labels};
 use eframe::{egui_wgpu, wgpu};
 use image::RgbaImage;
 use std::sync::mpsc;
@@ -251,7 +251,7 @@ fn screenshot_controls(
             .spacing(egui::vec2(16., 6.))
             .show(ui, |ui| {
                 let width = (ui.available_width() - 16.) / 2.;
-                for (i, label) in VIEW_LABELS.iter().enumerate() {
+                for (i, label) in view_labels().iter().enumerate() {
                     ui.add_sized(
                         egui::vec2(width, 28.),
                         egui::Checkbox::new(&mut settings.views[i], *label),
@@ -370,7 +370,7 @@ fn screenshot_preview(
             if !settings.combined {
                 ui.horizontal_wrapped(|ui| {
                     for (index, &view) in settings.selected().iter().enumerate() {
-                        ui.selectable_value(page, index, VIEW_LABELS[view]);
+                        ui.selectable_value(page, index, view_labels()[view]);
                     }
                 });
             }
@@ -565,7 +565,7 @@ impl Capture {
                     ui.painter().text(
                         egui::pos2(16., 16.),
                         Align2::LEFT_CENTER,
-                        VIEW_LABELS[view],
+                        view_labels()[view],
                         FontId::proportional(14.),
                         INK,
                     );

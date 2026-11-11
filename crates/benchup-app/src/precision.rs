@@ -4,7 +4,9 @@ use super::*;
 use benchup_core::LengthUnit;
 
 pub(super) const MAX_INPUT_LEN: usize = 512;
-const FORMULA_EXAMPLE: &str = tr!("precision.enter_a_formula_such_as_60cm_89mm_or");
+fn formula_example() -> &'static str {
+    tr!("precision.enter_a_formula_such_as_60cm_89mm_or")
+}
 
 pub(super) fn length(input: &str, unit: LengthUnit) -> Result<f64, &'static str> {
     let mut value = Formula::parse(input, true, unit.factor())?;
@@ -72,7 +74,7 @@ impl<'a> Formula<'a> {
         };
         let value = parser.sum()?;
         if parser.peek().is_some() {
-            return Err(FORMULA_EXAMPLE);
+            return Err(formula_example());
         }
         value.finite()
     }
@@ -188,7 +190,7 @@ impl<'a> Formula<'a> {
             Quantity {
                 number: self.input[start..self.cursor]
                     .parse::<f64>()
-                    .map_err(|_| FORMULA_EXAMPLE)?,
+                    .map_err(|_| formula_example())?,
                 dimension: 0,
             }
             .finite()?

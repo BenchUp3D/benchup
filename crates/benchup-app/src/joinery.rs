@@ -159,7 +159,7 @@ impl GeometryCache {
                         revision: self.revision,
                         ..Default::default()
                     };
-                    self.pending = Some(std::thread::spawn(move || {
+                    self.pending = Some(benchup_core::i18n::spawn_localized(move || {
                         worker.update(&source);
                         let model = &worker.result.as_ref().unwrap().model;
                         worker.faces.update(model);

@@ -28,16 +28,18 @@ impl Default for Settings {
     }
 }
 
-pub(crate) const VIEW_LABELS: [&str; 8] = [
-    tr!("screenshots.current"),
-    tr!("screenshots.top"),
-    tr!("screenshots.front"),
-    tr!("screenshots.back"),
-    tr!("screenshots.left"),
-    tr!("screenshots.right"),
-    tr!("screenshots.bottom"),
-    tr!("screenshots.isometric"),
-];
+pub(crate) fn view_labels() -> [&'static str; 8] {
+    [
+        tr!("screenshots.current"),
+        tr!("screenshots.top"),
+        tr!("screenshots.front"),
+        tr!("screenshots.back"),
+        tr!("screenshots.left"),
+        tr!("screenshots.right"),
+        tr!("screenshots.bottom"),
+        tr!("screenshots.isometric"),
+    ]
+}
 const VIEW_FILE_STEMS: [&str; 8] = [
     "current", "top", "front", "back", "left", "right", "bottom", "isometric",
 ];
@@ -318,7 +320,7 @@ pub(crate) fn unpremultiply(rgba: &mut [u8]) {
 
 #[cfg(test)]
 pub(crate) fn encode(settings: &Settings, pages: &[RgbaImage]) -> Result<Export, String> {
-    encode_with_title(settings,pages,"Model views")
+    encode_with_title(settings,pages,tr!("screenshots.model_views"))
 }
 pub(crate) fn encode_with_title(settings: &Settings, pages: &[RgbaImage], title:&str) -> Result<Export, String> {
     settings.validate()?;

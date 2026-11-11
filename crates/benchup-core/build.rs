@@ -8,19 +8,28 @@ fn main() {
     let messages: BTreeMap<String, Value> =
         serde_json::from_str(&catalog).expect("parse the English message catalog");
 
-    // Keep static labels usable in constants and let Rust check formatted arguments.
+    const CHINESE_CATALOG: &str = "../../assets/i18n/zh_CN.json";
+    println!("cargo:rerun-if-changed={CHINESE_CATALOG}");
+    let chinese: BTreeMap<String, Value> = serde_json::from_str(
+        &fs::read_to_string(CHINESE_CATALOG).expect("read the Chinese message catalog"),
+    )
+    .expect("parse the Chinese message catalog");
+
+    // Generate both format strings so Rust continues checking named arguments.
     let mut code = String::from(
-        "#[doc = \"Look up an application message in the bundled English catalog.\"]\n\
+        "#[doc = \"Look up an application message in the selected bundled catalog.\"]\n\
          #[macro_export]\nmacro_rules! tr {\n",
     );
     for (key, message) in messages {
-        match message {
+        let translated = chinese.get(&key).unwrap_or(&message);
+        match &message {
             Value::String(text) => {
-                writeln!(code, "    ({key:?}) => {{ {text:?} }};").unwrap();
+                let translated = translated.as_str().expect("matching message types");
+                writeln!(code, "    ({key:?}) => {{ if $crate::i18n::is_chinese() {{ {translated:?} }} else {{ {text:?} }} }};").unwrap();
                 if text.contains('{') {
                     writeln!(
                         code,
-                        "    ({key:?}, $($args:tt)+) => {{ ::std::format!({text:?}, $($args)+) }};",
+                        "    ({key:?}, $($args:tt)+) => {{ if $crate::i18n::is_chinese() {{ ::std::format!({translated:?}, $($args)+) }} else {{ ::std::format!({text:?}, $($args)+) }} }};",
                     )
                     .unwrap();
                 }
@@ -33,13 +42,22 @@ fn main() {
                         .and_then(Value::as_str)
                         .unwrap_or_else(|| panic!("{key}: missing {category} form"))
                 };
+                let translated = translated
+                    .as_object()
+                    .expect("matching plural message types");
+                let zh_other = translated
+                    .get("other")
+                    .and_then(Value::as_str)
+                    .expect("Chinese plural form");
                 let one = form("one");
                 let other = form("other");
                 writeln!(
                     code,
                     r#"    ({key:?}, count = $count:expr $(, $($args:tt)*)?) => {{{{
         let count = $count;
-        if count as f64 == 1.0 {{
+        if $crate::i18n::is_chinese() {{
+            ::std::format!({zh_other:?}, count = count $(, $($args)*)?)
+        }} else if count as f64 == 1.0 {{
             ::std::format!({one:?}, count = count $(, $($args)*)?)
         }} else {{
             ::std::format!({other:?}, count = count $(, $($args)*)?)

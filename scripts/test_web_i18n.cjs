@@ -36,3 +36,38 @@ test('a late catalog response leaves the open project title intact', async () =>
     await runStartup(document, async () => ({ok: true, json: async () => catalog}));
     assert.equal(document.title, 'Workshop - BenchUp');
 });
+
+test('Chinese messages preserve English catalog keys and format arguments', () => {
+    const chinese = require('../assets/i18n/zh_CN.json');
+    assert.deepEqual(Object.keys(chinese).sort(), Object.keys(catalog).sort());
+    const argumentsOf = text => [...text.matchAll(/(?<!\{)\{([^{}]*)\}(?!\})/g)]
+        .map(match => match[1]).sort();
+    for (const [key, message] of Object.entries(catalog)) {
+        assert.equal(typeof chinese[key], typeof message, key);
+        if (typeof message === 'string') {
+            assert.deepEqual(argumentsOf(chinese[key]), argumentsOf(message), key);
+        } else {
+            assert.deepEqual(Object.keys(chinese[key]).sort(), Object.keys(message).sort(), key);
+            for (const [form, text] of Object.entries(message)) {
+                assert.deepEqual(argumentsOf(chinese[key][form]), argumentsOf(text), `${key}.${form}`);
+            }
+        }
+    }
+});
+
+test('runtime translations are formatted before being passed to Rust output macros', () => {
+    const rustFiles = directory => fs.readdirSync(directory, {withFileTypes: true}).flatMap(entry => {
+        const file = path.join(directory, entry.name);
+        return entry.isDirectory() ? rustFiles(file) : entry.name.endsWith('.rs') ? [file] : [];
+    });
+    for (const file of rustFiles(path.join(__dirname, '../crates'))) {
+        const source = fs.readFileSync(file, 'utf8');
+        // tr! now expands to a runtime expression; format-string positions require literals.
+        assert.doesNotMatch(source,
+            /\b(?:format|format_args|print|println|eprint|eprintln|panic)!\(\s*(?:benchup_core::)?tr!\(/,
+            file);
+        assert.doesNotMatch(source,
+            /\b(?:write|writeln)!\(\s*[^,]+,\s*(?:benchup_core::)?tr!\(/,
+            file);
+    }
+});

@@ -30,9 +30,12 @@ type WoodMaterials =
 pub(super) use benchup_core::surface_treatment::{Duration, Settings, Step};
 
 pub(super) const JOINERY_SECTION_KEY: &str = "time_estimates_joinery";
-const JOINERY_SCOPE: &str =
-    tr!("time_estimates.counts_all_configured_wood_joints_regardless_of_selection");
-const JOINERY_ALLOWANCE_NOTE: &str = tr!("time_estimates.allowances_cover_layout_cutting_and_fitting_both_parts");
+fn joinery_scope() -> &'static str {
+    tr!("time_estimates.counts_all_configured_wood_joints_regardless_of_selection")
+}
+fn joinery_allowance_note() -> &'static str {
+    tr!("time_estimates.allowances_cover_layout_cutting_and_fitting_both_parts")
+}
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct JoineryRates(BTreeMap<JointKind, f64>);
@@ -533,7 +536,7 @@ fn joinery_controls(ui: &mut egui::Ui, rows: &[JoineryRow], rates: &mut JoineryR
         JOINERY_SECTION_KEY,
         true,
         |ui| {
-            ui.text_weak(JOINERY_SCOPE);
+            ui.text_weak(joinery_scope());
             let mut table = InspectorTable::new(
                 ui.available_width(),
                 [
@@ -581,7 +584,7 @@ fn joinery_controls(ui: &mut egui::Ui, rows: &[JoineryRow], rates: &mut JoineryR
                     }
                 });
             }
-            ui.text_weak(JOINERY_ALLOWANCE_NOTE);
+            ui.text_weak(joinery_allowance_note());
         },
     );
 }
@@ -952,8 +955,8 @@ impl BenchUpApp {
             self.doc.display.units.format_area(area), if self.selected.is_empty() { tr!("time_estimates.visible") } else { tr!("time_estimates.selected") }));
         report.notes.push(tr!(
             "time_estimates.joinery_whole_project_3",
-            JOINERY_SCOPE = JOINERY_SCOPE,
-            JOINERY_ALLOWANCE_NOTE = JOINERY_ALLOWANCE_NOTE,
+            JOINERY_SCOPE = joinery_scope(),
+            JOINERY_ALLOWANCE_NOTE = joinery_allowance_note(),
         ));
         report.notes.push(tr!("time_estimates.kerf_rotation_stock_uses_each_part_s_full",
             self.doc.display.units.format_length(self.project.cutting_plan_layout.kerf_mm / 1000.),

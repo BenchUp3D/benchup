@@ -121,7 +121,7 @@ pub(crate) fn run(
 ) -> Pending {
     let (sender, receiver) = mpsc::channel();
     let ctx = ctx.clone();
-    std::thread::spawn(move || {
+    benchup_core::i18n::spawn_localized(move || {
         let _ = sender.send(action());
         ctx.request_repaint();
     });
@@ -467,7 +467,7 @@ fn open_pdf(path: &std::path::Path) -> Result<(), String> {
     let mut child = command.arg(path).spawn().map_err(|e| e.to_string())?;
     // Some viewers stay running. Finish the export immediately and reap the
     // launcher separately rather than keeping the file-operation modal open.
-    std::thread::spawn(move || {
+    benchup_core::i18n::spawn_localized(move || {
         let _ = child.wait();
     });
     Ok(())
