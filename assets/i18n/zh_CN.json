@@ -1501,7 +1501,7 @@
   "sidebar.edge_style": "边线样式",
   "sidebar.edges": "边线",
   "sidebar.elevation": "仰角",
-  "sidebar.emphasize_group": "突出显示组",
+  "sidebar.emphasize_group": "Focus on Edited Group",
   "sidebar.emphasize_the_group_component_currently_being_edited_and": "突出显示当前正在编辑的组/组件，其余内容以暗淡的线框显示。在组/组件之外不产生视觉效果。",
   "sidebar.end": "结束",
   "sidebar.endpoints": "端点",

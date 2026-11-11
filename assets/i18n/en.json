@@ -1505,7 +1505,7 @@
   "sidebar.edge_style": "Edge style",
   "sidebar.edges": "Edges",
   "sidebar.elevation": "Elevation",
-  "sidebar.emphasize_group": "Emphasize group",
+  "sidebar.emphasize_group": "Focus on Edited Group",
   "sidebar.emphasize_the_group_component_currently_being_edited_and": "Emphasize the group/component currently being edited and show everything else in muted wireframe. Has no visual effect outside a group/component.",
   "sidebar.end": "End",
   "sidebar.endpoints": "Endpoints",
