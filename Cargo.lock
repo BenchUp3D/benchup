@@ -450,6 +450,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "benchup-cli"
+version = "0.7.0"
+dependencies = [
+ "benchup-core",
+ "benchup-tools",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "benchup-core"
 version = "0.7.1"
 dependencies = [

@@ -1,0 +1,19 @@
+[package]
+name = "benchup-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Command-line access to BenchUp project files, for shells and AI agents"
+
+[[bin]]
+name = "benchup"
+path = "src/main.rs"
+
+[dependencies]
+benchup-core = { path = "../benchup-core" }
+benchup-tools = { path = "../benchup-tools" }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

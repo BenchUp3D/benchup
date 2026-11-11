@@ -405,6 +405,8 @@ Verified during implementation: native Linux and browser WASM Cargo checks; core
 ## Layout
 
 - `crates/benchup-core`: double-precision document geometry, planar face discovery/triangulation, inference, picking, camera, tool definitions, and bounded history. It has no GUI or GPU dependencies.
+- `crates/benchup-tools`: the operations an agent may call (schemas, validation, scene summaries) and `.bup` encode/decode. Depends only on `benchup-core`.
+- `crates/benchup-cli`: the `benchup` command-line tool for reading and editing `.bup` files from a shell or an AI agent, including an MCP server over stdio. See its [README](crates/benchup-cli/README.md).
 - `crates/benchup-app`: egui workspace, gesture routing, local persistence, native/browser launchers, and the wgpu/WGSL edge renderer. Model coordinates remain independent of GPU resources.
 - `index.html` and `Trunk.toml`: static browser host and WASM development configuration.
 
