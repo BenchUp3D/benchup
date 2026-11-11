@@ -15,7 +15,7 @@ APT_OPTIONS = [
 
 
 def use_fallback_mirror(root=Path('/etc/apt')):
-    """Handle both legacy source lists and Ubuntu's deb822 source format."""
+    """Switch direct Azure sources and runner mirror lists to the Ubuntu archive."""
     sources = [root / 'sources.list']
     sources += sorted((root / 'sources.list.d').glob('*.list'))
     sources += sorted((root / 'sources.list.d').glob('*.sources'))
@@ -25,6 +25,12 @@ def use_fallback_mirror(root=Path('/etc/apt')):
             continue
         original = path.read_text()
         fallback = original.replace('azure.archive.ubuntu.com', 'archive.ubuntu.com')
+        # Hosted runners can put the Azure hostname in apt-mirrors.txt instead
+        # of these source files. Bypass that list on retry so a fresh apt process
+        # uses the archive directly, without selecting the failed Azure mirror.
+        for uri in ('mirror+file:/etc/apt/apt-mirrors.txt',
+                    'mirror+file:///etc/apt/apt-mirrors.txt'):
+            fallback = fallback.replace(uri, 'https://archive.ubuntu.com/ubuntu')
         if fallback != original:
             path.write_text(fallback)
             changed = True
@@ -47,9 +53,11 @@ def main(packages):
     if not result:
         return 0
     if not use_fallback_mirror():
-        print('No Azure Ubuntu mirror configured; preserving apt failure.', flush=True)
+        print('No Azure Ubuntu mirror or runner mirror list configured; '
+              'preserving apt failure.', flush=True)
         return result
-    print('::warning::Azure apt attempt failed; retrying with archive.ubuntu.com', flush=True)
+    print('::warning::Ubuntu apt attempt failed; retrying with direct '
+          'archive.ubuntu.com sources', flush=True)
     # Refresh indexes again, including when the initial failure was a download.
     return install(packages)
 
