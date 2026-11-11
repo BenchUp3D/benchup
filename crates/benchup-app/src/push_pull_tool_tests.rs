@@ -147,6 +147,52 @@ fn ctrl_push_pull_commits_new_faces_with_the_pointer() {
 }
 
 #[test]
+fn ctrl_inward_push_trims_the_preview_and_commits_without_overlapping_faces() {
+    let (mut h, cap) = block();
+    let before = h.app.doc.model.clone();
+    h.click(h.at(DVec3::new(2., 2., 2.)));
+    let end = h.at(DVec3::new(2., 2., 1.5));
+    h.frame(vec![egui::Event::PointerMoved(end)], egui::Modifiers::CTRL);
+    let edit = h.app.modeling.as_ref().unwrap();
+    assert!(edit.keep_starting_face);
+    assert!(edit.error.is_none());
+    let preview = edit.preview.as_ref().unwrap();
+    assert_eq!(preview.faces.len(), 6);
+    assert!(!preview.faces.contains_key(&cap));
+    assert!((preview.solid_volume(*preview.faces.keys().next().unwrap()).unwrap() - 24.).abs() < 1e-4);
+    h.frame(vec![], egui::Modifiers::NONE);
+    modeling_number(&mut h, "-0.5m");
+    assert!(h.app.modeling.is_none());
+    assert_eq!(h.app.doc.model.faces.len(), 6);
+    assert_eq!(h.app.selected.len(), 1);
+    let selected = *h.app.selected.first().unwrap();
+    assert!(h.app.doc.model.face_contains(&h.app.doc.model.faces[&selected], DVec3::new(2., 2., 1.5), false));
+    assert!((h.app.doc.model.solid_volume(selected).unwrap() - 24.).abs() < 1e-6);
+    let after = h.app.doc.model.clone();
+    h.app.undo(&h.ctx, false);
+    assert_eq!(h.app.doc.model, before);
+    h.app.undo(&h.ctx, true);
+    assert_eq!(h.app.doc.model, after);
+}
+
+#[test]
+fn ctrl_inward_push_can_remove_the_whole_body_without_leaving_a_stale_selection() {
+    let (mut h, _) = block();
+    let before = h.app.doc.model.clone();
+    let start = h.at(DVec3::new(2., 2., 2.));
+    ctrl_click(&mut h, start);
+    h.frame(vec![], egui::Modifiers::NONE);
+    modeling_number(&mut h, "-2m");
+    assert!(h.app.modeling.is_none());
+    assert!(h.app.doc.model.faces.is_empty());
+    assert!(h.app.doc.model.edges.is_empty());
+    assert!(h.app.selected.is_empty());
+    h.app.doc.model.validate().unwrap();
+    h.app.undo(&h.ctx, false);
+    assert_eq!(h.app.doc.model, before);
+}
+
+#[test]
 fn second_ctrl_press_restores_normal_push_pull_with_axis_lock() {
     let (mut h, cap) = block();
     let before = h.app.doc.model.clone();
@@ -312,6 +358,58 @@ fn flat_face_starts_with_zero_pull_depth() {
     let face = modeling_rectangle(&mut h);
     let plane = benchup_core::faces::plane(&h.app.doc.model, &h.app.doc.model.faces[&face].vertices).unwrap();
     assert!(BenchUpApp::push_pull_depth(&h.app.doc.model, face, plane.origin, plane.normal).abs() < 1e-7);
+}
+
+#[test]
+fn visible_only_pull_uses_the_current_cap_to_block_edges_behind_it() {
+    for projection in [benchup_core::Projection::Perspective, benchup_core::Projection::Parallel] {
+        for distance in [-1., 1.] {
+            for only_visible in [false, true] {
+                for keep_starting_face in [false, true] {
+                    let mut h = Harness::new();
+                    let face = modeling_rectangle(&mut h);
+                    // Cover a fresh extrusion and stretching an existing solid.
+                    let base_depth = if keep_starting_face { 0. } else { 2. };
+                    if base_depth > 0. {
+                        h.app.doc.model.push_pull_along(face, DVec3::Z * base_depth).unwrap();
+                    }
+                    h.app.doc.camera.projection = projection;
+                    h.app.doc.snap_to_axes = false;
+                    h.app.snap_only_visible = only_visible;
+                    h.app.push_pull_new_faces = keep_starting_face;
+                    h.app.set_tool(Tool::PushPull);
+                    let anchor = DVec3::new(2., 2., base_depth);
+                    let cursor = h.at(anchor + DVec3::Z * distance);
+                    let ray = h.app.doc.camera.ray(
+                        dv(cursor - h.app.viewport.min), dv(h.app.viewport.size()),
+                    );
+                    // This edge lies under the cursor, behind the moving cap.
+                    // On a pull it is in front of the unchanged starting face.
+                    let reference = ray.plane_z(base_depth + distance - 0.5).unwrap();
+                    h.app.doc.model.add_edge(reference, reference + DVec3::X * 0.3).unwrap();
+                    h.app.begin_modeling(h.at(anchor), &h.ctx);
+                    assert!(h.app.modeling.is_some());
+                    h.app.lock = keep_starting_face.then_some(Axis::Z);
+                    // Check the first motion as well as repeated frames: an old
+                    // or already-snapped preview must not reopen the hidden edge.
+                    for _ in 0..3 {
+                        h.app.update_modeling(cursor);
+                        let edit = h.app.modeling.as_ref().unwrap();
+                        if only_visible {
+                            assert!(edit.snap.is_none(), "{projection:?}, {distance}, {:?}", edit.snap);
+                            assert!((edit.value - distance).abs() < 1e-5);
+                        } else {
+                            let snap = edit.snap.unwrap();
+                            assert_eq!(snap.kind, Inference::Endpoint);
+                            assert!(snap.point.distance(reference) < 1e-7);
+                        }
+                        assert!(edit.preview.is_some());
+                        assert!(edit.error.is_none());
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn hover_reference_face(model: &mut Model, center: DVec3) -> u64 {

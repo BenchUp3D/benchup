@@ -23,6 +23,11 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 2
 
+# Avoid mismatched anon.*.llvm.* symbols from reused app codegen units when
+# linking WebAssembly after edits. Keep dependency caching and debug settings.
+[profile.dev.package.benchup-app]
+incremental = false
+
 [profile.dev.package.benchup-core]
 opt-level = 2
 

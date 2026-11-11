@@ -68,8 +68,16 @@ pub struct SnapQuery<'a> {
     entities: &'a EntityCache,
     excluded: Option<&'a std::collections::BTreeSet<u64>>,
     perpendicular_to: Option<DVec3>,
+    occluding_face: Option<(u64, DVec3)>,
 }
 impl<'a> SnapQuery<'a> {
+    /// Reuse the cap's cached polygon (including holes) at its preview position.
+    /// This bounded pointer query leaves viewport geometry on the GPU.
+    pub fn occluding_translated_face(mut self, face: Option<(u64, DVec3)>) -> Self {
+        self.occluding_face = face;
+        self
+    }
+
     pub fn perpendicular_to(mut self, direction: Option<DVec3>) -> Self {
         self.perpendicular_to = direction;
         self
@@ -178,6 +186,19 @@ impl benchup_core::inference::FaceQuery for SnapQuery<'_> {
             &mut 0,
             |id| self.excluded.is_none_or(|ids| !ids.contains(&id)) && self.allows_face(id),
         )
+    }
+
+    fn occlusion_depth(&self, ray: Ray, scoped: bool) -> Option<f64> {
+        let target = self.nearest(ray, scoped).map(|(_, t, _)| t);
+        let cap = self.occluding_face.and_then(|(id, delta)| {
+            let state = self.entities.get(id);
+            if state.hidden || (scoped && state.context.is_none()) {
+                return None;
+            }
+            self.faces.get(id).hit(Ray { origin: ray.origin - delta, ..ray })
+                .map(|(t, _)| t)
+        });
+        target.into_iter().chain(cap).min_by(f64::total_cmp)
     }
 
     fn is_hidden(&self, model: &Model, id: u64) -> bool {
@@ -314,6 +335,7 @@ impl PickingCache {
             entities,
             excluded: None,
             perpendicular_to: None,
+            occluding_face: None,
         }
     }
     pub fn update(&mut self, faces: &FaceCache) {

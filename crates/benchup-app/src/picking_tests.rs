@@ -776,3 +776,100 @@ fn visible_only_snapping_matches_indexed_and_excluded_queries_with_foreground_oc
         }
     }
 }
+
+#[test]
+fn translated_cap_blocks_snap_targets_but_preserves_holes_and_foreground_edges() {
+    use benchup_core::inference::{FaceQuery, Inference, SnapTargets, infer_with_targets};
+    let size = DVec2::new(1000., 800.);
+    let camera = Camera {
+        target: DVec3::new(3., 3., 0.),
+        yaw: -std::f64::consts::FRAC_PI_2,
+        pitch: std::f64::consts::FRAC_PI_2,
+        projection: benchup_core::Projection::Parallel,
+        ..Default::default()
+    };
+    let world = |x, y, z| camera.ray(DVec2::new(x, y), size).plane_z(z).unwrap();
+    for (cursor, back, foreground, through_hole) in [
+        ((300., 300.), (300., 300.), false, false),
+        // The back corner is visible outside the silhouette at its own pixel,
+        // but the cursor is over the moving cap.
+        ((598., 300.), (605., 300.), false, false),
+        ((300., 300.), (300., 300.), true, false),
+        ((400., 300.), (400., 300.), false, true),
+    ] {
+        let mut model = Model::default();
+        for (lo, hi) in [((200., 200.), (600., 500.)), ((350., 250.), (450., 350.))] {
+            let ring = [world(lo.0, lo.1, 0.), world(hi.0, lo.1, 0.),
+                world(hi.0, hi.1, 0.), world(lo.0, hi.1, 0.)];
+            for i in 0..4 {
+                model.add_edge(ring[i], ring[(i + 1) % 4]).unwrap();
+            }
+        }
+        let cap = *model.faces.keys().next().unwrap();
+        // Keep only the outer face, whose inner ring remains an actual hole.
+        model.faces.retain(|id, _| *id == cap);
+        assert_eq!(model.faces[&cap].holes.len(), 1);
+        let excluded: std::collections::BTreeSet<_> = model.edges.keys().copied().chain([cap]).collect();
+        let back = world(back.0, back.1, 1.);
+        model.add_edge(back, back + DVec3::X).unwrap();
+        let front = world(cursor.0 + 2., cursor.1, 3.);
+        if foreground {
+            model.add_edge(front, front + DVec3::X).unwrap();
+        }
+        let mut faces = FaceCache::default();
+        let mut entities = EntityCache::default();
+        let mut picking = PickingCache::default();
+        faces.update(&model);
+        entities.update(&model);
+        picking.update(&faces);
+        let query = picking.snap_query(&faces, &entities)
+            .excluding(Some(&excluded))
+            .occluding_translated_face(Some((cap, DVec3::Z * 2.)));
+        let cursor = DVec2::new(cursor.0, cursor.1);
+        assert!(query.nearest(camera.ray(cursor, size), false).is_none());
+        let snap = infer_with_targets(
+            &model, &camera, size, cursor, None, None, true, false, Some(&query),
+            SnapTargets { only_visible: true, ..Default::default() },
+        ).unwrap();
+        if foreground || through_hole {
+            assert_eq!(snap.kind, Inference::Endpoint);
+            assert!(snap.point.distance(if foreground { front } else { back }) < 1e-7);
+        } else {
+            assert_eq!(snap.kind, Inference::Plane);
+        }
+    }
+}
+
+#[test]
+fn translated_cap_also_blocks_background_face_snaps_and_centers() {
+    use benchup_core::inference::{Inference, SnapTargets, infer_with_targets};
+    let size = DVec2::new(1000., 800.);
+    let camera = Camera { target: DVec3::new(2., 2., 0.), ..Default::default() };
+    let mut model = Model::default();
+    for z in [0., 1.] {
+        let ring = [DVec3::new(-2., -2., z), DVec3::new(6., -2., z),
+            DVec3::new(6., 6., z), DVec3::new(-2., 6., z)];
+        for i in 0..4 {
+            model.add_edge(ring[i], ring[(i + 1) % 4]).unwrap();
+        }
+    }
+    let cap = *model.faces.keys().next().unwrap();
+    let excluded = std::collections::BTreeSet::from([cap]);
+    let mut faces = FaceCache::default();
+    let mut entities = EntityCache::default();
+    let mut picking = PickingCache::default();
+    faces.update(&model);
+    entities.update(&model);
+    picking.update(&faces);
+    let query = picking.snap_query(&faces, &entities)
+        .excluding(Some(&excluded))
+        .occluding_translated_face(Some((cap, DVec3::Z * 2.)));
+    for face_centers in [false, true] {
+        let snap = infer_with_targets(
+            &model, &camera, size, camera.project(DVec3::new(2., 2., 1.), size).unwrap(),
+            None, None, true, false, Some(&query),
+            SnapTargets { edges: false, faces: true, face_centers, only_visible: true },
+        ).unwrap();
+        assert_eq!(snap.kind, Inference::Plane);
+    }
+}

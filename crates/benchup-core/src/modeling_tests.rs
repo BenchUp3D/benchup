@@ -91,7 +91,7 @@ fn directional_push_pull_preserves_displacement_and_stretches_existing_caps() {
 
 #[test]
 fn new_face_push_pull_preserves_existing_geometry_and_adds_a_layer() {
-    for delta in [DVec3::Z, -DVec3::Z * 0.5, DVec3::new(1., 2., 1.)] {
+    for delta in [DVec3::Z, DVec3::new(1., 2., 1.)] {
         let mut model = Model::default();
         let face = rectangle(&mut model, DVec3::ZERO, DVec3::new(4., 3., 0.));
         let color = [182, 53, 81];
@@ -136,6 +136,132 @@ fn new_face_push_pull_preserves_existing_geometry_and_adds_a_layer() {
         assert!(history.redo(&mut model));
         assert_eq!(model, after);
     }
+}
+
+#[test]
+fn new_face_inward_pull_trims_the_body_and_merges_previously_created_layers() {
+    for layered in [false, true] {
+        for reverse in [false, true] {
+            let mut model = Model::default();
+            let face = rectangle(&mut model, DVec3::ZERO, DVec3::new(4., 3., 0.));
+            model.paint_face(face, [31, 66, 99]).unwrap();
+            let mut cap = model.push_pull_along(face, DVec3::Z * 2.).unwrap();
+            if layered {
+                cap = model.push_pull_along_with_new_faces(cap, DVec3::Z).unwrap();
+            }
+            let start = if layered { 3. } else { 2. };
+            if reverse { model.faces.get_mut(&cap).unwrap().vertices.reverse(); }
+            let before = model.clone();
+            let result = model.push_pull_along_with_new_faces(cap, -DVec3::Z).unwrap();
+            assert!(!model.faces.contains_key(&cap));
+            assert_eq!(model.faces.len(), 6);
+            assert!((model.solid_volume(result).unwrap() - 12. * (start - 1.)).abs() < 1e-6);
+            assert!(model.face_contains(&model.faces[&result], DVec3::new(2., 1.5, start - 1.), false));
+            assert_eq!(model.face_colors.len(), 6);
+            assert!(model.face_colors.values().all(|color| *color == [31, 66, 99]));
+            model.validate().unwrap();
+            let after = model.clone();
+            let mut history = History::default();
+            history.record("Push/Pull", before.clone(), &model);
+            assert!(history.undo(&mut model));
+            assert_eq!(model, before);
+            assert!(history.redo(&mut model));
+            assert_eq!(model, after);
+            let doc = Document { model: model.clone(), ..Default::default() };
+            assert_eq!(Document::from_json(&serde_json::to_string(&doc).unwrap()).unwrap().model, model);
+        }
+    }
+}
+
+#[test]
+fn new_face_inward_push_merges_branched_layers_with_four_face_seams() {
+    // Multiple Ctrl extrusions leave intersecting partitions at the layer and
+    // branch junctions. Counting exactly three faces at an edge misses them.
+    for depth in [0.5, 3., 4.] {
+        let mut model = Model::default();
+        let base = rectangle(&mut model, DVec3::ZERO, DVec3::new(5., 2., 0.));
+        let cap = model.push_pull_along(base, DVec3::Z * 4.).unwrap();
+        let cap = model.push_pull_along_with_new_faces(cap, DVec3::Z).unwrap();
+        model.push_pull_along_with_new_faces(cap, DVec3::Z * 1.5).unwrap();
+        let at = |model: &Model, point: DVec3| {
+            model.faces.values().rev().find(|face| model.face_contains(face, point, false)).unwrap().id
+        };
+        let face = at(&model, DVec3::new(2.5, 0., 4.5));
+        model.push_pull_along_with_new_faces(face, -DVec3::Y * 3.).unwrap();
+        let face = at(&model, DVec3::new(5., 1., 4.5));
+        let cap = model.push_pull_along_with_new_faces(face, DVec3::X * 2.).unwrap();
+        model.push_pull_along_with_new_faces(cap, DVec3::X * 0.5).unwrap();
+        let face = at(&model, DVec3::new(7.25, 0., 4.5));
+        let end = model.push_pull_along_with_new_faces(face, -DVec3::Y * 3.).unwrap();
+        let before = model.clone();
+        let cap = model.push_pull_along_with_new_faces(end, DVec3::Y * depth).unwrap();
+
+        assert!((model.solid_volume(cap).unwrap() - (86.5 - depth * 0.5)).abs() < 1e-6);
+        let removed_top = DVec3::new(7.25, -3. + depth * 0.5, 5.);
+        assert!(model.faces.values().all(|face| !model.face_contains(face, removed_top, false)),
+            "The original top and a reversed extrusion wall must not cover the removed strip");
+        let top_area: f64 = model.faces.values().filter(|face| {
+            face.vertices.iter().all(|id| (model.vertices[id].position.z - 5.).abs() < 1e-7)
+        }).map(|face| model.face_area(face)).sum();
+        assert!((top_area - (21.5 - depth * 0.5)).abs() < 1e-6);
+        model.validate().unwrap();
+        let after = model.clone();
+        let mut history = History::default();
+        history.record("Push/Pull", before.clone(), &model);
+        assert!(history.undo(&mut model));
+        assert_eq!(model, before);
+        assert!(history.redo(&mut model));
+        assert_eq!(model, after);
+    }
+}
+
+#[test]
+fn new_face_inward_insets_open_recesses_and_merge_at_the_opposite_face() {
+    for depth in [0.5, 2., 3.] {
+        let mut model = Model::default();
+        let face = rectangle(&mut model, DVec3::ZERO, DVec3::new(4., 3., 0.));
+        let top = model.push_pull_along(face, DVec3::Z * 2.).unwrap();
+        model.offset_face(top, 0.5).unwrap();
+        let center = DVec3::new(2., 1.5, 2.);
+        let inner = model.faces.values().find(|face| model.face_contains(face, center, false)).unwrap().id;
+        let cut = model.push_pull_along_with_new_faces(inner, -DVec3::Z * depth).unwrap();
+        assert!(!model.faces.contains_key(&inner));
+        assert!((model.solid_volume(cut).unwrap() - (24. - 6. * depth.min(2.))).abs() < 1e-6);
+        let hit = model.nearest_face(crate::Ray { origin: center + DVec3::Z, direction: -DVec3::Z });
+        if depth < 2. {
+            let (_, _, point) = hit.unwrap();
+            assert!(point.distance(center - DVec3::Z * depth) < 1e-7);
+        } else {
+            assert!(hit.is_none(), "The cut must open through the opposite face");
+        }
+        model.validate().unwrap();
+    }
+}
+
+#[test]
+fn new_face_inward_cut_trims_shared_outer_walls_in_a_rotated_component() {
+    let mut model = Model::default();
+    let face = rectangle(&mut model, DVec3::ZERO, DVec3::new(4., 3., 0.));
+    model.push_pull_along(face, DVec3::Z * 2.).unwrap();
+    model.add_edge(DVec3::new(2., 0., 2.), DVec3::new(2., 3., 2.)).unwrap();
+    let rotation = glam::DQuat::from_rotation_x(0.8) * glam::DQuat::from_rotation_y(0.4);
+    for vertex in model.vertices.values_mut() { vertex.position = rotation * vertex.position; }
+    let component = model.make_object(&model.root_entities(), true, "Block").unwrap();
+    let clipboard = model.copy_entities(&BTreeSet::from([component]));
+    let peer = *model.paste_entities(&clipboard, DVec3::X * 10.).first().unwrap();
+    assert!(model.enter_object(component));
+    let point = rotation * DVec3::new(3., 1.5, 2.);
+    let face = model.faces.values().find(|face| model.parent(face.id) == Some(component)
+        && model.face_contains(face, point, false)).unwrap().id;
+    model.push_pull_along_with_new_faces(face, rotation * (-DVec3::Z * 0.5)).unwrap();
+    for id in [component, peer] {
+        let contents = model.object_contents(id).unwrap();
+        let seed = *contents.faces.keys().next().unwrap();
+        assert!((contents.solid_volume(seed).unwrap() - 21.).abs() < 1e-6);
+        assert_eq!(contents.faces.len(), 8);
+        contents.validate().unwrap();
+    }
+    model.validate().unwrap();
 }
 
 #[test]

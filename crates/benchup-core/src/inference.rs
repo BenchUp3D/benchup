@@ -171,6 +171,11 @@ pub trait FaceQuery {
 
     fn nearest(&self, ray: crate::Ray, scoped: bool) -> Option<(u64, f64, DVec3)>;
 
+    /// Edited surfaces may block visible-only snapping without being targets.
+    fn occlusion_depth(&self, ray: crate::Ray, scoped: bool) -> Option<f64> {
+        self.nearest(ray, scoped).map(|(_, t, _)| t)
+    }
+
     /// Reuse inherited visibility when the caller has already prepared it.
     fn is_hidden(&self, model: &Model, id: u64) -> bool {
         model.is_hidden(id)
@@ -816,6 +821,11 @@ fn hovered_geometry(
 ) -> SnapGeometry {
     let ray = view.ray(cursor);
     let front = faces.map_or_else(|| model.nearest_face(ray), |q| q.nearest(ray, false));
+    let front_depth = faces.map_or_else(
+        || front.map(|(_, t, _)| t),
+        |q| q.occlusion_depth(ray, false),
+    );
+    let front = front.filter(|(_, t, _)| front_depth.is_none_or(|depth| *t <= depth + 1e-5));
     let hidden = |id| faces.map_or_else(|| model.is_hidden(id), |q| q.is_hidden(model, id));
     let edge_hit = |edge: &crate::Edge| {
         if !targets.edges || hidden(edge.id) {
@@ -829,9 +839,9 @@ fn hovered_geometry(
         }
         // A nearby silhouette may be visible at its own pixel while still
         // belonging to an object behind the surface under the actual cursor.
-        if front.is_some_and(|(id, t, _)| {
-            (point - ray.origin).dot(ray.direction) > t + 1e-5
-                && !model.face_contains(&model.faces[&id], point, true)
+        if front_depth.is_some_and(|depth| {
+            (point - ray.origin).dot(ray.direction) > depth + 1e-5
+                && !front.is_some_and(|(id, _, _)| model.face_contains(&model.faces[&id], point, true))
         }) {
             return None;
         }
@@ -1171,6 +1181,7 @@ pub fn infer_with_constraint(
                     });
                 if (local_axis.is_none() || !starting_on_plane)
                     && locked.is_none_or(|(start, constraint)| constraint.contains(point - start))
+                    && (!targets.only_visible || visible(point))
                 {
                     return Some(Snap {
                         point,
@@ -1447,8 +1458,11 @@ fn query_visible_opaque(
     };
     let ray = view.ray(pixel);
     faces
-        .map_or_else(|| model.nearest_face(ray), |q| q.nearest(ray, false))
-        .is_none_or(|(_, t, _)| t + 1e-5 >= point.distance(ray.origin))
+        .map_or_else(
+            || model.nearest_face(ray).map(|(_, t, _)| t),
+            |q| q.occlusion_depth(ray, false),
+        )
+        .is_none_or(|t| t + 1e-5 >= point.distance(ray.origin))
 }
 
 #[cfg(test)]

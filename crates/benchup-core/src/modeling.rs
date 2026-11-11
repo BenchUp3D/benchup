@@ -541,14 +541,185 @@ impl Model {
         self.extrude_face(face_id, delta, false)
     }
 
-    /// Add a new cap and walls while preserving the starting face and its
-    /// adjoining geometry, even when pulling an existing solid's cap.
+    /// Add a new cap and walls on an outward pull. Inward pulls cut the existing
+    /// body instead of leaving the starting face and overlapping walls inside it.
     pub fn push_pull_along_with_new_faces(
         &mut self,
         face_id: u64,
         delta: DVec3,
     ) -> Result<u64, &'static str> {
         self.extrude_face(face_id, delta, true)
+    }
+
+    fn inward_new_face(&mut self, face_id: u64, delta: DVec3) -> Result<Option<u64>, &'static str> {
+        use crate::{csg, solids};
+
+        // Restrict the solid operation to the connected body in this edit scope.
+        // Rendering still uses the shared retained GPU path; this work changes
+        // authoritative topology, including contacts at the far side of a cut.
+        let ids = self.solid_entities(face_id)?;
+        let mut body = self.copy_entities(&ids);
+        let frame = solids::Frame::new(&[&body])?;
+        let solid = match solids::import(&body, frame) {
+            Ok(solid) => solid,
+            Err(_) => {
+                // Earlier outward Ctrl pulls leave a partition between layers.
+                // Omit these internal caps when resolving the body's shell.
+                let mut uses: BTreeMap<(u64, u64), Vec<u64>> = BTreeMap::new();
+                for face in body.faces.values() {
+                    for ring in std::iter::once(&face.vertices).chain(&face.holes) {
+                        for i in 0..ring.len() {
+                            let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+                            uses.entry((a.min(b), a.max(b))).or_default().push(face.id);
+                        }
+                    }
+                }
+                let partitions: BTreeSet<_> = body
+                    .faces
+                    .values()
+                    .filter(|face| {
+                        let Some(plane) = faces::plane(&body, &face.vertices) else {
+                            return false;
+                        };
+                        face.id != face_id
+                            && std::iter::once(&face.vertices)
+                                .chain(&face.holes)
+                                .all(|ring| {
+                                    (0..ring.len()).all(|i| {
+                                        let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+                                        // Branches can put four or more faces
+                                        // on a seam. Only a partition has walls
+                                        // extending to both sides of its plane
+                                        // around its complete boundary.
+                                        let mut positive = false;
+                                        let mut negative = false;
+                                        for id in &uses[&(a.min(b), a.max(b))] {
+                                            if *id == face.id {
+                                                continue;
+                                            }
+                                            let other = &body.faces[id];
+                                            for vertex in other
+                                                .vertices
+                                                .iter()
+                                                .chain(other.holes.iter().flatten())
+                                            {
+                                                let depth = (body.vertices[vertex].position
+                                                    - plane.origin)
+                                                    .dot(plane.normal);
+                                                positive |= depth > faces::TOL;
+                                                negative |= depth < -faces::TOL;
+                                            }
+                                        }
+                                        positive && negative
+                                    })
+                                })
+                    })
+                    .map(|face| face.id)
+                    .collect();
+                if partitions.is_empty() {
+                    return Ok(None);
+                }
+                body.erase(&partitions);
+                let Ok(solid) = solids::import(&body, frame) else {
+                    return Ok(None);
+                };
+                solid
+            }
+        };
+        let face = &self.faces[&face_id];
+        let plane = faces::plane(self, &face.vertices).unwrap();
+        let origin = frame.local(plane.origin);
+        // Imported solid polygons have outward winding, even for reversed or
+        // rotated source faces. A negative UI value alone cannot identify a cut.
+        let inward = solid
+            .iter()
+            .find(|polygon| {
+                polygon
+                    .vertices
+                    .iter()
+                    .all(|p| (*p - origin).dot(plane.normal).abs() < frame.epsilon * 2.)
+                    && polygon.normal.cross(plane.normal).length() < 1e-6
+            })
+            .is_some_and(|polygon| polygon.normal.dot(delta) < -EPS);
+        if !inward {
+            return Ok(None);
+        }
+        if self.selection_locked(&ids) {
+            return Err(tr!(
+                "core.modeling.unlock_the_connected_geometry_before_editing_it"
+            ));
+        }
+        // A swept copy supplies a closed cutter, including concave outlines and
+        // holes. Subtraction removes the original cap, trims shared walls, and
+        // welds contact edges rather than overlaying another extruded shell.
+        let mut cutter = self.copy_entities(&BTreeSet::from([face_id]));
+        cutter.extrude_face(face_id, delta, false)?;
+        let result = csg::apply(
+            solid,
+            solids::import(&cutter, frame)?,
+            csg::Boolean::Difference,
+            frame.epsilon,
+        )?;
+        let mut next = self.clone();
+        next.erase(&ids);
+        let group = solids::output(&mut next, result, frame, "", false, true)?;
+        let result_ids = group
+            .map(|id| next.dissolve_objects(&BTreeSet::from([id]), true))
+            .unwrap_or_default();
+        let result_faces: Vec<_> = result_ids
+            .into_iter()
+            .filter(|id| next.faces.contains_key(id))
+            .collect();
+        for id in &result_faces {
+            let point = next.face_triangles(&next.faces[id])[0]
+                .iter()
+                .copied()
+                .sum::<DVec3>()
+                / 3.;
+            let tag = match body
+                .faces
+                .values()
+                .find(|face| body.face_contains(face, point, false))
+            {
+                Some(face) => body.entity_tags.get(&face.id),
+                None => self.entity_tags.get(&face_id),
+            }
+            .copied();
+            if let Some(tag) = tag {
+                next.entity_tags.insert(*id, tag);
+            }
+        }
+        let cap_point = self.face_triangles(face)[0].iter().copied().sum::<DVec3>() / 3. + delta;
+        let cap = result_faces
+            .iter()
+            .copied()
+            .find(|id| {
+                let face = &next.faces[id];
+                faces::plane(&next, &face.vertices)
+                    .is_some_and(|p| p.normal.cross(plane.normal).length() < 1e-6)
+                    && next.face_contains(face, cap_point, true)
+            })
+            .or_else(|| result_faces.last().copied());
+        // Keep the cap last, matching ordinary extrusions and viewport selection.
+        // A cut consuming the whole body has no remaining face to select.
+        let cap = cap
+            .map(|id| {
+                let mut face = next.faces.remove(&id).unwrap();
+                let cap = next.id();
+                face.id = cap;
+                next.faces.insert(cap, face);
+                if let Some(color) = next.face_colors.remove(&id) {
+                    next.face_colors.insert(cap, color);
+                }
+                if let Some(tag) = next.entity_tags.remove(&id) {
+                    next.entity_tags.insert(cap, tag);
+                }
+                cap
+            })
+            .unwrap_or(face_id);
+        next.validate()?;
+        *self = next;
+        Ok(Some(cap))
     }
 
     fn extrude_face(
@@ -576,6 +747,9 @@ impl Model {
             .normal;
         if delta.dot(normal).abs() < EPS {
             return Err(tr!("core.modeling.choose_an_axis_that_is_not_parallel_to"));
+        }
+        if keep_starting_face && let Some(cap) = self.inward_new_face(face_id, delta)? {
+            return Ok(cap);
         }
         let color = self.face_colors.get(&face_id).copied();
         // On an existing solid, moving the cap stretches the adjoining walls.

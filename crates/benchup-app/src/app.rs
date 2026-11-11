@@ -1810,6 +1810,18 @@ impl BenchUpApp {
         })
     }
 
+    fn push_pull_pointer_value(edit: &Modeling, camera: &Camera, viewport: Rect, pos: Pos2) -> f64 {
+        // Snapping can move the anchor off the click ray. Measure from that
+        // ray so acquiring a starting point never introduces an extrusion.
+        let size = dv(viewport.size());
+        let ray = camera.ray(dv(pos - viewport.min), size);
+        let start_ray = camera.ray(dv(edit.pixel - viewport.min), size);
+        ray.axis(edit.anchor, edit.direction)
+            .zip(start_ray.axis(edit.anchor, edit.direction))
+            .map(|(p, start)| (p - start).dot(edit.direction))
+            .unwrap_or((edit.pixel.y - pos.y) as f64 * camera.distance / size.y)
+    }
+
     fn update_modeling(&mut self, pos: Pos2) {
         if self.tool == Tool::Rotate {
             self.update_rotation(pos);
@@ -1896,24 +1908,12 @@ impl BenchUpApp {
         };
         edit.pointer = pos;
         let size = dv(self.viewport.size());
-        let ray = self.doc.camera.ray(dv(pos - self.viewport.min), size);
         edit.value = match self.tool {
             Tool::PushPull => {
                 edit.snap = pull_snap;
                 pull_snap
                     .map(|snap| (snap.point - edit.anchor).dot(edit.direction))
-                    .unwrap_or_else(|| {
-                        // Snapping can move the anchor away from the click ray.
-                        // Measure free movement from that ray so a snapped start
-                        // does not introduce an extrusion before the cursor moves.
-                        let start_ray = self.doc.camera.ray(dv(edit.pixel - self.viewport.min), size);
-                        ray.axis(edit.anchor, edit.direction)
-                            .zip(start_ray.axis(edit.anchor, edit.direction))
-                            .map(|(p, start)| (p - start).dot(edit.direction))
-                            .unwrap_or(
-                                (edit.pixel.y - pos.y) as f64 * self.doc.camera.distance / size.y,
-                            )
-                    })
+                    .unwrap_or_else(|| Self::push_pull_pointer_value(edit, &self.doc.camera, self.viewport, pos))
             }
             Tool::Offset => {
                 edit.snap = offset_snap;
@@ -2201,7 +2201,7 @@ impl BenchUpApp {
                         })
                         .next_back()
                         .copied()
-                        .or(edit.face)
+                        .or(edit.face.filter(|id| model.faces.contains_key(id)))
                         .filter(|_| group.is_none()))
                         .collect();
                 }
@@ -4183,7 +4183,19 @@ impl BenchUpApp {
                     .excluding(self.modeling.as_ref().map(|edit| &edit.snap_excluded))
                     .perpendicular_to(self.modeling.as_ref()
                         .filter(|_| self.tool == Tool::PushPull)
-                        .map(|edit| edit.direction)),
+                        .map(|edit| edit.direction))
+                    .occluding_translated_face(self.modeling.as_ref()
+                        .filter(|_| self.tool == Tool::PushPull && self.snap_only_visible)
+                        .and_then(|edit| {
+                            // Use this pointer's free preview, before a hidden
+                            // reference can pull the cap back onto itself.
+                            let mut value = Self::push_pull_pointer_value(edit, &self.doc.camera, self.viewport, pos);
+                            if self.snap_to_grid {
+                                let spacing = grid::configured_spacing(&self.doc.camera, &self.doc.display);
+                                value = (value / spacing).round() * spacing;
+                            }
+                            edit.face.map(|id| (id, edit.direction * value))
+                        })),
             ),
             self.snap_targets(),
         );

@@ -214,6 +214,27 @@ fn publish_state(app: &BenchUpApp) {
 
 // Run off the UI thread via the benchmark's worker. Compare the indexed path
 // with the original exhaustive queries on the actual project, not a proxy mesh.
+#[cfg(debug_assertions)]
+#[eframe::wasm_bindgen::prelude::wasm_bindgen]
+pub fn benchup_validate_push_pull(source: &str, query: &str) -> Result<String, JsValue> {
+    #[derive(serde::Deserialize)]
+    struct Query { face: u64, delta: [f64; 3], new_faces: bool }
+    let error = |message: String| JsValue::from_str(&message);
+    let mut doc = Document::from_json(source).map_err(error)?;
+    let query: Query = serde_json::from_str(query).map_err(|e| error(e.to_string()))?;
+    let before_solid = doc.model.solid_volume(query.face);
+    let delta = DVec3::from_array(query.delta);
+    let cap = if query.new_faces {
+        doc.model.push_pull_along_with_new_faces(query.face, delta)
+    } else {
+        doc.model.push_pull_along(query.face, delta)
+    }.map_err(|e| error(e.to_owned()))?;
+    let after_solid = doc.model.solid_volume(cap);
+    serde_json::to_string(&serde_json::json!({
+        "document": doc, "cap": cap, "before_solid": before_solid, "after_solid": after_solid,
+    })).map_err(|e| error(e.to_string()))
+}
+
 #[eframe::wasm_bindgen::prelude::wasm_bindgen]
 pub fn benchup_validate_snapping(source: &str) -> Result<String, JsValue> {
     use benchup_core::inference::{
