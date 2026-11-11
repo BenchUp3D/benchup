@@ -106,6 +106,8 @@ mod sidebar;
 pub(crate) use sidebar::{modal_size, remember_modal_size};
 #[path = "selection_measurements.rs"]
 mod selection_measurements;
+#[path = "selection_click.rs"]
+mod selection_click;
 #[path = "solid_tools.rs"]
 mod solid_tools;
 #[path = "space_mouse.rs"]
@@ -358,6 +360,7 @@ pub struct BenchUpApp {
     images: image_tools::State,
     polygon_sides: usize,
     selected: BTreeSet<u64>,
+    selection_click: Option<selection_click::Click>,
     hover: Option<u64>,
     outliner_hover: BTreeSet<u64>,
     history_preview: Option<Model>,
@@ -541,6 +544,7 @@ impl BenchUpApp {
             images: Default::default(),
             polygon_sides: 6,
             selected,
+            selection_click: None,
             hover: None,
             outliner_hover: BTreeSet::new(),
             history_preview: None,
@@ -693,6 +697,7 @@ impl BenchUpApp {
         ctx.request_repaint_after(Duration::from_secs(5));
     }
     fn set_tool(&mut self, tool: Tool) {
+        self.selection_click = None;
         let original_camera = (tool == Tool::Walk).then(|| {
             self.walk.original_camera.clone().unwrap_or_else(|| self.doc.camera.clone())
         });
@@ -4601,6 +4606,9 @@ impl BenchUpApp {
                     pressed: true,
                     modifiers,
                 } if response.contains_pointer() && self.viewport.contains(pos) => {
+                    if button != egui::PointerButton::Primary || self.compass_contains(pos) {
+                        self.selection_click = None;
+                    }
                     if self.compass_contains(pos) {
                         if self.gesture.is_none() {
                             self.gesture = Some(Gesture {
@@ -4817,42 +4825,24 @@ impl BenchUpApp {
                                 if !self.doc.display.guides {
                                     hits.retain(|id| !self.doc.model.guides.contains_key(id));
                                 }
-                                if !dragged
-                                    && !additive
-                                    && !modifiers.shift
-                                    && self.viewport.contains(pos)
-                                {
-                                    if hits.is_empty() && self.doc.model.edit_context.is_some() {
-                                        self.close_edit_context(ctx);
+                                if !dragged && self.viewport.contains(pos) {
+                                    if self.select_click(
+                                        ctx,
+                                        pos,
+                                        hits.first().copied(),
+                                        additive || modifiers.shift,
+                                    ) {
                                         return;
                                     }
-                                    if response.double_clicked_by(egui::PointerButton::Primary) {
-                                        if let Some(id) = hits
-                                            .iter()
-                                            .find(|id| self.doc.model.texts.contains_key(id))
-                                            .copied()
-                                        {
-                                            self.selected = BTreeSet::from([id]);
-                                            self.begin_text_edit(id, ctx);
-                                            return;
-                                        }
-                                        if let Some(id) = hits
-                                            .iter()
-                                            .find(|id| self.doc.model.objects.contains_key(id))
-                                            .copied()
-                                        {
-                                            self.enter_object(id, ctx);
-                                            return;
-                                        }
-                                    }
-                                }
-                                if additive || modifiers.shift {
+                                } else if additive || modifiers.shift {
+                                    self.selection_click = None;
                                     for id in hits {
                                         if !self.selected.remove(&id) {
                                             self.selected.insert(id);
                                         }
                                     }
                                 } else {
+                                    self.selection_click = None;
                                     self.selected = hits;
                                 }
                             }

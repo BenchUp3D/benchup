@@ -1830,7 +1830,7 @@
   "tools.click_a_face_move_along_its_normal_arrow": "Click a face · Move along its normal · Ctrl toggles new faces · Arrow keys lock axes · Click or type distance + Enter",
   "tools.click_a_face_near_its_boundary_move_inward": "Click a face near its boundary · Move inward or outward · Type distance + Enter",
   "tools.click_a_reference_edge_or_point_ctrl_command": "Click a reference edge or point · Ctrl/Command toggles Create Guides / Measure · Esc to clear",
-  "tools.click_an_edge_or_face_drag_to_box": "Click an edge or face · Drag to box select · Shift to toggle",
+  "tools.click_an_edge_or_face_drag_to_box": "Click an edge or face · Double-click a face for its edges · Triple-click for connected geometry · Drag to box select · Shift to toggle",
   "tools.click_an_object_then_click_to_place_its": "Click an object, then click to place its text label · Esc to cancel",
   "tools.click_groups_components_or_faces_to_keep_their": "Click groups, components, or faces to keep their overlap",
   "tools.click_or_drag_across_edges_or_faces_to": "Click or drag across edges or faces to erase · Ctrl / ⌘ Z to undo",

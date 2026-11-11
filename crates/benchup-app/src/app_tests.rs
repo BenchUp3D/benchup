@@ -491,6 +491,8 @@ mod release_notes;
 mod rendering;
 #[path = "text_tools_tests.rs"]
 mod text_tools;
+#[path = "selection_click_tests.rs"]
+mod selection_click;
 
 struct Harness {
     ctx: egui::Context,
