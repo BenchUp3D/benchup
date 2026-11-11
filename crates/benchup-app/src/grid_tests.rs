@@ -620,10 +620,12 @@ fn geometry_snapping_menu_toggles_are_independent_preferences() {
     assert!(h.app.snap_to_face_center);
     let output = h.frame(vec![], egui::Modifiers::NONE);
     h.click(dropdown_position(&output));
-    for label in ["Snap to edge", "Snap to face", "Snap to face center"] {
+    assert!(!h.app.snap_only_visible);
+    for label in ["Snap to edge", "Snap to face", "Snap to face center", "Only to visible element"] {
         let output = h.frame(vec![], egui::Modifiers::NONE);
         let checkbox = text_position(&output, label);
         h.click(checkbox);
+        assert_eq!(h.app.snap_only_visible, label == "Only to visible element");
         assert_eq!(h.app.snap_to_edge, label != "Snap to edge");
         assert_eq!(h.app.snap_to_face, label != "Snap to face");
         assert_eq!(h.app.snap_to_face_center, label != "Snap to face center");
@@ -634,6 +636,7 @@ fn geometry_snapping_menu_toggles_are_independent_preferences() {
         assert!(h.app.snap_to_edge);
         assert!(h.app.snap_to_face);
         assert!(h.app.snap_to_face_center);
+        assert!(!h.app.snap_only_visible);
     }
 }
 

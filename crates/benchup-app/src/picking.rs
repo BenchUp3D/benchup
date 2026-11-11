@@ -93,6 +93,7 @@ impl benchup_core::inference::FaceQuery for SnapQuery<'_> {
                 edges: kind == Inference::OnEdge,
                 faces: kind == Inference::OnFace,
                 face_centers: false,
+                only_visible: false,
             },
         )?;
         match kind {
@@ -204,6 +205,7 @@ impl PickingCache {
                         edges: true,
                         faces: false,
                         face_centers: false,
+                        only_visible: false,
                     },
                     &self.edges,
                     entities,

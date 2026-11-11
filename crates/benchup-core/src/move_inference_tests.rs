@@ -112,6 +112,7 @@ fn cached_move_axis_references_follow_the_edge_toggle() {
                     edges,
                     faces: true,
                     face_centers: true,
+                    only_visible: false,
                 },
             )
             .unwrap();

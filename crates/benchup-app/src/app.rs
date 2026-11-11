@@ -376,6 +376,7 @@ pub struct BenchUpApp {
     snap_to_edge: bool,
     snap_to_face: bool,
     snap_to_face_center: bool,
+    snap_only_visible: bool,
     drawing_reference: Option<drawing_inference::DrawingReference>,
     drawing_guide: Option<AxisGuide>,
     drawing_axis_guides: Vec<AxisGuide>,
@@ -560,6 +561,7 @@ impl BenchUpApp {
             snap_to_edge: geometry_snapping,
             snap_to_face: geometry_snapping,
             snap_to_face_center: geometry_snapping,
+            snap_only_visible: false,
             drawing_reference: None,
             drawing_guide: None,
             drawing_axis_guides: vec![],
@@ -1914,6 +1916,7 @@ impl BenchUpApp {
                         edges: self.snap_to_edge,
                         faces: self.snap_to_face,
                         face_centers: self.snap_to_face_center,
+                        only_visible: self.snap_only_visible,
                     },
                 ) {
                     if let Some(guide) = guide_snap.filter(|_| !matches!(inference.snap.kind,
@@ -4125,6 +4128,7 @@ impl BenchUpApp {
             edges: self.snap_to_edge,
             faces: self.snap_to_face,
             face_centers: self.snap_to_face_center,
+            only_visible: self.snap_only_visible,
         }
     }
     // Keep the legacy document flag compatible with older clients. The three
@@ -6254,10 +6258,14 @@ impl BenchUpApp {
                 let grid_changed = Self::menu_checkbox(ui, &mut self.snap_to_grid, tr!("app.snap_to_grid"))
                     .on_hover_text(tr!("app.snap_points_and_moves_to_the_grid_spacing"))
                     .changed();
+                ui.separator();
+                let visible_changed = Self::menu_checkbox(ui, &mut self.snap_only_visible, tr!("app.snap_only_visible"))
+                    .on_hover_text(tr!("app.snap_only_visible_tooltip"))
+                    .changed();
                 if edges_changed || faces_changed || face_centers_changed {
                     self.sync_geometry_snapping();
                 }
-                if axes_changed || grid_changed || edges_changed || faces_changed || face_centers_changed {
+                if axes_changed || grid_changed || edges_changed || faces_changed || face_centers_changed || visible_changed {
                     self.drawing_reference = None;
                     self.drawing_axis_guides.clear();
                     self.snap = None;

@@ -208,6 +208,8 @@
   "app.snap_to_edge": "捕捉到边线",
   "app.snap_to_face": "捕捉到面",
   "app.snap_to_face_center": "捕捉到面中心",
+  "app.snap_only_visible": "Only to visible element",
+  "app.snap_only_visible_tooltip": "Snap only to the edge or face directly under the cursor, excluding geometry behind other objects. Axis and grid snapping remain independent.",
   "app.snap_to_grid": "捕捉到网格",
   "app.snap_to_object_edges_including_their_endpoints_and": "捕捉到对象边线，包括其端点和中点。",
   "app.snap_to_object_surfaces_independently_of_edge_and": "捕捉到对象表面，与边线和面中心捕捉相互独立。",

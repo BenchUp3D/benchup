@@ -543,6 +543,7 @@ fn edge_and_face_targets_toggle_independently_with_points_controlled_by_edges() 
                 edges,
                 faces,
                 face_centers: false,
+                only_visible: false,
             };
             let infer = |model: &Model, point, start, lock, geometry| {
                 infer_with_targets(

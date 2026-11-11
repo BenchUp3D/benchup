@@ -265,11 +265,13 @@ pub fn benchup_validate_snapping(source: &str) -> Result<String, JsValue> {
                         edges: true,
                         faces: false,
                         face_centers: false,
+                        only_visible: false,
                     },
                     2 => SnapTargets {
                         edges: false,
                         faces: true,
                         face_centers: true,
+                        only_visible: false,
                     },
                     _ => SnapTargets::default(),
                 };

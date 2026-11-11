@@ -312,3 +312,6 @@ pub use history::{HistoryAuthor, HistoryAction};
 
 #[cfg(test)]
 mod face_center_tests;
+
+#[cfg(test)]
+mod visible_snap_tests;

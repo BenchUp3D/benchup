@@ -106,6 +106,8 @@ pub struct SnapTargets {
     pub edges: bool,
     pub faces: bool,
     pub face_centers: bool,
+    /// Restrict geometry to the frontmost element under the pointer.
+    pub only_visible: bool,
 }
 
 impl Default for SnapTargets {
@@ -114,6 +116,7 @@ impl Default for SnapTargets {
             edges: true,
             faces: true,
             face_centers: true,
+            only_visible: false,
         }
     }
 }
@@ -340,10 +343,10 @@ impl MoveSnapCache {
         snap_to_axes: bool,
         targets: SnapTargets,
     ) -> Option<MoveInference> {
-        if self
-            .guides
-            .as_ref()
-            .is_none_or(|g| g.camera != *camera || g.size != size || g.start != start)
+        if !targets.only_visible
+            && self.guides.as_ref().is_none_or(|g| {
+                g.camera != *camera || g.size != size || g.start != start
+            })
         {
             self.guides = Some(MoveGuides {
                 camera: camera.clone(),
@@ -368,7 +371,7 @@ impl MoveSnapCache {
             lock,
             snap_to_geometry,
             snap_to_axes,
-            Some(&self.guides.as_ref().unwrap().references),
+            self.guides.as_ref().map(|guides| guides.references.as_slice()),
             Some(&self.faces),
             targets,
         )
@@ -461,9 +464,9 @@ fn infer_move(
         cursor,
         start,
         lock,
-        snap_to_geometry && targets.edges,
+        snap_to_geometry && targets.edges && !targets.only_visible,
         base,
-        prepared,
+        if targets.only_visible { None } else { prepared },
         faces,
     ))
 }
@@ -800,6 +803,85 @@ pub fn infer_with_targets(
     )
 }
 
+/// Resolve one hovered element using the usual edge hit tolerance. The viewport
+/// supplies nearby edges from its retained index; cached gestures use their
+/// existing geometry. Occlusion is unscoped and remains enabled in X-ray mode.
+fn hovered_geometry(
+    model: &Model,
+    view: &CameraView,
+    cursor: DVec2,
+    faces: Option<&dyn FaceQuery>,
+    targets: SnapTargets,
+    indexed: Option<&SnapGeometry>,
+) -> SnapGeometry {
+    let ray = view.ray(cursor);
+    let front = faces.map_or_else(|| model.nearest_face(ray), |q| q.nearest(ray, false));
+    let hidden = |id| faces.map_or_else(|| model.is_hidden(id), |q| q.is_hidden(model, id));
+    let edge_hit = |edge: &crate::Edge| {
+        if !targets.edges || hidden(edge.id) {
+            return None;
+        }
+        let (a, b) = model.points(edge);
+        let point = ray.segment_point(a, b);
+        let distance = view.project(point)?.distance(cursor);
+        if distance >= 8. {
+            return None;
+        }
+        // A nearby silhouette may be visible at its own pixel while still
+        // belonging to an object behind the surface under the actual cursor.
+        if front.is_some_and(|(id, t, _)| {
+            (point - ray.origin).dot(ray.direction) > t + 1e-5
+                && !model.face_contains(&model.faces[&id], point, true)
+        }) {
+            return None;
+        }
+        query_visible_opaque(model, view, point, faces).then_some((
+            edge.id,
+            distance,
+            point.distance(ray.origin),
+        ))
+    };
+    let closest = |a: &(u64, f64, f64), b: &(u64, f64, f64)| {
+        a.1.total_cmp(&b.1)
+            .then_with(|| a.2.total_cmp(&b.2))
+            .then_with(|| a.0.cmp(&b.0))
+    };
+    let edge = if let Some(indexed) = indexed {
+        indexed
+            .edges
+            .iter()
+            .filter_map(|id| model.edges.get(id))
+            .filter_map(edge_hit)
+            .min_by(closest)
+    } else {
+        model.edges.values().filter_map(edge_hit).min_by(closest)
+    };
+    let mut result = SnapGeometry {
+        points: vec![],
+        edges: vec![],
+        faces: vec![],
+    };
+    if let Some((id, _, _)) = edge {
+        let (a, b) = model.points(&model.edges[&id]);
+        result.edges.push(id);
+        result.points.extend([
+            (a, Inference::Endpoint),
+            (b, Inference::Endpoint),
+            ((a + b) * 0.5, Inference::Midpoint),
+        ]);
+    } else if let Some((id, _, _)) = front {
+        if targets.faces {
+            result.faces.push(id);
+        }
+        if targets.face_centers
+            && let Some(center) = model.face_center(&model.faces[&id])
+        {
+            result.points.push((center, Inference::FaceCenter));
+        }
+    }
+    result
+}
+
 pub fn infer_with_constraint(
     model: &Model,
     camera: &Camera,
@@ -836,7 +918,25 @@ pub fn infer_with_constraint(
             None
         };
     let indexed = faces.and_then(|query| query.nearby_geometry(camera, size, cursor, targets));
-    let mut candidates = vec![(DVec3::ZERO, Inference::Origin)];
+    let indexed = if snap_to_geometry && targets.only_visible {
+        Some(hovered_geometry(
+            model, &view, cursor, faces, targets, indexed.as_ref(),
+        ))
+    } else {
+        indexed
+    };
+    let visible = |point| {
+        if targets.only_visible {
+            query_visible_opaque(model, &view, point, faces)
+        } else {
+            query_visible(model, &view, point, faces)
+        }
+    };
+    let mut candidates = if targets.only_visible {
+        Vec::new()
+    } else {
+        vec![(DVec3::ZERO, Inference::Origin)]
+    };
     if let Some(indexed) = &indexed {
         candidates.extend_from_slice(&indexed.points);
     } else {
@@ -906,7 +1006,7 @@ pub fn infer_with_constraint(
                     return None;
                 }
             }
-            query_visible(model, &view, point, faces).then_some((distance, Snap { point, kind }))
+            visible(point).then_some((distance, Snap { point, kind }))
         })
         .min_by(|a, b| a.0.total_cmp(&b.0));
     if let Some((_, snap)) = nearby {
@@ -996,7 +1096,7 @@ pub fn infer_with_constraint(
                         return None;
                     }
                 }
-                query_visible(model, &view, point, faces).then_some((
+                visible(point).then_some((
                     distance,
                     Snap {
                         point,
@@ -1039,7 +1139,7 @@ pub fn infer_with_constraint(
                     let distance = view.project(point)?.distance(cursor);
                     if distance >= 11.
                         || !model.face_contains(face, point, true)
-                        || !query_visible(model, &view, point, faces)
+                        || !visible(point)
                     {
                         return None;
                     }
@@ -1095,7 +1195,7 @@ pub fn infer_with_constraint(
         if let Some(target) = axis_target(camera, &view, cursor, DVec3::ZERO, true) {
             if locked
                 .is_none_or(|(start, constraint)| constraint.contains(target.snap.point - start))
-                && query_visible(model, &view, target.snap.point, faces)
+                && visible(target.snap.point)
             {
                 return Some(target.snap);
             }
@@ -1333,6 +1433,21 @@ fn query_visible(
     let ray = view.ray(pixel);
     faces
         .nearest(ray, true)
+        .is_none_or(|(_, t, _)| t + 1e-5 >= point.distance(ray.origin))
+}
+
+fn query_visible_opaque(
+    model: &Model,
+    view: &CameraView,
+    point: DVec3,
+    faces: Option<&dyn FaceQuery>,
+) -> bool {
+    let Some(pixel) = view.project(point) else {
+        return false;
+    };
+    let ray = view.ray(pixel);
+    faces
+        .map_or_else(|| model.nearest_face(ray), |q| q.nearest(ray, false))
         .is_none_or(|(_, t, _)| t + 1e-5 >= point.distance(ray.origin))
 }
 

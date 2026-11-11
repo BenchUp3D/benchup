@@ -43,6 +43,7 @@ fn face_center_target_respects_its_toggle_master_visibility_and_axis_lock() {
                 edges: false,
                 faces: false,
                 face_centers: enabled,
+                only_visible: false,
             },
         )
     };

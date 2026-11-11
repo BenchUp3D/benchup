@@ -411,6 +411,7 @@ struct SnappingPreferences {
     face_centers: bool,
     axes: bool,
     grid: bool,
+    only_visible: bool,
 }
 
 impl Default for SnappingPreferences {
@@ -422,6 +423,7 @@ impl Default for SnappingPreferences {
             face_centers: true,
             axes: true,
             grid: false,
+            only_visible: false,
         }
     }
 }
@@ -727,6 +729,10 @@ impl BenchUpApp {
             .snapping
             .as_ref()
             .is_some_and(|snapping| snapping.grid);
+        self.snap_only_visible = preferences
+            .snapping
+            .as_ref()
+            .is_some_and(|snapping| snapping.only_visible);
         self.release_notes.last_seen_version = preferences.last_seen_release_notes.clone();
         if let Some(display) = &preferences.display
             && display.valid()
@@ -799,6 +805,7 @@ impl BenchUpApp {
                 face_centers: self.doc.snap_to_geometry && self.snap_to_face_center,
                 axes: self.doc.snap_to_axes,
                 grid: self.snap_to_grid,
+                only_visible: self.snap_only_visible,
             }),
             cutting_plan: CuttingPlanPreferences {
                 layout: self.project.cutting_plan_layout,
@@ -2160,12 +2167,13 @@ mod preference_tests {
 
     #[test]
     fn each_additional_option_saves_independently_without_a_model_edit() {
-        let options: [(&str, fn(&mut BenchUpApp)); 15] = [
+        let options: [(&str, fn(&mut BenchUpApp)); 16] = [
             ("face center snapping", |app| app.snap_to_face_center = false),
             ("axis snapping", |app| app.doc.snap_to_axes = false),
             ("edge snapping", |app| app.snap_to_edge = false),
             ("face snapping", |app| app.snap_to_face = false),
             ("grid snapping", |app| app.snap_to_grid = true),
+            ("visible-only snapping", |app| app.snap_only_visible = true),
             ("axis lock", |app| app.lock = Some(Axis::Y)),
             ("push/pull axis lock", |app| {
                 app.set_tool(Tool::PushPull);
@@ -2236,10 +2244,12 @@ mod preference_tests {
             eframe::set_value(&mut storage, PREFERENCE_KEY, &preferences);
             let mut app = BenchUpApp::with_document(Document::default(), None, true);
             assert!(!app.snap_to_grid);
+            assert!(!app.snap_only_visible);
             assert!(app.snap_to_edge);
             assert!(app.snap_to_face);
             app.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
             assert!(!app.snap_to_grid);
+            assert!(!app.snap_only_visible);
             let geometry = preferences.snapping.as_ref().is_none_or(|s| s.geometry);
             assert_eq!(app.snap_to_edge, geometry);
             assert_eq!(app.snap_to_face, geometry);

@@ -514,11 +514,13 @@ fn indexed_drawing_inference_matches_full_queries() {
                             edges: true,
                             faces: false,
                             face_centers: false,
+                            only_visible: false,
                         },
                         SnapTargets {
                             edges: false,
                             faces: true,
                             face_centers: true,
+                            only_visible: false,
                         },
                     ] {
                         let start = (i % 3 != 0).then_some(DVec3::new(2.3, 0.7, 0.));
@@ -668,4 +670,73 @@ fn short_eraser_strokes_reuse_projection_and_prune_distant_edges() {
 #[test]
 fn cached_box_selection_matches_complete_enclosure_in_all_drag_directions() {
     assert_eq!(PickingCache::validate_box_selection().unwrap(), 2880);
+}
+
+#[test]
+fn visible_only_snapping_matches_indexed_and_excluded_queries_with_foreground_occlusion() {
+    use benchup_core::inference::{Inference, SnapTargets, infer_with_targets};
+    let size = DVec2::new(1000., 800.);
+    let camera = Camera {
+        target: DVec3::new(3., 3., 0.),
+        yaw: -std::f64::consts::FRAC_PI_2,
+        pitch: std::f64::consts::FRAC_PI_2,
+        projection: benchup_core::Projection::Parallel,
+        ..Default::default()
+    };
+    let world = |x, y, z| camera.ray(DVec2::new(x, y), size).plane_z(z).unwrap();
+    let mut model = Model::default();
+    model
+        .add_edge(world(405., 300., 0.), world(405., 500., 0.))
+        .unwrap();
+    let ring = [
+        world(200., 200., 2.),
+        world(402., 200., 2.),
+        world(402., 500., 2.),
+        world(200., 500., 2.),
+    ];
+    for i in 0..4 {
+        model.add_edge(ring[i], ring[(i + 1) % 4]).unwrap();
+    }
+    let front_face = *model.faces.keys().next().unwrap();
+    let mut faces = FaceCache::default();
+    let mut entities = EntityCache::default();
+    let mut picking = PickingCache::default();
+    faces.update(&model);
+    entities.update(&model);
+    picking.prepare_snapping(&model, &faces, &entities, &camera, size);
+    let empty = std::collections::BTreeSet::new();
+    let excluded_front: std::collections::BTreeSet<_> = model
+        .edges
+        .values()
+        .filter(|edge| (model.points(edge).0.z - 2.).abs() < 1e-7)
+        .map(|edge| edge.id)
+        .chain([front_face])
+        .collect();
+    for excluded in [None, Some(&empty), Some(&excluded_front)] {
+        let query = picking.snap_query(&faces, &entities).excluding(excluded);
+        for only_visible in [false, true] {
+            let snap = infer_with_targets(
+                &model,
+                &camera,
+                size,
+                DVec2::new(400., 300.),
+                None,
+                None,
+                true,
+                false,
+                Some(&query),
+                SnapTargets {
+                    only_visible,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            if only_visible && excluded != Some(&excluded_front) {
+                assert!((snap.point.z - 2.).abs() < 1e-7);
+            } else {
+                assert_eq!(snap.kind, Inference::Endpoint);
+                assert!(snap.point.distance(world(405., 300., 0.)) < 1e-7);
+            }
+        }
+    }
 }

@@ -209,6 +209,8 @@
   "app.snap_to_face": "Snap to face",
   "app.snap_to_face_center": "Snap to face center",
   "app.snap_to_grid": "Snap to grid",
+  "app.snap_only_visible": "Only to visible element",
+  "app.snap_only_visible_tooltip": "Snap only to the edge or face directly under the cursor, excluding geometry behind other objects. Axis and grid snapping remain independent.",
   "app.snap_to_object_edges_including_their_endpoints_and": "Snap to object edges, including their endpoints and midpoints.",
   "app.snap_to_object_surfaces_independently_of_edge_and": "Snap to object surfaces, independently of edge and face center snapping.",
   "app.snap_to_the_area_center_of_a_visible": "Snap to the area center of a visible face, independently of edge and surface snapping.",

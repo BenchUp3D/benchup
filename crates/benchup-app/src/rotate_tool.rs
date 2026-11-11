@@ -74,6 +74,7 @@ impl BenchUpApp {
                 edges: self.snap_to_edge,
                 faces: self.snap_to_face,
                 face_centers: self.snap_to_face_center,
+                only_visible: self.snap_only_visible,
             },
         );
         let in_plane = inferred.filter(|inference| {
@@ -96,6 +97,7 @@ impl BenchUpApp {
                     edges: self.snap_to_edge,
                     faces: self.snap_to_face,
                     face_centers: self.snap_to_face_center,
+                    only_visible: self.snap_only_visible,
                 },
             ).filter(|inference| matches!(inference.snap.kind,
                 Inference::Endpoint | Inference::Midpoint | Inference::FaceCenter

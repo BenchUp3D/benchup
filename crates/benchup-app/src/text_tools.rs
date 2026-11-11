@@ -60,7 +60,10 @@ impl BenchUpApp {
                             .picking_cache
                             .snap_query(&self.face_cache, &self.entity_cache),
                     ),
-                    benchup_core::inference::SnapTargets::default(),
+                    benchup_core::inference::SnapTargets {
+                        only_visible: self.snap_only_visible,
+                        ..Default::default()
+                    },
                 );
             }
             // Leader text starts on geometry, not on the drawing plane.

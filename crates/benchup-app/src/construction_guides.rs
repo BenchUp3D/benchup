@@ -58,6 +58,9 @@ impl BenchUpApp {
             self.plane_lock()
                 .map_or(AxisConstraint::Axis(axis), AxisConstraint::Plane)
         });
+        let visible = |point| !self.snap_only_visible || self.picking_cache.marker_visible(
+            &self.face_cache, &self.entity_cache, &self.doc.camera, size, point, &BTreeSet::new(),
+        );
         let mut nearby = vec![];
         for (_, guide) in self.doc.model.guides.iter().filter(|(id, _)| {
             !self.doc.model.is_hidden(**id)
@@ -108,7 +111,7 @@ impl BenchUpApp {
                 continue;
             };
             let distance = screen.distance(cursor);
-            if distance < 8. {
+            if distance < 8. && visible(point) {
                 nearby.push((guide, point, distance));
             }
         }
@@ -128,7 +131,8 @@ impl BenchUpApp {
                 .axis(b.origin, bd) else {
                     continue;
                 };
-                if (point - a.origin).cross(ad).length() < 1e-6
+                if visible(point)
+                    && (point - a.origin).cross(ad).length() < 1e-6
                     && start
                         .zip(constraint)
                         .is_none_or(|(start, c)| c.contains(point - start))

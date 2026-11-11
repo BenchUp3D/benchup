@@ -89,7 +89,7 @@ impl BenchUpApp {
                 dv(pos - self.viewport.min),
                 start,
                 self.axis_constraint(),
-                self.doc.snap_to_geometry && self.snap_to_edge,
+                self.doc.snap_to_geometry && self.snap_to_edge && !self.snap_only_visible,
                 base,
                 Some(
                     &self
@@ -102,7 +102,7 @@ impl BenchUpApp {
                 self.drawing_axis_guides = inference.guides;
             }
         }
-        if !self.doc.snap_to_geometry || !self.snap_to_edge {
+        if !self.doc.snap_to_geometry || !self.snap_to_edge || self.snap_only_visible {
             self.drawing_reference = None;
             return;
         }
