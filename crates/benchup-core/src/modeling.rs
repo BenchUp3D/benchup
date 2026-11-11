@@ -800,7 +800,7 @@ impl MovePreview {
     }
     /// `preview` is a clone of the source passed to `new`, reused between frames.
     pub fn update(&self, preview: &mut Model, delta: DVec3) -> Result<(), &'static str> {
-        const INVALID: &str =
+        let invalid: &str =
             tr!("core.modeling.this_change_would_collapse_an_edge_or_bend");
         if !delta.is_finite() {
             return Err(tr!("core.modeling.enter_a_finite_displacement"));
@@ -808,7 +808,7 @@ impl MovePreview {
         for &(id, point) in &self.vertices {
             let point = point + delta;
             if !point.is_finite() || point.abs().max_element() > 1e10 {
-                return Err(INVALID);
+                return Err(invalid);
             }
             preview.vertices.get_mut(&id).unwrap().position = point;
         }
@@ -837,7 +837,7 @@ impl MovePreview {
             let mut guide = source.clone();
             guide.origin += delta;
             if !guide.valid() {
-                return Err(INVALID);
+                return Err(invalid);
             }
             preview.guides.insert(*id, guide);
         }
@@ -850,7 +850,7 @@ impl MovePreview {
             .iter()
             .any(|id| preview.edge_length(&preview.edges[id]) < EPS)
         {
-            return Err(INVALID);
+            return Err(invalid);
         }
         for &(id, partial) in &self.faces {
             let face = &preview.faces[&id];
@@ -859,11 +859,11 @@ impl MovePreview {
                 .any(|ring| faces::plane(preview, ring).is_none())
                 || (partial && preview.face_area(face) <= EPS)
             {
-                return Err(INVALID);
+                return Err(invalid);
             }
         }
-        preview.validate_dimensions().map_err(|_| INVALID)?;
-        preview.validate_texts().map_err(|_| INVALID)?;
+        preview.validate_dimensions().map_err(|_| invalid)?;
+        preview.validate_texts().map_err(|_| invalid)?;
         Ok(())
     }
 }
@@ -971,7 +971,7 @@ impl ScalePreview {
         factor: f64,
         constraint: Option<crate::inference::AxisConstraint>,
     ) -> Result<(), &'static str> {
-        const INVALID: &str = tr!("core.modeling.this_change_would_collapse_an_edge_or_bend");
+        let invalid: &str = tr!("core.modeling.this_change_would_collapse_an_edge_or_bend");
         if !factor.is_finite() || factor <= EPS || factor > 1e7 {
             return Err(tr!("core.modeling.enter_a_positive_scale_factor_such_as_2"));
         }
@@ -982,7 +982,7 @@ impl ScalePreview {
         for &(id, point) in &self.affected.vertices {
             let point = scale(point);
             if !point.is_finite() || point.abs().max_element() > 1e10 {
-                return Err(INVALID);
+                return Err(invalid);
             }
             preview.vertices.get_mut(&id).unwrap().position = point;
         }
@@ -1012,11 +1012,11 @@ impl ScalePreview {
                 .map(|direction| {
                     (scale(source.origin + direction) - guide.origin)
                         .try_normalize()
-                        .ok_or(INVALID)
+                        .ok_or(invalid)
                 })
                 .transpose()?;
             if !guide.valid() {
-                return Err(INVALID);
+                return Err(invalid);
             }
             preview.guides.insert(*id, guide);
         }
@@ -1033,7 +1033,7 @@ impl ScalePreview {
                 scaled
             };
             if !scaled.valid() {
-                return Err(INVALID);
+                return Err(invalid);
             }
             preview.objects.get_mut(&id).unwrap().transform = Some(scaled);
         }
@@ -1044,7 +1044,7 @@ impl ScalePreview {
             .iter()
             .any(|id| preview.edge_length(&preview.edges[id]) < EPS)
         {
-            return Err(INVALID);
+            return Err(invalid);
         }
         for &(id, partial) in &self.affected.faces {
             let face = &preview.faces[&id];
@@ -1052,7 +1052,7 @@ impl ScalePreview {
                 .chain(face.holes.iter())
                 .any(|ring| faces::plane(preview, ring).is_none())
             {
-                return Err(INVALID);
+                return Err(invalid);
             }
             // A complete face is an affine transform of its source. Its area
             // follows the transformed area vector, with no triangulation per tick.
@@ -1062,11 +1062,11 @@ impl ScalePreview {
                 (self.areas[&id] / factors * factors.x * factors.y * factors.z).length()
             };
             if area <= EPS * EPS {
-                return Err(INVALID);
+                return Err(invalid);
             }
         }
-        preview.validate_dimensions().map_err(|_| INVALID)?;
-        preview.validate_texts().map_err(|_| INVALID)?;
+        preview.validate_dimensions().map_err(|_| invalid)?;
+        preview.validate_texts().map_err(|_| invalid)?;
         Ok(())
     }
 }

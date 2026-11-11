@@ -580,7 +580,7 @@ fn request(
     {
         let method = method.to_owned();
         let _ = csrf; // Native logout authenticates with its bearer credential.
-        std::thread::spawn(move || {
+        benchup_core::i18n::spawn_localized(move || {
             let result = (|| {
                 let agent = ureq::Agent::config_builder()
                     .timeout_global(Some(std::time::Duration::from_secs(15)))
@@ -770,7 +770,7 @@ fn project_request(
     }
     let ctx = ctx.clone();
     #[cfg(not(target_arch = "wasm32"))]
-    std::thread::spawn(move || {
+    benchup_core::i18n::spawn_localized(move || {
         let result = (|| {
             let agent = ureq::Agent::config_builder()
                 .timeout_global(Some(std::time::Duration::from_secs(15)))

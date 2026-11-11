@@ -6579,6 +6579,7 @@ impl eframe::App for BenchUpApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        benchup_core::i18n::set_language(&self.general_settings.language);
         self.ui_frame=Some(ctx.cumulative_frame_nr());
         #[cfg(target_arch = "wasm32")]
         web_viewport_benchmark::tick(self, &ctx);
