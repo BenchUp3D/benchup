@@ -11,6 +11,7 @@ import os
 import plistlib
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import tomllib
@@ -184,6 +185,36 @@ def remove_packaging_metadata(directory):
                 file.unlink()
 
 
+def deb_filename(current):
+    return f"benchup_{current}_amd64.deb"
+
+
+def require_deb(directory, current):
+    file = directory / deb_filename(current)
+    with file.open("rb") as stream:
+        if stream.read(8) != b"!<arch>\n":
+            raise ValueError(f"Invalid Debian package: {file.name}.")
+    return file
+
+
+def rpm_filename(current):
+    return f"benchup-{current}-1.x86_64.rpm"
+
+
+def require_rpm(directory, current):
+    file = directory / rpm_filename(current)
+    with file.open("rb") as stream:
+        if stream.read(4) != b"\xed\xab\xee\xdb":
+            raise ValueError(f"Invalid RPM package: {file.name}.")
+    return file
+
+
+def linux_download_aliases(directory, current):
+    """Keep README latest/download links stable across versioned packages."""
+    for source in (require_deb(directory, current), require_rpm(directory, current)):
+        shutil.copyfile(source, directory / f"benchup-linux-x64{source.suffix}")
+
+
 def checksums(directory):
     lines = []
     for file in sorted(directory.iterdir()):
@@ -216,7 +247,10 @@ def main():
             package(args.platform, args.tag, args.pack_dir, args.output_dir)
         else:
             validate_assets(args.output_dir, current, PLATFORMS)
+            require_deb(args.output_dir, current)
+            require_rpm(args.output_dir, current)
             remove_packaging_metadata(args.output_dir)
+            linux_download_aliases(args.output_dir, current)
             checksums(args.output_dir)
     except (ValueError, OSError, KeyError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"Desktop release failed: {error}\n")

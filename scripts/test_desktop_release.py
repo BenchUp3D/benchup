@@ -33,6 +33,9 @@ class DesktopReleaseTests(unittest.TestCase):
         contents = b"test package contents"
         (self.directory / filename).write_bytes(contents)
         (self.directory / f"{release.APP_ID}-{channel}-Setup{suffix}").write_bytes(b"installer")
+        if platform == "linux-x64":
+            (self.directory / release.deb_filename(self.current)).write_bytes(b"!<arch>\nfixture")
+            (self.directory / release.rpm_filename(self.current)).write_bytes(b"\xed\xab\xee\xdbfixture")
         asset = {
             "PackageId": release.APP_ID, "Version": self.current, "Type": "Full",
             "FileName": filename, "Size": len(contents),
@@ -167,7 +170,27 @@ class DesktopReleaseTests(unittest.TestCase):
         first = (self.directory / "SHA256SUMS").read_bytes()
         release.checksums(self.directory)
         self.assertEqual(first, (self.directory / "SHA256SUMS").read_bytes())
-        self.assertEqual(len(first.splitlines()), 3 * len(release.PLATFORMS))
+        self.assertEqual(len(first.splitlines()), 3 * len(release.PLATFORMS) + 2)
+
+    def test_missing_or_invalid_debian_package_prevents_publication(self):
+        with self.assertRaises(FileNotFoundError):
+            release.require_deb(self.directory, self.current)
+        file = self.directory / release.deb_filename(self.current)
+        for invalid in (b"", b"not a Debian package"):
+            with self.subTest(contents=invalid):
+                file.write_bytes(invalid)
+                with self.assertRaisesRegex(ValueError, "Invalid Debian package"):
+                    release.require_deb(self.directory, self.current)
+
+    def test_missing_or_invalid_rpm_package_prevents_publication(self):
+        with self.assertRaises(FileNotFoundError):
+            release.require_rpm(self.directory, self.current)
+        file = self.directory / release.rpm_filename(self.current)
+        for invalid in (b"", b"not an RPM package"):
+            with self.subTest(contents=invalid):
+                file.write_bytes(invalid)
+                with self.assertRaisesRegex(ValueError, "Invalid RPM package"):
+                    release.require_rpm(self.directory, self.current)
 
     def test_publication_removes_only_packaging_metadata_before_checksumming(self):
         for platform, (channel, _, _, _) in release.PLATFORMS.items():
@@ -179,6 +202,10 @@ class DesktopReleaseTests(unittest.TestCase):
             file.name for file in self.directory.iterdir()
             if not file.name.startswith(("assets.", "RELEASES-"))
         }
+        expected.update({"benchup-linux-x64.deb", "benchup-linux-x64.rpm"})
+        # Refresh stable downloads as well as their checksums on a draft rerun.
+        for name in ("benchup-linux-x64.deb", "benchup-linux-x64.rpm"):
+            (self.directory / name).write_bytes(b"stale package")
         # An existing checksum file must also be refreshed after pruning.
         (self.directory / "SHA256SUMS").write_text("stale metadata checksums")
         subprocess.run(
@@ -187,6 +214,11 @@ class DesktopReleaseTests(unittest.TestCase):
             check=True, capture_output=True, text=True,
         )
         self.assertEqual({file.name for file in self.directory.iterdir()}, expected | {"SHA256SUMS"})
+        for name, original in (
+            ("benchup-linux-x64.deb", release.deb_filename(self.current)),
+            ("benchup-linux-x64.rpm", release.rpm_filename(self.current)),
+        ):
+            self.assertEqual((self.directory / name).read_bytes(), (self.directory / original).read_bytes())
         lines = (self.directory / "SHA256SUMS").read_text().splitlines()
         self.assertEqual({line.split("  ", 1)[1] for line in lines}, expected)
         for line in lines:

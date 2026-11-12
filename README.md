@@ -10,6 +10,8 @@
 [![Download for macOS Apple Silicon](https://img.shields.io/badge/macOS_Apple_Silicon-6E40C9?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest/download/io.github.BenchUp3D.BenchUp-osx-arm64-Setup.pkg)
 [![Download for macOS Intel](https://img.shields.io/badge/macOS_Intel-6E40C9?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest/download/io.github.BenchUp3D.BenchUp-osx-x64-Setup.pkg)
 [![Download for Linux x64](https://img.shields.io/badge/Linux_x64-E95420?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest/download/io.github.BenchUp3D.BenchUp-linux-x64.AppImage)
+[![Download Debian / Ubuntu x64 (.deb)](https://img.shields.io/badge/Debian_%2F_Ubuntu_x64_.deb-A81D33?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest/download/benchup-linux-x64.deb)
+[![Download Fedora x64 (.rpm)](https://img.shields.io/badge/Fedora_x64_.rpm-51A2DA?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest/download/benchup-linux-x64.rpm)
 [![See all downloads](https://img.shields.io/badge/All_downloads-555555?style=for-the-badge)](https://github.com/BenchUp3D/editor/releases/latest)
 
 A free, open-source 3D modeling app for woodworking and furniture design, written in Rust. Plan individual boards, wood joints, and complete assemblies with exact measurements before heading to the workshop. The same editor runs as a native Windows, macOS, or Linux application and in a desktop browser through WebAssembly.
@@ -165,13 +167,31 @@ tests, and packages the desktop app with Velopack and the browser app with Trunk
 | `benchup-windows-x64` | Windows x64 (MSVC) | `*-win-x64-Setup.exe` (per-user installer) |
 | `benchup-macos-arm64` | macOS Apple Silicon | `*-osx-arm64-Setup.pkg` or the portable `.app` zip |
 | `benchup-macos-x64` | macOS Intel (x64) | `*-osx-x64-Setup.pkg` or the portable `.app` zip |
-| `benchup-linux-x64` | Linux x64 (built on Ubuntu 22.04) | `*-linux-x64.AppImage` |
+| `benchup-linux-x64` | Linux x64 (built on Ubuntu 22.04) | `*-linux-x64.AppImage`, `benchup_X.Y.Z_amd64.deb`, or `benchup-X.Y.Z-1.x86_64.rpm` |
 | `benchup-wasm` | Desktop browsers (WebAssembly) | Extract `benchup-vX.Y.Z-wasm.zip` and serve it with a static web server |
 
 The macOS builds run natively on `macos-15` (Apple Silicon) and
 `macos-15-intel` (Intel). Both target macOS 11.0 or newer and use the same
 signing and notarization secrets, with separate `osx-arm64` and `osx-x64`
 update channels.
+
+The Debian package reuses the same cached Linux release build as the AppImage;
+there is no second compilation. Packaging uses the runner's `dpkg-deb` with fast
+gzip compression, detects linked library dependencies with `dpkg-shlibdeps`, and
+includes the launcher, icons, project MIME type, thumbnailer, and licenses. CI
+validates its metadata and contents before uploading it and again before release
+publication. Install a downloaded package with
+`sudo apt install ./benchup_X.Y.Z_amd64.deb`. Debian installations use system
+package management rather than the AppImage's built-in updater; these releases
+provide a downloadable `.deb`, not an APT repository.
+
+The Fedora RPM also reuses that Linux executable, the shared desktop integration,
+and bundled licenses. `rpmbuild` detects linked ELF dependencies, adds the runtime
+libraries loaded dynamically, and packages with fast gzip compression. CI checks
+the RPM's digests, version, architecture, dependencies, and file permissions before
+uploading and publishing. Install it with
+`sudo dnf install ./benchup-X.Y.Z-1.x86_64.rpm`. Updates use system package
+management; the RPM is supplied as a release download.
 
 [Warm release caches](.github/workflows/cache.yml) populates dependency caches
 on relevant pushes to `main`, or manually from that branch. It uses the same Rust
