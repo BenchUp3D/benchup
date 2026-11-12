@@ -5118,24 +5118,21 @@ impl BenchUpApp {
     }
 
     pub(super) fn view_menu(&mut self, ui: &mut egui::Ui) {
-        let before = self.doc.display.clone();
+        let mut before = self.doc.display.clone();
         let d = &mut self.doc.display;
-        for (value, label) in [
-            (&mut d.axes, tr!("sidebar.axes")),
-            (&mut d.grid, tr!("sidebar.grid")),
-            (&mut d.guides, tr!("sidebar.guides")),
-        ] {
-            Self::menu_checkbox(ui, value, label);
+
+        // Display modes and editing emphasis.
+        Self::menu_checkbox(ui, &mut d.x_ray, tr!("sidebar.x_ray"));
+        Self::menu_checkbox(ui, &mut d.color_by_tag, tr!("sidebar.color_by_tag"));
+        if Self::menu_checkbox(ui, &mut d.group_emphasis, tr!("sidebar.emphasize_group"))
+            .on_hover_text(tr!("sidebar.emphasize_the_group_component_currently_being_edited_and"))
+            .changed()
+        {
+            ui.ctx().request_repaint();
         }
         ui.separator();
-        for (value, label) in [
-            (&mut d.group_names, tr!("sidebar.group_names")),
-            (&mut d.dimensions, tr!("sidebar.dimensions")),
-            (&mut d.wood_joinery, tr!("sidebar.wood_joinery")),
-        ] {
-            Self::menu_checkbox(ui, value, label);
-        }
-        ui.separator();
+
+        // Hidden model content.
         for (value, label) in [
             (&mut d.hidden_geometry, tr!("sidebar.hidden_geometry")),
             (&mut d.hidden_objects, tr!("sidebar.hidden_objects")),
@@ -5143,18 +5140,32 @@ impl BenchUpApp {
             Self::menu_checkbox(ui, value, label);
         }
         ui.separator();
-        Self::menu_checkbox(ui, &mut d.x_ray, tr!("sidebar.x_ray"));
-        Self::menu_checkbox(ui, &mut d.color_by_tag, tr!("sidebar.color_by_tag"));
+
+        // Model annotations and woodworking details.
+        for (value, label) in [
+            (&mut d.group_names, tr!("sidebar.group_names")),
+            (&mut d.dimensions, tr!("sidebar.dimensions")),
+            (&mut d.grain_direction, tr!("grain_direction.show")),
+            (&mut d.wood_joinery, tr!("sidebar.wood_joinery")),
+        ] {
+            Self::menu_checkbox(ui, value, label);
+        }
+        ui.separator();
+
+        // Construction aids.
+        for (value, label) in [
+            (&mut d.axes, tr!("sidebar.axes")),
+            (&mut d.grid, tr!("sidebar.grid")),
+            (&mut d.guides, tr!("sidebar.guides")),
+        ] {
+            Self::menu_checkbox(ui, value, label);
+        }
+
+        // These application preferences do not modify the project.
+        before.grain_direction = d.grain_direction;
+        before.group_emphasis = d.group_emphasis;
         if before != self.doc.display {
             self.changed(ui.ctx());
-        }
-        Self::menu_checkbox(ui, &mut self.doc.display.grain_direction, tr!("grain_direction.show"));
-        // Group emphasis is an application preference and does not modify the project.
-        if Self::menu_checkbox(ui, &mut self.doc.display.group_emphasis, tr!("sidebar.emphasize_group"))
-            .on_hover_text(tr!("sidebar.emphasize_the_group_component_currently_being_edited_and"))
-            .changed()
-        {
-            ui.ctx().request_repaint();
         }
         ui.separator();
         self.sections_menu(ui);
