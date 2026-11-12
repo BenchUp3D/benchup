@@ -4072,11 +4072,12 @@ mod tests {
 
     #[test]
     fn narrow_annotation_queries_cover_actual_tessellation_and_antialiasing() {
+        use crate::test_ui::ContextExt;
         use super::*;
         for pixels in [1., 2., 2.5] {
             let ctx = egui::Context::default();
             ctx.set_pixels_per_point(pixels);
-            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
                 for (a, b) in [(DVec2::new(10., 15.), DVec2::new(400., 330.)),
                     (DVec2::new(10., 15.), DVec2::new(10., 330.)),
                     (DVec2::new(10., 15.), DVec2::new(400., 15.))] {
@@ -7729,6 +7730,9 @@ mod entity_cache_tests {
         let outer = model
             .make_object(&BTreeSet::from([inner]), false, "Outer")
             .unwrap();
+        let inner = *model.objects[&outer].entities.first().unwrap();
+        let children: Vec<_> = model.objects[&inner].entities.iter().copied().collect();
+        let (edge, other) = (children[0], children[1]);
         let mut cache = EntityCache::default();
         model.edit_context = Some(inner);
         cache.update(&model);

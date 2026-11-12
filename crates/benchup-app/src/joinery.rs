@@ -943,6 +943,7 @@ mod tests {
             None,
             true,
         );
+        app.project.modified = false;
         app.selected = BTreeSet::from(members);
         (app, egui::Context::default(), members)
     }
@@ -974,7 +975,7 @@ mod tests {
         let _ = ctx.run_test_ui(egui::RawInput {
             screen_rect: Some(rect), ..Default::default()
         }, |ui| app.paint_scene(ui, rect));
-        app.render_face_cache.iter().flat_map(|(_, face)| face.triangles.iter().copied()).collect()
+        triangles(&app.render_model.shared())
     }
 
     #[test]
@@ -1077,8 +1078,12 @@ mod tests {
         let source = app.doc.model.clone();
         app.refresh_joint_preview();
         let model = app.joinery_dialog.preview_model().unwrap();
+        let mut root_preview = model.clone();
+        let mut root_source = source.clone();
+        root_preview.edit_context = None;
+        root_source.edit_context = None;
         for member in outside {
-            assert!((model.solid_volume(member).unwrap() - source.solid_volume(member).unwrap()).abs() < 1e-10,
+            assert!((root_preview.solid_volume(member).unwrap() - root_source.solid_volume(member).unwrap()).abs() < 1e-10,
                 "joints outside the edited assembly must remain suspended during preview");
         }
         let preview = rendered_triangles(&mut app, &ctx);

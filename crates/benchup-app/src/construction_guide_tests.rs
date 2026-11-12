@@ -29,7 +29,7 @@ fn guides_can_be_clicked_shift_selected_deleted_and_restored_with_undo() {
     );
     assert_eq!(h.app.selected, BTreeSet::from([first, second]));
     let output = h.frame(vec![], egui::Modifiers::NONE);
-    let _ = text_position(&output, "2 guides");
+    let _ = text_position(&output, "2 guides selected");
     let loaded = Document::from_json(&serde_json::to_string(&h.app.doc).unwrap()).unwrap();
     let restored = BenchUpApp::with_document(loaded, None, true);
     assert_eq!(restored.selected, BTreeSet::from([first, second]));
@@ -281,13 +281,18 @@ fn guide_preview_and_saved_line_render_cyan_across_the_viewport_in_both_themes()
         h.frame(vec![egui::Event::PointerMoved(end)], egui::Modifiers::NONE);
         for saved in [false, true] {
             if saved {
+                // Restore the app interaction pass after inspecting paint-only output.
+                h.frame(vec![], egui::Modifiers::NONE);
                 h.click(end);
                 h.app.set_tool(Tool::Select);
+                h.app.selected.clear();
+                h.app.hover = None;
             }
             let rect = h.app.viewport;
             let output = h.ctx.run_test_ui(
                 egui::RawInput {
                     screen_rect: Some(Rect::from_min_size(Pos2::ZERO, h.size)),
+                    time: Some(h.time),
                     ..Default::default()
                 },
                 |ui| h.app.paint_construction_guides(ui.painter(), rect),
@@ -298,7 +303,7 @@ fn guide_preview_and_saved_line_render_cyan_across_the_viewport_in_both_themes()
             }
             assert!(
                 points.len() > 20,
-                "a full dashed line must replace the small X"
+                "a full dashed line must replace the small X (saved={saved})"
             );
             let bounds = Rect::from_points(&points);
             assert!(bounds.size().length() > rect.width().min(rect.height()) * 0.9);

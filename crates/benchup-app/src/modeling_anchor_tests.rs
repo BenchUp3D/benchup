@@ -117,9 +117,14 @@ fn push_pull_free_drag_starts_at_the_click_when_the_anchor_is_grid_snapped() {
     h.app.update_modeling(cursor);
     assert!(h.app.modeling.as_ref().unwrap().value.abs() < 1e-6);
     let direction = h.app.modeling.as_ref().unwrap().direction;
+    // Free drag follows the extrusion axis through the snapped anchor.
+    // Start where the click ray meets that axis, as the tool does.
+    let start = h.app.doc.camera
+        .ray(dv(cursor - h.app.viewport.min), dv(h.app.viewport.size()))
+        .axis(h.app.modeling.as_ref().unwrap().anchor, direction).unwrap();
     for distance in [-0.5, 0.5] {
-        h.app.update_modeling(h.at(point + direction * distance));
-        assert!((h.app.modeling.as_ref().unwrap().value - distance).abs() < 1e-6);
+        h.app.update_modeling(h.at(start + direction * distance));
+        assert!((h.app.modeling.as_ref().unwrap().value - distance).abs() < 1e-6, "expected {distance}, got {}", h.app.modeling.as_ref().unwrap().value);
     }
 }
 

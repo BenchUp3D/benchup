@@ -803,6 +803,7 @@ mod tests {
                     None,
                     true,
                 );
+                app.project.modified = false;
                 app.set_tool(Tool::Router);
                 app.viewport = Rect::from_min_size(Pos2::new(10., 20.), egui::vec2(800., 600.));
                 app.doc.camera.target = DVec3::X * 0.5;

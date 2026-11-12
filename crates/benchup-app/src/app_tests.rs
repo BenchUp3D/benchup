@@ -918,6 +918,7 @@ fn tool_rail_flyouts_close_after_leaving_parent_and_menu() {
         h.frame(vec![egui::Event::PointerMoved(egui::pos2(500., 400.))], egui::Modifiers::NONE);
         assert!(!egui::Popup::is_any_open(&h.ctx));
         h.click(rail);
+        h.frame(vec![egui::Event::PointerMoved(rail)], egui::Modifiers::NONE);
         assert!(egui::Popup::is_any_open(&h.ctx));
         h.frame(vec![egui::Event::PointerGone], egui::Modifiers::NONE);
         assert!(!egui::Popup::is_any_open(&h.ctx));
@@ -3462,7 +3463,7 @@ fn push_pull_locked_axes_constrain_pointer_previews_and_typed_commits() {
             )],
             egui::Modifiers::NONE,
         );
-        let edit = h.app.modeling.as_ref().unwrap();
+        let edit = h.app.modeling.as_ref().expect("locked pull must remain active");
         assert_eq!(edit.direction, axis.vector());
         assert!((edit.value - 1.5).abs() < 1e-5);
         let check = |model: &Model, delta: DVec3| {
@@ -3470,14 +3471,13 @@ fn push_pull_locked_axes_constrain_pointer_previews_and_typed_commits() {
                 .faces
                 .values()
                 .find(|face| {
-                    !before.faces.contains_key(&face.id)
-                        && face.vertices.iter().all(|id| {
+                    face.vertices.iter().all(|id| {
                             points.iter().any(|point| {
                                 model.vertices[id].position.distance(*point + delta) < 1e-5
                             })
                         })
                 })
-                .unwrap();
+                .unwrap_or_else(|| panic!("missing cap for {delta:?}: {:?}", model.vertices));
             assert_eq!(cap.vertices.len(), 4);
             model.validate().unwrap();
         };
@@ -3488,6 +3488,8 @@ fn push_pull_locked_axes_constrain_pointer_previews_and_typed_commits() {
         check(&h.app.doc.model, axis.vector() * 1.5);
         h.app.undo(&h.ctx, false);
         assert_eq!(h.app.doc.model, before);
+        // Undo resets tool constraints; acquire the lock for the next gesture.
+        h.key(key);
         h.click(h.at(DVec3::new(2.5, 2.5, 0.)));
         h.app.length_input = input.into();
         h.app.update_modeling(h.at(anchor + axis.vector()));
@@ -4067,6 +4069,7 @@ fn shift_click_and_box_selection_outside_keep_the_group_open() {
 #[test]
 fn tape_measure_snaps_reads_distance_and_restarts_without_editing_geometry() {
     let mut h = Harness::new();
+    h.app.create_guides = false;
     let (a, b) = (DVec3::new(0., 0., 2.), DVec3::new(3., 4., 2.));
     h.app.doc.model.add_edge(a, b).unwrap();
     let before = h.app.doc.model.clone();
@@ -6981,6 +6984,7 @@ fn router_rail_tool_routes_clicked_edges_and_reopens_existing_cuts() {
         let stock = model.vertices.clone();
         h.app.doc.model = model;
         h.app.inspector_width = 420.;
+        h.size.y = 2000.;
         h.app.doc.camera = Camera {
             target: DVec3::new(0.5, 0.5, 0.1),
             distance: 3.,

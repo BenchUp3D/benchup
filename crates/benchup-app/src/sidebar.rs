@@ -3959,7 +3959,7 @@ mod preference_tests {
         for frame in 0..3 {
             let output = ctx.run_test_ui(
                 egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(600., 2000.))),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(600., 4000.))),
                     time: Some(frame as f64 / 60.),
                     ..Default::default()
                 },

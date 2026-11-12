@@ -41,6 +41,15 @@ fn help_release_notes_navigates_boundaries_and_picker_and_reopens_on_latest() {
         &format!("v{}", releases[0]["version"].as_str().unwrap()),
     ));
     let picker = h.frame(vec![], egui::Modifiers::NONE);
+    let top = text_position(&picker, &format!("v{}", releases[1]["version"].as_str().unwrap()));
+    h.frame(vec![egui::Event::PointerMoved(top), egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        delta: egui::vec2(0., -10000.),
+        source: egui::MouseWheelSource::Unknown,
+    }], egui::Modifiers::NONE);
+    let picker = h.frame(vec![], egui::Modifiers::NONE);
     h.click(text_position(
         &picker,
         &format!("v{}", releases.last().unwrap()["version"].as_str().unwrap()),

@@ -168,7 +168,7 @@ fn inspector_and_viewports_share_source_validation_and_same_frame_edits_invalida
     app.doc.model.add_edge(DVec3::ZERO,DVec3::X).unwrap();
     let ctx = egui::Context::default();
     let mut revision = 0;
-    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+    let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
         revision = app.document_revision(ui.ctx());
         app.doc.camera.yaw += 0.1;
         app.camera_changed(ui.ctx());
@@ -181,7 +181,7 @@ fn inspector_and_viewports_share_source_validation_and_same_frame_edits_invalida
     });
     // Direct collection edits between frames still trigger validation.
     app.doc.model.vertices.values_mut().next().unwrap().position.y += 0.1;
-    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+    let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
         assert!(app.document_revision(ui.ctx()) > revision);
     });
 }
@@ -231,7 +231,7 @@ fn drawing_previews_keep_the_resident_scene_and_refresh_after_commit() {
         .unwrap();
     app.changed(&ctx);
     render(&mut app, &ctx, rect);
-    assert_eq!(app.scene_cache.resident_builds(), 2);
+    assert_eq!(app.scene_cache.resident_builds(), 1);
 }
 
 #[test]
@@ -265,13 +265,13 @@ fn tape_preview_and_saved_guides_keep_the_resident_scene() {
     app.doc.model.add_guide(DVec3::X, Some(DVec3::Y)).unwrap();
     app.changed(&ctx);
     render(&mut app, &ctx, rect);
-    assert_eq!(app.scene_cache.resident_builds(), 2);
+    assert_eq!(app.scene_cache.resident_builds(), 1);
     app.snap = Some(Snap {
         point: DVec3::X,
         kind: Inference::OnGuide,
     });
     render(&mut app, &ctx, rect);
-    assert_eq!(app.scene_cache.resident_builds(), 2);
+    assert_eq!(app.scene_cache.resident_builds(), 1);
 }
 
 #[test]

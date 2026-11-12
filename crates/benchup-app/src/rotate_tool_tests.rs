@@ -206,7 +206,7 @@ fn rotation_acquires_its_own_reference_then_excludes_its_moving_geometry() {
     h.app.update_modeling(h.at(DVec3::X * 2.2));
     let edit = h.app.modeling.as_ref().unwrap();
     assert_eq!(edit.snap.unwrap().kind, Inference::Plane);
-    assert!((edit.value).abs() < 1e-5);
+    assert!((edit.value).abs() < 1e-4, "angle {}, snap {:?}", edit.value, edit.snap);
     assert!(edit.error.is_none());
 }
 

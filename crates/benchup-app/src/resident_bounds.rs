@@ -222,6 +222,8 @@ mod tests {
         let outer = model
             .make_object(&BTreeSet::from([inner]), false, "Outer")
             .unwrap();
+        let inner = *model.objects[&outer].entities.first().unwrap();
+        let a = *model.objects[&inner].entities.first().unwrap();
         let original = model.clone();
         let mut entities = EntityCache::default();
         entities.update(&model);

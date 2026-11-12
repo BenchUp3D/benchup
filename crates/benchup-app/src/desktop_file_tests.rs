@@ -5,8 +5,8 @@ use benchup_core::tr;
 fn skp_conversion_writes_the_same_document_as_import_then_save() {
     let directory = tempfile::tempdir().unwrap();
     for (fixture, bytes) in [
-        ("placed-window", include_bytes!("../tests/fixtures/placed-window.skp").as_slice()),
-        ("modern-triangle", include_bytes!("../tests/fixtures/modern-triangle.skp").as_slice()),
+        ("placed-window", include_bytes!("../../benchup-io/tests/fixtures/placed-window.skp").as_slice()),
+        ("modern-triangle", include_bytes!("../../benchup-io/tests/fixtures/modern-triangle.skp").as_slice()),
     ] {
         let input = directory.path().join(format!("{fixture}.skp"));
         let output = directory.path().join(format!("{fixture}-converted.bup"));

@@ -149,6 +149,7 @@ impl Index {
         }
         if self.key.as_ref().is_some_and(|old| {
             old.source == key.source
+                && old.entities == key.entities
                 && old.faces == key.faces
                 && old.camera == key.camera
                 && old.size == key.size
@@ -171,7 +172,7 @@ impl Index {
         {
             if let Some(source) = self.source.as_ref() {
                 if let Some(mut dirty) = crate::renderer::geometry_changes(source, model)
-                    .filter(|dirty| dirty.len() <= 512)
+                    .filter(|dirty| !dirty.is_empty() && dirty.len() <= 512)
                 {
                     let vertices: std::collections::HashSet<_> = dirty
                         .iter()

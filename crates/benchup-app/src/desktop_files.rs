@@ -45,8 +45,8 @@ fn convert_skp(input: &std::path::Path, output: &std::path::Path) -> Result<(), 
         .and_then(|n| n.to_str())
         .unwrap_or(tr!("project_files.sketchup_import"));
     let imported = crate::interchange::import_skp(&bytes, name)?;
-    let crate::project_files::Outcome::Imported(model, selected) =
-        crate::project_files::prepare_import(Model::default(), &imported)?
+    let crate::project_files::Outcome::Imported { model, selected, .. } =
+        crate::project_files::prepare_import(Model::default(), &imported, false)?
     else {
         unreachable!("prepare_import always imports")
     };

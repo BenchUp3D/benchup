@@ -23,6 +23,10 @@ pub(super) fn render_cases() -> Vec<RenderCase> {
         if value.is_boolean() {
             // Keys come from a static schema below to retain useful report names.
             let key = match key.as_str() {
+                "router_preview" => "router_preview",
+                "face_side_lengths" => "face_side_lengths",
+                "grain_direction" => "grain_direction",
+                "move_wireframe" => "move_wireframe",
                 "joinery_preview" => "joinery_preview",
                 "wood_joinery" => "wood_joinery",
                 "fasteners" => "fasteners",
