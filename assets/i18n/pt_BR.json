@@ -2101,5 +2101,7 @@
   "wood_glue.invalid_coverage": "A cola de madeira se refere a uma face ou camada inválida.",
   "wood_glue.estimate_label": "Cobertura de cola de madeira (projeto inteiro)",
   "wood_glue.estimate_note": "Cobertura de cola de madeira (projeto inteiro): {area}",
-  "wood_glue.area_m2": "{value} m²"
+  "wood_glue.area_m2": "{value} m²",
+  "desktop_files.missing_project_output_path": "Missing BenchUp project output path",
+  "desktop_files.missing_sketchup_file_path": "Missing SketchUp file path"
 }
