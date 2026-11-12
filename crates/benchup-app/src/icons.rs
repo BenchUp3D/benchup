@@ -581,11 +581,20 @@ fn paint_tool(p: &egui::Painter, rect: Rect, tool: Tool, colors: ToolPalette) {
             }
         }
         Tool::Walk => {
-            p.circle_stroke(xy(0.15, -0.78), r * 0.2, stroke);
-            for (a, b) in [((0.1, -0.45), (-0.1, 0.15)),
-                ((0.05, -0.3), (-0.55, -0.05)), ((0.05, -0.3), (0.6, -0.05)),
-                ((-0.1, 0.15), (-0.65, 0.9)), ((-0.1, 0.15), (0.55, 0.65))] {
-                p.line_segment([xy(a.0, a.1), xy(b.0, b.1)], stroke);
+            // A side-on stride stays recognizable even at toolbar size.
+            let limb = Stroke::new(1.9, color);
+            p.circle_filled(xy(0.2, -0.8), r * 0.2, color);
+            for points in [
+                [(0.1, -0.42), (-0.12, -0.08), (-0.18, 0.25)],
+                [(0.08, -0.38), (0.4, -0.08), (0.72, -0.08)],
+                [(0.06, -0.38), (-0.42, -0.23), (-0.62, 0.12)],
+                [(-0.18, 0.25), (0.27, 0.49), (0.48, 0.96)],
+                [(-0.18, 0.25), (-0.37, 0.68), (-0.72, 0.96)],
+            ] {
+                p.add(egui::Shape::line(
+                    points.into_iter().map(|(x, y)| xy(x, y)).collect(),
+                    limb,
+                ));
             }
         }
         Tool::Orbit => {
