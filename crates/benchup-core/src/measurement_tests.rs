@@ -296,8 +296,9 @@ fn angular_dimensions_roundtrip_copy_transform_and_undo_without_extra_geometry()
 
     let copy = doc.model.copy_entities(&BTreeSet::from([id]));
     let pasted = doc.model.paste_entities(&copy, DVec3::Z * 2.);
-    let child = *pasted.first().unwrap();
     let group = doc.model.make_object(&pasted, false, "Angle").unwrap();
+    // Grouping remaps the dimension into the new object.
+    let child = *doc.model.objects[&group].entities.first().unwrap();
     doc.model.move_selection(&BTreeSet::from([group]), DVec3::X).unwrap();
     doc.model.scale_selection(&BTreeSet::from([group]), DVec3::ZERO, 2.).unwrap();
     doc.model.rotate_selection(&BTreeSet::from([group]), DVec3::ZERO, DVec3::Z, 90.).unwrap();
