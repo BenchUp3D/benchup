@@ -114,6 +114,8 @@ impl Default for InspectorPreferences {
             paint_target: PaintTarget::default(),
             tools: ToolPreferences::default(),
             orbit_origin: OrbitOrigin::default(),
+            tool_rail_order: Tool::RAIL.to_vec(),
+            tool_rail_order_revision: 0,
             snapping: None,
             cutting_plan: CuttingPlanPreferences::default(),
             time_estimates: Default::default(),
@@ -169,6 +171,48 @@ mod guide_preference_tests {
         fn set_string(&mut self, key: &str, value: String) { self.values.insert(key.into(), value); }
         fn remove_string(&mut self, key: &str) { self.values.remove(key); }
         fn flush(&mut self) { self.flushed = true; }
+    }
+
+    #[test]
+    fn tool_rail_order_defaults_normalizes_and_persists_without_model_edits() {
+        let legacy: InspectorPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.tool_rail_order, Tool::RAIL.to_vec());
+        let normalized = normalized_tool_rail_order(&[Tool::Move, Tool::Move, Tool::Circle]);
+        assert_eq!(normalized[0], Tool::Move);
+        assert_eq!(normalized.len(), Tool::RAIL.len());
+        assert!(!normalized.contains(&Tool::Circle));
+        let ctx = egui::Context::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        let mut storage = Storage::default();
+        app.reorder_rail_tool(Tool::Move, 0);
+        assert_eq!(app.tool_rail_order[0], Tool::Move);
+        app.reorder_rail_tool(Tool::Move, Tool::RAIL.len());
+        assert_eq!(app.tool_rail_order.last(), Some(&Tool::Move));
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        assert!(storage.flushed);
+        assert!(!app.project.modified);
+        assert!(app.dirty_since.is_none());
+        let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        assert_eq!(restored.tool_rail_order, app.tool_rail_order);
+    }
+
+    #[test]
+    fn router_and_glue_move_to_bottom_once_and_remain_reorderable() {
+        let ctx = egui::Context::default();
+        let mut storage = Storage::default();
+        let mut legacy = InspectorPreferences::default();
+        legacy.tool_rail_order = Tool::RAIL.iter().rev().copied().collect();
+        eframe::set_value(&mut storage, PREFERENCE_KEY, &legacy);
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        app.restore_inspector_preferences(&ctx, Some(&storage));
+        assert_eq!(&app.tool_rail_order[app.tool_rail_order.len() - 2..], &[Tool::Router, Tool::WoodGlue]);
+        app.reorder_rail_tool(Tool::Router, 0);
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        assert_eq!(restored.tool_rail_order[0], Tool::Router);
+        assert!(!restored.project.modified);
     }
 
     #[test]
@@ -711,6 +755,12 @@ impl BenchUpApp {
         benchup_core::i18n::set_language(&self.general_settings.language);
         preferences.tools.restore(self);
         self.orbit_origin = preferences.orbit_origin;
+        self.tool_rail_order = normalized_tool_rail_order(&preferences.tool_rail_order);
+        // Apply the new bottom placement once, preserving subsequent user reordering.
+        if preferences.tool_rail_order_revision < 1 {
+            self.tool_rail_order.retain(|tool| !matches!(tool, Tool::Router | Tool::WoodGlue));
+            self.tool_rail_order.extend([Tool::Router, Tool::WoodGlue]);
+        }
         self.project.recent = preferences.recent_projects.clone();
         self.project.recent.truncate(10);
         self.project.import_format =
@@ -841,6 +891,8 @@ impl BenchUpApp {
             paint_target: self.paint_target,
             tools: ToolPreferences::capture(self),
             orbit_origin: self.orbit_origin,
+            tool_rail_order: self.tool_rail_order.clone(),
+            tool_rail_order_revision: 1,
             snapping: Some(SnappingPreferences {
                 geometry: true,
                 edges: self.doc.snap_to_geometry && self.snap_to_edge,
@@ -5658,4 +5710,15 @@ mod face_center_preference_tests {
         let older:SnappingPreferences=serde_json::from_str(r#"{"geometry":true,"faces":false}"#).unwrap();
         assert!(older.face_centers);
     }
+}
+
+// Preserve saved slots, remove duplicates, and append tools added by newer versions.
+pub(super) fn normalized_tool_rail_order(saved: &[Tool]) -> Vec<Tool> {
+    let mut order = Vec::with_capacity(Tool::RAIL.len());
+    for &tool in saved.iter().chain(Tool::RAIL.iter()) {
+        if Tool::RAIL.contains(&tool) && !order.contains(&tool) {
+            order.push(tool);
+        }
+    }
+    order
 }

@@ -866,6 +866,39 @@ fn drawing_menu_switches_tools_and_remembers_the_choice() {
 }
 
 #[test]
+fn dragging_a_rail_tool_reorders_without_activating_it() {
+    let mut h = Harness::new();
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    let start = text_position(&output, "Move") - egui::vec2(0., 12.);
+    let end = text_position(&output, "Select") - egui::vec2(0., 20.);
+    h.pointer(start, egui::PointerButton::Primary, true, false);
+    h.frame(vec![egui::Event::PointerMoved(start + egui::vec2(0., -12.))], egui::Modifiers::NONE);
+    h.frame(vec![egui::Event::PointerMoved(end)], egui::Modifiers::NONE);
+    h.pointer(end, egui::PointerButton::Primary, false, false);
+    assert_eq!(h.app.tool_rail_order[0], Tool::Move);
+    assert_eq!(h.app.tool, Tool::Select);
+    assert!(!h.app.project.modified);
+}
+
+#[test]
+fn tool_rail_flyouts_open_on_hover_without_changing_the_tool() {
+    let mut h = Harness::new();
+    for (label, option) in [
+        ("Line", Tool::Rectangle),
+        ("Dimensions", Tool::TapeMeasure),
+        ("Union", Tool::Intersect),
+    ] {
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        let rail = text_position(&output, label);
+        h.frame(vec![egui::Event::PointerMoved(rail)], egui::Modifiers::NONE);
+        let menu = h.frame(vec![], egui::Modifiers::NONE);
+        assert!(egui::Popup::is_any_open(&h.ctx));
+        assert_menu_icon(&menu, option.label());
+        assert_eq!(h.app.tool, Tool::Select);
+    }
+}
+
+#[test]
 fn tool_rail_flyouts_close_after_leaving_parent_and_menu() {
     let mut h = Harness::new();
     for (label, option) in [
@@ -6850,7 +6883,6 @@ fn cancelling_an_unfinished_angle_leaves_no_dimension() {
 #[test]
 fn wood_glue_pointer_clicks_and_automatic_selection_record_one_edit_each() {
     let mut h = Harness::new();
-    h.size.y = 1100.;
     h.app.doc.model = Model::default();
     let board = |model: &mut Model, x: f64| {
         let mut stock = Model::default();
@@ -6869,7 +6901,7 @@ fn wood_glue_pointer_clicks_and_automatic_selection_record_one_edit_each() {
     let output = h.frame(vec![], egui::Modifiers::NONE);
     let button = text_position(&output, Tool::WoodGlue.label());
     assert!(button.x < 76.);
-    h.click(button);
+    h.click(button + egui::vec2(20., -25.));
     assert_eq!(h.app.tool, Tool::WoodGlue);
     let pos = h.at(DVec3::new(0.25, 0.5, 0.));
     let initial = h.app.doc.history.position();

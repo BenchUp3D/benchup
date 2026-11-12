@@ -368,6 +368,7 @@ pub struct BenchUpApp {
     walk: walk::Walk,
     space_mouse: space_mouse::SpaceMouse,
     drawing_tool: Tool,
+    tool_rail_order: Vec<Tool>,
     measurement_tool: Tool,
     solid_tool: Tool,
     solid_first: Option<u64>,
@@ -560,6 +561,7 @@ impl BenchUpApp {
             walk: walk::Walk::default(),
             space_mouse: Default::default(),
             drawing_tool: Tool::Line,
+            tool_rail_order: Tool::RAIL.to_vec(),
             measurement_tool: Tool::Dimensions,
             solid_tool: Tool::Union,
             solid_first: None,
@@ -3467,6 +3469,14 @@ impl BenchUpApp {
         }
         self.tool_tooltip(response, tool)
     }
+    fn reorder_rail_tool(&mut self, tool: Tool, insertion: usize) {
+        if let Some(from) = self.tool_rail_order.iter().position(|slot| *slot == tool) {
+            let insertion = insertion.min(self.tool_rail_order.len());
+            self.tool_rail_order.remove(from);
+            self.tool_rail_order.insert(insertion.saturating_sub(usize::from(from < insertion)), tool);
+        }
+    }
+
     fn tool_rail(&mut self, ui: &mut egui::Ui) {
         let colors = Palette::for_ui(ui);
         egui::Panel::left("tools")
@@ -3498,7 +3508,30 @@ impl BenchUpApp {
                         ui.spacing_mut().item_spacing.y = 4.;
                     }
                     let mut tool_rects = Vec::with_capacity(Tool::RAIL.len());
-                    for rail_tool in Tool::RAIL {
+                    let dragged = egui::DragAndDrop::payload::<Tool>(ui.ctx());
+                    let mut preview_order = self.tool_rail_order.clone();
+                    let mut drop_inside = false;
+                    if let Some(dragged) = dragged.as_ref() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                        if let Some(pointer) = ui.input(|i| i.pointer.hover_pos()) {
+                            let stride = button_height + gap + ui.spacing().item_spacing.y;
+                            let bounds = Rect::from_min_size(
+                                ui.cursor().min,
+                                egui::vec2(56., stride * preview_order.len() as f32 - gap),
+                            ).intersect(ui.clip_rect());
+                            drop_inside = bounds.contains(pointer);
+                            if drop_inside {
+                                let insertion = ((pointer.y - content_top - button_height * 0.5)
+                                    / stride).ceil().max(0.) as usize;
+                                if let Some(from) = preview_order.iter().position(|tool| tool == dragged.as_ref()) {
+                                    let insertion = insertion.min(preview_order.len());
+                                    preview_order.remove(from);
+                                    preview_order.insert(insertion.saturating_sub(usize::from(from < insertion)), **dragged);
+                                }
+                            }
+                        }
+                    }
+                    for rail_tool in preview_order.iter().copied() {
                         let tool = if rail_tool == Tool::Line {
                             self.drawing_tool
                         } else if rail_tool == Tool::Dimensions {
@@ -3508,6 +3541,7 @@ impl BenchUpApp {
                         } else {
                             rail_tool
                         };
+                        let placeholder = dragged.as_ref().is_some_and(|tool| **tool == rail_tool);
                         let active = self.tool == tool;
                         let nested =
                             matches!(rail_tool, Tool::Line | Tool::Dimensions | Tool::Union);
@@ -3517,8 +3551,31 @@ impl BenchUpApp {
                         } else {
                             tr!("app.tool_with_shortcut", tool = tool.label(), shortcut = shortcut)
                         };
-                        let (rect, response) =
-                            ui.allocate_exact_size(egui::vec2(56., button_height), Sense::click());
+                        let size = egui::vec2(56., button_height);
+                        let (_, target) = ui.allocate_space(size);
+                        // Animate content-relative positions so scrolling stays immediate.
+                        // Stable slot IDs keep each icon and label together while reordering.
+                        let offset = ui.ctx().animate_value_with_time(
+                            ui.scope_id().with(("tool_rail_position", rail_tool as usize)),
+                            target.top() - content_top,
+                            ui.style().animation_time.min(0.14),
+                        );
+                        let rect = target.translate(egui::vec2(0., content_top + offset - target.top()));
+                        if placeholder {
+                            ui.painter().rect_filled(rect, 8, colors.hovered);
+                            ui.painter().rect_stroke(
+                                rect, 8, Stroke::new(2., colors.accent), egui::StrokeKind::Inside,
+                            );
+                        }
+                        let response = ui.interact(
+                            rect,
+                            ui.scope_id().with(("tool_rail_slot", rail_tool as usize)),
+                            if placeholder { Sense::hover() } else { Sense::click_and_drag() },
+                        );
+                        response.dnd_set_drag_payload(rail_tool);
+                        if response.drag_started() {
+                            egui::Popup::close_all(ui.ctx());
+                        }
                         tool_rects.push((rail_tool, rect));
                         response.widget_info(|| {
                             egui::WidgetInfo::selected(
@@ -3532,9 +3589,9 @@ impl BenchUpApp {
                                 tooltip.clone(),
                             )
                         });
-                        if !active && response.hovered() {
+                        if !placeholder && !active && response.hovered() {
                             ui.painter().rect_filled(
-                                rect.shrink2(egui::vec2(0., 3.)),
+                                rect,
                                 8,
                                 colors.hovered,
                             );
@@ -3574,7 +3631,14 @@ impl BenchUpApp {
                                 vec![tip + egui::vec2(-4., -4.), tip, tip + egui::vec2(-4., 4.)],
                                 Stroke::new(1.8, color),
                             ));
+                        }
+                        if nested && !placeholder {
                             let popup = egui::Popup::menu(&response)
+                                .open_memory(
+                                    ((response.hovered() || response.clicked())
+                                        && !egui::DragAndDrop::has_any_payload(ui.ctx()))
+                                        .then_some(egui::SetOpenCommand::Bool(true)),
+                                )
                                 .align(egui::RectAlign::RIGHT_START)
                                 .width(190.)
                                 .show(|ui| {
@@ -3615,6 +3679,17 @@ impl BenchUpApp {
                         }
                         ui.add_space(gap);
                     }
+                    if let Some(dragged) = dragged.as_ref()
+                        && drop_inside && ui.input(|i| i.pointer.any_released())
+                    {
+                        if let (Some(from), Some(to)) = (
+                            self.tool_rail_order.iter().position(|tool| tool == dragged.as_ref()),
+                            preview_order.iter().position(|tool| tool == dragged.as_ref()),
+                        ) {
+                            self.reorder_rail_tool(**dragged, to + usize::from(from < to));
+                        }
+                        egui::DragAndDrop::clear_payload(ui.ctx());
+                    }
                     let selected_rail_tool = if self.tool.is_solid() {
                         Tool::Union
                     } else if Tool::DRAWING.contains(&self.tool) {
@@ -3626,7 +3701,8 @@ impl BenchUpApp {
                     };
                     if let Some((_, target)) = tool_rects
                         .iter()
-                        .find(|(tool, _)| *tool == selected_rail_tool)
+                        .find(|(tool, _)| *tool == selected_rail_tool
+                            && !dragged.as_ref().is_some_and(|dragged| **dragged == *tool))
                     {
                         // Animate only the content-relative offset: scrolling must not
                         // become another animation target. Zero-duration styles snap.
@@ -3641,7 +3717,7 @@ impl BenchUpApp {
                             selection_shape,
                             egui::Shape::Vec(vec![
                                 egui::Shape::rect_filled(
-                                    rect.shrink2(egui::vec2(0., 3.)),
+                                    rect,
                                     8,
                                     colors.selected,
                                 ),
@@ -3678,7 +3754,7 @@ impl BenchUpApp {
                         delta
                     });
                     if wheel != 0. {
-                        let current = Tool::RAIL.iter().position(|tool| {
+                        let current = self.tool_rail_order.iter().position(|tool| {
                             *tool == self.tool
                                 || (*tool == Tool::Line && Tool::DRAWING.contains(&self.tool))
                                 || (*tool == Tool::Dimensions && Tool::MEASUREMENT_MENU.contains(&self.tool))
@@ -3687,10 +3763,10 @@ impl BenchUpApp {
                         let next = if wheel > 0. {
                             current.saturating_sub(1)
                         } else {
-                            (current + 1).min(Tool::RAIL.len() - 1)
+                            (current + 1).min(self.tool_rail_order.len() - 1)
                         };
                         if next != current {
-                            let tool = match Tool::RAIL[next] {
+                            let tool = match self.tool_rail_order[next] {
                                 Tool::Line => self.drawing_tool,
                                 Tool::Dimensions => self.measurement_tool,
                                 Tool::Union => self.solid_tool,
