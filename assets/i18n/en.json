@@ -1109,6 +1109,7 @@
   "projects.geometry_download_started": "Geometry download started",
   "projects.geometry_exported": "Geometry exported",
   "projects.geometry_imported_as_editable_groups": "Geometry imported as editable groups",
+  "projects.geometry_recovered_from_a_damaged_sketchup_archive": "Geometry recovered from a damaged SketchUp archive. Some materials may be missing.",
   "projects.import_geometry": "Import geometry",
   "projects.import_sketchup": "Import SketchUp",
   "projects.importing_geometry": "Importing geometry…",

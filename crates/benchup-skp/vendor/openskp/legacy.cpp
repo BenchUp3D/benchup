@@ -64,6 +64,17 @@ std::optional<std::uint64_t> read_plain_entity_ref(const ByteBuffer& d, size_t& 
   return tag;
 }
 
+// Whether the text whose font ends at `pos` is anchored to an entity: after
+// the two screen-fraction f64s comes the connection block, [u32 type][u32 4]
+// [point3d], and a type other than 0 or 1 (2, 4, 5 and 7 seen; see
+// docs/dimension-record-notes.md) anchors the label. Matches Python's
+// `_anchored_connection`.
+bool anchored_text_connection(const ByteBuffer& d, size_t pos) {
+  if (pos + 24 > d.size() || read_u32(d, pos + 20) != 4) return false;
+  auto type = read_u32(d, pos + 16);
+  return type >= 2 && type <= 15;
+}
+
 }  // namespace
 
 // What follows a legacy linear dimension's connection ref: a second entity
@@ -88,6 +99,7 @@ LegacyPathResult legacy_connection_paths(
     q += 4;
     if (count > 1000) throw std::runtime_error("implausible dimension path length");
     auto& refs = list == 0 ? out.first : out.second;
+    auto& written = list == 0 ? out.first_new : out.second_new;
     for (uint32_t i = 0; i < count; ++i) {
       if (q + 2 > data.size()) throw std::runtime_error("legacy archive truncated");
       // MFC writes an object IN FULL the first time anything points at it, so
@@ -107,6 +119,7 @@ LegacyPathResult legacy_connection_paths(
       } else {
         refs.push_back(read_plain_entity_ref(data, q));
       }
+      written.push_back(is_new);
     }
   }
   out.next = q;
@@ -170,7 +183,69 @@ std::optional<V20FillerHit> find_count_after_v20_filler(const ByteBuffer& d, siz
   return std::nullopt;
 }
 
+// The SketchUp 2020 layout of a model with NO component definitions AND no root entities.
+// find_count_after_v20_filler cannot see it: behind the filler (an empty string record, then 13
+// bytes of padding) the only count is the ROOT entity count, and it is 0, which that search skips
+// as "no count".
+//
+// Returns the offset of that root count (so the caller can put the cursor there and read the zero),
+// or nullopt when the bytes are not that layout: the empty string record has to sit within 12 bytes
+// of count_pos, and the 13 padding bytes and the count behind it have to be all zero.
+std::optional<size_t> find_empty_root_after_v20_filler(const ByteBuffer& d, size_t count_pos) {
+  size_t marker_at = std::string::npos;
+  for (size_t i = count_pos; i + 4 <= d.size() && i < count_pos + 12; ++i) {
+    if (d[i] == 255 && d[i + 1] == 254 && d[i + 2] == 255) {
+      marker_at = i;
+      break;
+    }
+  }
+  if (marker_at == std::string::npos) return std::nullopt;
+  if (d[marker_at + 3] != 0) return std::nullopt;  // non-empty string: real data
+  const size_t root_count_at = marker_at + 4 + 13;
+  if (root_count_at + 4 > d.size()) return std::nullopt;
+  for (size_t i = marker_at + 3; i < root_count_at + 4; ++i)
+    if (d[i] != 0) return std::nullopt;
+  return root_count_at;
+}
+
 namespace {
+// Decode a bounded UTF-16 range for both archive strings and page names.
+std::string decode_utf16le_range(const ByteBuffer& d, size_t pos, size_t char_count) {
+  if (pos > d.size() || char_count > (d.size() - pos) / 2)
+    throw std::out_of_range("legacy UTF-16 string truncated");
+  std::string s;
+  for (size_t i = 0; i < char_count; ++i) {
+    uint32_t c = read_u16(d, pos);
+    pos += 2;
+    if (c >= 0xD800 && c <= 0xDFFF) {
+      const auto low = c <= 0xDBFF && i + 1 < char_count ? read_u16(d, pos) : 0;
+      if (low >= 0xDC00 && low <= 0xDFFF) {
+        c = 0x10000 + ((c - 0xD800) << 10) + (low - 0xDC00);
+        ++i;
+        pos += 2;
+      } else {
+        c = 0xFFFD;
+      }
+    }
+    if (c < 0x80)
+      s += char(c);
+    else if (c < 0x800) {
+      s += char(0xC0 | (c >> 6));
+      s += char(0x80 | (c & 63));
+    } else if (c < 0x10000) {
+      s += char(0xE0 | (c >> 12));
+      s += char(0x80 | ((c >> 6) & 63));
+      s += char(0x80 | (c & 63));
+    } else {
+      s += char(0xF0 | (c >> 18));
+      s += char(0x80 | ((c >> 12) & 63));
+      s += char(0x80 | ((c >> 6) & 63));
+      s += char(0x80 | (c & 63));
+    }
+  }
+  return s;
+}
+
 struct R {
   const ByteBuffer& d;
   size_t p{};
@@ -234,22 +309,8 @@ struct R {
       z = u16();
       if (z == 65535) z = u32();
     }
-    need(size_t(z) * 2);
-    std::string s;
-    for (uint32_t i = 0; i < z; ++i) {
-      uint16_t c = uint16_t(d[p]) | uint16_t(d[p + 1]) << 8;
-      p += 2;
-      if (c < 0x80)
-        s += char(c);
-      else if (c < 0x800) {
-        s += char(0xc0 | (c >> 6));
-        s += char(0x80 | (c & 63));
-      } else {
-        s += char(0xe0 | (c >> 12));
-        s += char(0x80 | ((c >> 6) & 63));
-        s += char(0x80 | (c & 63));
-      }
-    }
+    auto s = decode_utf16le_range(d, p, z);
+    p += size_t(z) * 2;
     return s;
   }
 };
@@ -314,6 +375,8 @@ struct Archive {
   bool in_entity_list{};
   std::unordered_map<uint64_t, Entry> slots;
   std::unordered_map<std::string, uint64_t> class_slot;
+  std::optional<uint64_t> first_layer_class;
+  bool seen_line_style{};
 
   // Burned store-map indices (see the CEdgeUse branch of read()): the
   // writer maps an annotation's connection points into the store map
@@ -328,6 +391,9 @@ struct Archive {
   uint64_t cum_delta{};
   std::optional<uint64_t> annot_watermark;
   std::vector<int> burn_stack;  // per-entity-list burned-item credits
+  // per-entity-list instances an annotation's path wrote in full (see
+  // connection_paths) that the list has not listed yet, in order
+  std::vector<std::vector<uint64_t>> inline_stack;
   std::optional<size_t> cline_tail;
 
   Archive(const ByteBuffer& d, int v) : r{d}, ver(v), pid(v >= 17) {}
@@ -355,6 +421,7 @@ struct Archive {
       std::string name(b.begin(), b.end());
       auto cs = alloc({true, name, int(schema), {}});
       class_slot[name] = cs;
+      if (name == "CLayer" && !first_layer_class) first_layer_class = cs;
       return new_obj(name);
     }
     if (tag & 0x8000) return new_class_ref(tag & 0x7fff, expect);
@@ -424,28 +491,55 @@ struct Archive {
   // slot the walk has not reached yet - SketchUp serializes a
   // label/dimension BEFORE the entity it anchors to when both live in the
   // same entity list, so the reference can legitimately point forward.
-  std::optional<uint64_t> entity_ref() {
+  std::optional<uint64_t> entity_ref(bool allow_inline = false) {
+    const auto start = r.p;
     auto tag = r.u16();
     if (!tag) return std::nullopt;
     if (tag == 0x7fff) {
       auto big = r.u32();
-      if (big & 0x80000000) throw std::runtime_error("entity ref is a new object");
-      return big;
+      if (!(big & 0x80000000)) return big;
+    } else if (tag != 0xffff && !(tag & 0x8000)) {
+      return tag;
     }
-    if (tag == 0xffff || (tag & 0x8000)) throw std::runtime_error("entity ref is a new object");
-    return tag;
+    if (!allow_inline) throw std::runtime_error("entity ref is a new object");
+    r.p = start;
+    return std::get<0>(object());
   }
 
   // The instance paths that follow each connection ref (see
   // legacy_connection_paths): consumes them, reading a path entry that MFC
-  // wrote in full as a real object.
-  void connection_paths() {
+  // wrote in full as a real object. A path runs from the outermost instance
+  // in, so its first one is an entity of the list the annotation is in; one
+  // written here in full is noted for that list (see entity_list). Returns
+  // false when the connection carries any instance path.
+  bool connection_paths() {
     auto res = legacy_connection_paths(r.d, r.p, [this](std::size_t at) {
       r.p = at;
       auto q = object();
       return std::make_pair(std::get<0>(q), r.p);
     });
     r.p = res.next;
+    if (!inline_stack.empty()) {
+      if (!res.first.empty() && res.first_new[0]) inline_stack.back().push_back(*res.first[0]);
+      if (!res.second.empty() && res.second_new[0]) inline_stack.back().push_back(*res.second[0]);
+    }
+    return !res.extra && res.first.empty() && res.second.empty();
+  }
+
+  // The walker slot of the back-reference at the cursor, without moving it;
+  // nullopt when the next tag is anything else.
+  std::optional<uint64_t> peek_backref() {
+    if (r.p + 2 > r.d.size()) return std::nullopt;
+    uint64_t slot = read_u16(r.d, r.p);
+    if (slot == 0x7fff) {
+      if (r.p + 6 > r.d.size()) return std::nullopt;
+      slot = read_u32(r.d, r.p + 2);
+      if (slot & 0x80000000) return std::nullopt;
+    } else if (!slot || (slot & 0x8000)) {
+      return std::nullopt;
+    }
+    if (!burns.empty() && slot >= burns[0].first) return translate_ref(slot);
+    return slot;
   }
 
   // True when the u16 at `at` starts an object read in one of the
@@ -505,30 +599,31 @@ struct Archive {
     v.tw = r.f64();
     v.th = r.f64();
     v.tex_file = r.utf16();
-    auto c = r.raw(9);  // RGBA + 00 + RGBA (colour stored twice)
-    v.r = c[0];
-    v.g = c[1];
-    v.b = c[2];
-    // c[3] here is not a colour alpha byte - it feeds the colorized check
-    // below alongside blob[4]. v.a keeps its default (255); textured
-    // materials/layers carry no separate alpha channel in this record
-    // shape.
+    auto c = r.raw(9);  // image average RGBA + 00 + material paint RGBA
+    v.r = c[5];
+    v.g = c[6];
+    v.b = c[7];
+    // c[3] is the image average alpha, not the material opacity. Textured
+    // materials/layers use the separate opacity field; v.a stays 255.
     r.utf16();
-    auto blob = r.raw(8);  // u32 + u32 colorized flag
+    auto blob = r.raw(8);  // u32 material type + u32 colorize mode
     v.opacity = r.f64();
     if (!r.u8()) v.opacity = 0;
-    v.colorized = blob[4] != 0 || c[3] == 255;
+    v.colorized = blob[0] == 2;
+    v.colorize_type = blob[4] == 1 ? 1 : 0;
   }
 
   // Returns the CAttributeContainer's slot, or nullopt when this entity
   // has none (a null object reference: tag 0, Archive::object() returns a
   // default-constructed tuple with an empty class name).
-  std::optional<std::uint64_t> preamble(std::string* cls = nullptr) {
+  std::optional<std::uint64_t> preamble(V* value = nullptr, std::string* cls = nullptr) {
     auto attrs = object("CAttributeContainer");
     if (pid) {
       auto mask = r.u8();
+      std::uint64_t id = 0;
       for (int i = 0; i < 8; ++i)
-        if (mask & (1 << i)) r.u8();
+        if (mask & (1 << i)) id |= std::uint64_t(r.u8()) << (8 * i);
+      if (value) value->native_pid = id;
     }
     if (cls) *cls = std::get<1>(attrs);
     if (std::get<1>(attrs).empty()) return std::nullopt;
@@ -538,9 +633,9 @@ struct Archive {
   // `preamble` for the entity types that carry NO attribute-container
   // pointer in a SketchUp 3 file: vertex, loop, edge-use, material, layer.
   // (Edge, face, definition, instance and thumbnail still open with one.)
-  std::optional<std::uint64_t> early_preamble() {
+  std::optional<std::uint64_t> early_preamble(V* value = nullptr) {
     if (ver < kFirstV4) return std::nullopt;
-    return preamble();
+    return preamble(value);
   }
 
   void draw(V& v) {
@@ -556,6 +651,9 @@ struct Archive {
     if (!v3) {
       v.mat = int(b[0] | b[1] << 8);
       v.hidden = b[2];
+      v.casts_shadows = b[3] != 0;
+      v.receives_shadows = b[4] != 0;
+      v.locked = b.size() > 7 && b[7] != 0;
       v.soft = b[5];
       v.smooth = b[6];
     }
@@ -592,6 +690,32 @@ struct Archive {
     auto lay_cs = class_slot.find("CLayer");
     if (lay_cs != class_slot.end() && is_class_ref(r.d, at, lay_cs->second)) return true;
     return unmatched_class_ref && (tag & 0x8000) && tag != 0xffff;
+  }
+
+  // A 2019/2020 tag can store a line style inline or reference an earlier
+  // style. Read it as an object to preserve the archive's slot numbering.
+  void read_clayer_line_style() {
+    if (ver < 19 || r.p + 2 > r.d.size()) return;
+    static const std::string name = "CCustomLineStyle";
+    const auto tag = read_u16(r.d, r.p);
+    if (tag == 0xffff) {
+      if (r.p + 6 + name.size() > r.d.size() || read_u16(r.d, r.p + 4) != name.size() ||
+          !std::equal(name.begin(), name.end(), r.d.begin() + r.p + 6)) return;
+    } else if (tag & 0x8000) {
+      const auto style = class_slot.find(name);
+      const auto layer = class_slot.find("CLayer");
+      if (style == class_slot.end() || layer == class_slot.end() || !first_layer_class ||
+          style->second + layer->second != *first_layer_class + (tag & 0x7fff)) return;
+    } else {
+      if (tag == 0 || tag == 0x7fff) return;
+      if (base >= (1 << 20)) {
+        if (!seen_line_style) return;
+      } else {
+        const auto entry = slots.find(tag);
+        if (entry == slots.end() || entry->second.cls || entry->second.name != name) return;
+      }
+    }
+    object(name);
   }
 
   // Colour CLayer ends in a 21-byte tail. Some v18 zero-material files
@@ -659,29 +783,40 @@ struct Archive {
   std::shared_ptr<V> read(const std::string& n, uint64_t self) {
     auto v = std::make_shared<V>();
     if (n == "CVertex") {
-      early_preamble();
+      early_preamble(v.get());
       v->k = "vertex";
       auto a = r.f64s(3);
       v->xyz = {a[0], a[1], a[2]};
     } else if (n == "CEdge") {
-      preamble();
+      v->attrs = preamble(v.get());
       v->k = "edge";
       draw(*v);
       v->v1 = std::get<0>(object("CVertex"));
       v->v2 = std::get<0>(object("CVertex"));
-      object();
+      auto curve = object();
+      if (!std::get<1>(curve).empty()) {
+        v->curve = std::get<0>(curve);
+        v->curve_value = std::get<2>(curve);
+      }
     } else if (n == "CCurve") {
-      preamble();
+      preamble(v.get());
       v->k = "curve";
       r.u8();
       r.u32();
     } else if (n == "CArcCurve") {
-      preamble();
-      v->k = "curve";
+      preamble(v.get());
+      v->k = "arccurve";
       r.raw(5);
-      r.f64s(14);
+      // center[3], normal[3], x_axis[3], start_angle, end_angle, y_axis[3]
+      auto a = r.f64s(14);
+      v->arc.center = {a[0], a[1], a[2]};
+      v->arc.normal = {a[3], a[4], a[5]};
+      v->arc.x_axis = {a[6], a[7], a[8]};
+      v->arc.start_angle = a[9];
+      v->arc.end_angle = a[10];
+      v->arc.y_axis = {a[11], a[12], a[13]};
     } else if (n == "CEdgeUse") {
-      early_preamble();
+      early_preamble(v.get());
       v->k = "edgeuse";
       v->edge = std::get<0>(object("CEdge"));
       v->sense = r.u8() != 0;
@@ -714,7 +849,7 @@ struct Archive {
     } else if (n == "CLoop") {
       auto old = current_loop;
       current_loop = self;
-      early_preamble();
+      early_preamble(v.get());
       r.raw(2);
       v->k = "loop";
       while (r.p + 2 <= r.d.size() && read_u16(r.d, r.p)) {
@@ -725,7 +860,7 @@ struct Archive {
       current_loop = old;
     } else if (n == "CFace") {
       std::string lead_cls;
-      v->attrs = preamble(&lead_cls);
+      v->attrs = preamble(v.get(), &lead_cls);
       v->k = "face";
       draw(*v);
       if (ver < kFirstV4 && v->attrs && lead_cls == "CMaterial") {
@@ -743,13 +878,13 @@ struct Archive {
       }
       v->back_mat = r.u16();
     } else if (n == "CAttributeContainer") {
-      preamble();
+      preamble(v.get());
       v->k = "attrs";
       while (r.p + 2 <= r.d.size() && read_u16(r.d, r.p))
         v->ents.push_back(object("CAttributeNamed"));
       r.u16();
     } else if (n == "CAttributeNamed") {
-      preamble();
+      preamble(v.get());
       v->k = "dict";
       r.raw(4);
       v->name = r.utf16();
@@ -769,7 +904,7 @@ struct Archive {
       // this - the file's own version is the only signal available.
       if (ver >= 7) r.u32();
     } else if (n == "CLayer") {
-      v->attrs = early_preamble();
+      v->attrs = early_preamble(v.get());
       v->k = "layer";
       v->name = r.utf16();
       ByteBuffer mid;
@@ -793,11 +928,19 @@ struct Archive {
         v->b = c[2];
         r.utf16();
         r.raw(ver < kFirstV4 ? 17 : 21);  // SketchUp 3's tail is 4 bytes shorter
+        read_clayer_line_style();
         skip_clayer_colour_ext();
         skip_clayer_parent_ref(self);
       }
-    } else if (n == "CMaterial") {
+    } else if (n == "CCustomLineStyle") {
       early_preamble();
+      if (ver < 20) early_preamble();
+      r.utf16();
+      r.utf16();
+      r.raw(3 * sizeof(double));
+      seen_line_style = true;
+    } else if (n == "CMaterial") {
+      early_preamble(v.get());
       v->k = "material";
       v->name = r.utf16();
       auto flag = r.u16();
@@ -821,7 +964,7 @@ struct Archive {
       if (z > r.d.size()) throw std::runtime_error("implausible dib length");
       v->blob = r.raw(z);
     } else if (n == "CFaceTextureCoords") {
-      preamble();
+      preamble(v.get());
       v->k = "ftc";
       r.u32();
       auto a = r.f64s(24);
@@ -836,17 +979,28 @@ struct Archive {
       v->front_projected = (fflags & 2) != 0;
       v->back_projected = (bflags & 2) != 0;
     } else if (n == "CCamera") {
-      r.raw(137);
+      auto camera = r.raw(137);
+      ThumbnailCamera view;
+      view.eye = {read_f64(camera, 0), read_f64(camera, 8), read_f64(camera, 16)};
+      view.target = {read_f64(camera, 24), read_f64(camera, 32), read_f64(camera, 40)};
+      view.up = {read_f64(camera, 48), read_f64(camera, 56), read_f64(camera, 64)};
+      // CCamera uses the same body layout as scene cameras: two doubles
+      // after up, followed by projection, FOV and orthographic height.
+      view.perspective = camera[88] != 0;
+      view.fov_y_deg = read_f64(camera, 89);
+      view.ortho_height = read_f64(camera, 97);
+      v->camera = view;
       r.u16();
       r.utf16();
       r.raw(ver >= 6 ? 33 : 10);
     } else if (n == "CThumbnail") {
-      preamble();
+      preamble(v.get());
       if (ver < kFirstV4) {
         // SketchUp 3: a fixed 129-byte camera block, no name, no image.
         r.raw(129);
       } else {
-        object("CCamera");
+        auto camera = object("CCamera");
+        if (std::get<2>(camera)) v->camera = std::get<2>(camera)->camera;
         // SketchUp 4 and 5 end the thumbnail with its camera: no trailing
         // image pointer (not even a null one).
         if (ver >= 6) object("CDib");
@@ -861,7 +1015,7 @@ struct Archive {
       // ordinary definition reader then consumes. Its parsed value is
       // never consumed downstream - it exists purely so the byte stream
       // stays aligned.
-      preamble();
+      preamble(v.get());
       v->k = "image";
       draw(*v);
       auto q = object();
@@ -869,12 +1023,7 @@ struct Archive {
       v->xf = r.f64s(12);
       r.f64();    // constant 1.0
       r.utf16();  // source path
-      auto g = r.raw(16);
-      static char h[] = "0123456789ABCDEF";
-      for (auto x : g) {
-        v->guid += h[x >> 4];
-        v->guid += h[x & 15];
-      }
+      v->guid = guid_from_windows_bytes(r.raw(16));
     } else if (n == "CRelationship") {
       // two object pointers (small maps: two u16 back-refs - which read
       // like the "u32" of the public notes; big maps escalate them to
@@ -883,12 +1032,12 @@ struct Archive {
       // side - so these can point forward, past the walk cursor;
       // entity_ref() tolerates that where object()'s back-ref path
       // (rightly) does not.
-      preamble();
+      preamble(v.get());
       v->k = "relationship";
       entity_ref();
       entity_ref();
     } else if (n == "CConstructionLine") {
-      preamble();
+      preamble(v.get());
       v->k = "constructionline";
       draw(*v);
       // point(3) + direction(3) + two signed distance params along
@@ -950,7 +1099,7 @@ struct Archive {
       }
       r.raw(*cline_tail);
     } else if (n == "CConstructionPoint") {
-      preamble();
+      preamble(v.get());
       v->k = "constructionpoint";
       draw(*v);
       auto pos = r.f64s(3);
@@ -959,7 +1108,7 @@ struct Archive {
                   // Sketchup::ConstructionPoint property to name it after
       r.u8();     // reserved/unused (observed 0)
     } else if (n == "CSectionPlane") {
-      preamble();
+      preamble(v.get());
       v->k = "sectionplane";
       draw(*v);
       auto first = read_f64(r.d, r.p);
@@ -971,11 +1120,18 @@ struct Archive {
       }
     } else if (n == "CSkFont") {
       object("CAttributeContainer");
-      if (pid) r.u8();
+      if (pid) {
+        // the mask byte says how many pid bytes follow (SketchUp 2017+ writes two or more here)
+        const int mask = r.u8();
+        int n = 0;
+        for (int bit = 0; bit < 8; ++bit)
+          if (mask & (1 << bit)) ++n;
+        r.raw(n);
+      }
       r.utf16();
       r.raw(15);
     } else if (n == "CDimensionLinear") {
-      preamble();
+      preamble(v.get());
       v->k = "dimension";
       draw(*v);
       v->text = r.utf16();
@@ -989,27 +1145,101 @@ struct Archive {
       // SketchUp 4 and 5 write neither the font object above nor the 5 bytes
       // in front of the first connection block, nor the trailing u32 of the
       // last one.
-      r.raw(ver >= 6 ? 37 : 32);
-      entity_ref();  // connection point 1 (may be null)
-      connection_paths();
-      r.raw(32);
-      entity_ref();  // connection point 2 (may be null)
-      connection_paths();
-      r.raw(ver >= 6 ? 72 : 68);
+      v->dimension = std::make_shared<LegacyDimension>();
+      auto& decoded = *v->dimension;
+      auto connection = [&](std::optional<Vec3>& point, std::optional<uint64_t>& ref) {
+        const auto block = r.raw(32);
+        if (read_u32(block, 0) == 1)
+          point = Vec3{read_f64(block, 8), read_f64(block, 16), read_f64(block, 24)};
+        // The first reference to an anchored vertex can serialize it in full.
+        // Keep forward references unresolved until the complete archive is read.
+        ref = entity_ref(true);
+        if (!connection_paths()) {
+          // Do not expose definition-local vertex coordinates as owner/world
+          // points until the nested instance path can also be resolved.
+          point.reset();
+          ref.reset();
+        }
+      };
+      if (ver >= 6) r.raw(5);
+      connection(decoded.geometry.a, decoded.connect1);
+      connection(decoded.geometry.b, decoded.connect2);
+      const auto placement = r.raw(ver >= 6 ? 72 : 68);
+      const Vec3 normal{read_f64(placement, 0), read_f64(placement, 8), read_f64(placement, 16)};
+      const Vec3 x{read_f64(placement, 24), read_f64(placement, 32), read_f64(placement, 40)};
+      const auto axis = read_u32(placement, 48);
+      auto& geometry = decoded.geometry;
+      geometry.normal = normal;
+      geometry.plane_x = x;
+      geometry.offset = read_f64(placement, 52);
+      // X/Y-constrained dimensions use their plane frame, independent of the
+      // order of the measured endpoints. Preserve other modes without guessing.
+      if (axis == 1) {
+        geometry.offset_vector = Vec3{(normal[1] * x[2] - normal[2] * x[1]) * geometry.offset,
+                                      (normal[2] * x[0] - normal[0] * x[2]) * geometry.offset,
+                                      (normal[0] * x[1] - normal[1] * x[0]) * geometry.offset};
+      } else if (axis == 2) {
+        geometry.offset_vector =
+            Vec3{-x[0] * geometry.offset, -x[1] * geometry.offset, -x[2] * geometry.offset};
+      }
     } else if (n == "CText") {
-      preamble();
+      preamble(v.get());
       v->k = "text";
       draw(*v);
       object("CSkFont");
+      if (anchored_text_connection(r.d, r.p)) {
+        // An anchored connection block is followed, as a dimension's is, by
+        // the anchored entity's ref and its instance paths - and MFC writes a
+        // path instance IN FULL there when nothing has pointed at it before
+        // (a label anchored to a component instance serialized after it, its
+        // class declaration included when it is the file's first instance).
+        // Skipped as bytes, that instance never gets its store-map slots and
+        // every later reference is off by them; read it instead.
+        r.raw(16 + 32);
+        entity_ref();
+        connection_paths();
+      }
       size_t found = std::string::npos;
       for (size_t q = r.p; q + 14 <= std::min(r.d.size(), r.p + 512); ++q)
         if (r.d[q] == 1 && r.d[q + 1] == 0 && r.d[q + 2] == 0 && r.d[q + 3] == 0 &&
-            r.d[q + 6] == 3 && r.d[q + 7] == 0 && r.d[q + 8] == 0 && r.d[q + 9] == 0 &&
-            r.d[q + 10] == 1 && r.d[q + 11] == 255 && r.d[q + 12] == 254 && r.d[q + 13] == 255) {
+            r.d[q + 6] <= 8 && r.d[q + 7] == 0 && r.d[q + 8] == 0 && r.d[q + 9] == 0 &&
+            r.d[q + 10] <= 1 && r.d[q + 11] == 255 && r.d[q + 12] == 254 && r.d[q + 13] == 255) {
           found = q + 11;
           break;
         }
       if (found == std::string::npos) throw std::runtime_error("text delimiter not found");
+      v->annotation_text = std::make_shared<LegacyText>();
+      TextEntity annotation;
+      annotation.display_leader = r.d[found - 1] != 0;
+      if (found >= r.p + 63) {
+        annotation.leader_type = static_cast<int>(read_u32(r.d, found - 15));
+        annotation.arrow_type = static_cast<int>(read_u32(r.d, found - 5));
+        annotation.label_point =
+            Vec3{read_f64(r.d, found - 63), read_f64(r.d, found - 55), read_f64(r.d, found - 47)};
+        // Same free/vertex connection header used by linear dimensions. Font
+        // schema tails vary, so locate the validated connection before the label.
+        for (std::size_t q = r.p; q + 32 <= found - 63; ++q) {
+          const auto type = read_u32(r.d, q);
+          if ((type > 2) || read_u32(r.d, q + 4) != 4) continue;
+          if (q >= r.p + 16)
+            annotation.screen_position =
+                std::array<double, 2>{read_f64(r.d, q - 16), read_f64(r.d, q - 8)};
+          if (type == 0 || type == 1) {
+            annotation.point =
+                Vec3{read_f64(r.d, q + 8), read_f64(r.d, q + 16), read_f64(r.d, q + 24)};
+          } else {
+            const auto ref = read_u16(r.d, q + 32);
+            if (ref > 0 && ref < 0x7fff)
+              v->annotation_text->vertex = ref;
+            else if (ref == 0x7fff && q + 38 <= found - 63) {
+              const auto large = read_u32(r.d, q + 34);
+              if (!(large & 0x80000000)) v->annotation_text->vertex = large;
+            }
+          }
+          break;
+        }
+      }
+      v->annotation_text->geometry = std::move(annotation);
       r.raw(found - r.p);
       v->text = r.utf16();
       r.raw(5);
@@ -1027,11 +1257,12 @@ struct Archive {
         r.raw(6);
       }
     } else if (n == "CComponentDefinition") {
-      preamble();
+      v->attrs = preamble(v.get());
       v->k = "definition";
       // undecoded base block: 13 bytes in SketchUp 3, 19 in 4, 20 from 5, 22
       // from 2017
-      r.raw(ver >= 17 ? 22 : ver >= 5 ? 20 : ver >= kFirstV4 ? 19 : 13);
+      auto definition_base = r.raw(ver >= 17 ? 22 : ver >= 5 ? 20 : ver >= kFirstV4 ? 19 : 13);
+      if (ver >= kFirstV4) v->hidden = definition_base[2] != 0;
       auto nl = r.u32();
       if (nl > 10000) throw std::runtime_error("implausible def layers");
       // like the model-level layer list, the count is REAL layers (new
@@ -1107,16 +1338,11 @@ struct Archive {
           }
         }
       }
-      auto g = r.raw(16);
-      static char h[] = "0123456789ABCDEF";
-      for (auto x : g) {
-        v->guid += h[x >> 4];
-        v->guid += h[x & 15];
-      }
+      v->guid = guid_from_windows_bytes(r.raw(16));
       v->name = r.utf16();
-      r.utf16();
-      r.utf16();
-      r.u32();
+      v->description = r.utf16();
+      v->path = r.utf16();
+      v->load_time = r.u32();
       size_t tpos = std::string::npos;
       auto thumb_cs = class_slot.find("CThumbnail");
       for (size_t off = 0; off < 96 && r.p + off + 26 <= r.d.size(); ++off) {
@@ -1135,9 +1361,16 @@ struct Archive {
       auto gap = r.raw(tpos - r.p);
       v->faces_camera = gap.size() >= 9 && (gap[gap.size() - 9] & 1);
       v->shadows_face_sun = gap.size() >= 9 && (gap[gap.size() - 9] & 2);
-      object("CThumbnail");
+      // the last u32 before the thumbnail is 1 for the definition of a group and 0
+      // for a component's (what SketchUp's SUComponentDefinitionGetType reports),
+      // measured against SketchUp 2025's own counts
+      v->type_known = gap.size() >= 4;
+      v->is_group = gap.size() >= 4 && gap[gap.size() - 4] == 1 && gap[gap.size() - 3] == 0 &&
+                    gap[gap.size() - 2] == 0 && gap[gap.size() - 1] == 0;
+      auto thumbnail = object("CThumbnail");
+      if (std::get<2>(thumbnail)) v->camera = std::get<2>(thumbnail)->camera;
     } else if (n == "CComponentInstance" || n == "CGroup") {
-      v->attrs = preamble();
+      v->attrs = preamble(v.get());
       v->k = "instance";
       draw(*v);
       auto q = object("CComponentDefinition");
@@ -1195,16 +1428,30 @@ struct Archive {
   std::vector<std::tuple<uint64_t, std::string, std::shared_ptr<V>>> entity_list(uint32_t n,
                                                                                  bool root) {
     burn_stack.push_back(0);
+    inline_stack.emplace_back();
+    // indexed, not held by reference: nested lists grow the stack
+    const auto depth = inline_stack.size() - 1;
 
     struct PopGuard {
       Archive* a;
 
-      ~PopGuard() { a->burn_stack.pop_back(); }
+      ~PopGuard() {
+        a->burn_stack.pop_back();
+        a->inline_stack.pop_back();
+      }
     } pop_guard{this};
 
     std::vector<std::tuple<uint64_t, std::string, std::shared_ptr<V>>> v;
     while (v.size() < n) {
       auto save = r.p;
+      const auto& pending = inline_stack[depth];
+      if (!pending.empty() && v.size() + pending.size() >= n) {
+        // every item left is an instance an annotation already wrote in
+        // full and the list does not list again (see below)
+        auto next_ref = peek_backref();
+        if (!next_ref || std::find(pending.begin(), pending.end(), *next_ref) == pending.end())
+          break;
+      }
       bool has_burn_credit = !root && !burn_stack.empty() && burn_stack.back() > 0;
       if (has_burn_credit && save + 25 <= r.d.size() && read_u32(r.d, save) == 0 &&
           r.d[save + 22] == 255 && r.d[save + 23] == 254 && r.d[save + 24] == 255) {
@@ -1215,7 +1462,10 @@ struct Archive {
         break;
       }
       try {
-        v.push_back(object());
+        auto item = object();
+        auto& listed = inline_stack[depth];
+        listed.erase(std::remove(listed.begin(), listed.end(), std::get<0>(item)), listed.end());
+        v.push_back(std::move(item));
       } catch (...) {
         if (root) {
           // over-declared root counts run into the document tail - stop
@@ -1233,6 +1483,17 @@ struct Archive {
         }
         throw;
       }
+    }
+    // An instance an annotation wrote in full is one of this list's items,
+    // and the declared count holds it - but SketchUp does not always list it
+    // again with a back-reference (labels anchored to the loudspeakers of an
+    // auditorium: of five instances written in a definition's labels, three
+    // were listed again, two not). Keep the ones never listed, as the list's
+    // own entities.
+    for (auto slot : inline_stack[depth]) {
+      if (v.size() >= n) break;
+      const auto& e = slots.at(slot);
+      v.emplace_back(slot, e.name, e.v);
     }
     return v;
   }
@@ -1455,6 +1716,11 @@ WalkResult walk_model_on(Archive& ar, const ByteBuffer& data, int ver, size_t st
         dc = 0;
         ar.r.p -= 4;
       }
+    } else if (auto root_count_at = find_empty_root_after_v20_filler(data, ar.r.p - 4)) {
+      // No count behind the filler at all: an entirely empty model, whose root count is 0 (the
+      // retry only accepts counts > 0).
+      dc = 0;
+      ar.r.p = *root_count_at;
     }
   }
   if (dc > 1000000) throw std::runtime_error("invalid definition count");
@@ -1490,28 +1756,6 @@ WalkResult walk_model(const ByteBuffer& data, int ver, size_t start, uint32_t ma
   }
 }
 
-void add_edge(GeometryBuilder& b, uint64_t s, const V& e,
-              const std::unordered_map<uint64_t, Entry>& slots) {
-  if (b.edges.count(s)) return;
-  for (auto id : {e.v1, e.v2}) {
-    auto i = slots.find(id);
-    if (i != slots.end() && i->second.v && i->second.v->k == "vertex")
-      b.vertices[id] = i->second.v->xyz;
-  }
-  b.edges[s] = {EntityId(e.v1), EntityId(e.v2)};
-  int f = (e.soft ? 8 : 0) | (e.smooth ? 16 : 0) | (e.hidden ? 1 : 0);
-  if (f) b.edge_flags[s] = f;
-}
-
-// SketchUp's Dynamic Components extension stores its data in an attribute
-// dictionary literally named "dynamic_attributes" - a stable, publicly
-// documented part of the SketchUp Ruby API
-// (Entity#attribute_dictionary("dynamic_attributes")). CAttributeContainer/
-// CAttributeNamed reading above already fully decodes an entity's
-// attribute dictionaries for other purposes (CFaceTextureCoords lookup on
-// faces) - this just looks up that one dictionary by name, mirroring what
-// the VFF path's dynamic-properties extraction does for D007/DC05 TLV
-// data.
 ParsedAttrDictionaries extract_legacy_attribute_dictionaries(
     std::optional<uint64_t> attrs_slot, const std::unordered_map<uint64_t, Entry>& slots) {
   ParsedAttrDictionaries out;
@@ -1526,6 +1770,44 @@ ParsedAttrDictionaries extract_legacy_attribute_dictionaries(
   return out;
 }
 
+void add_edge(GeometryBuilder& b, uint64_t s, const V& e,
+              const std::unordered_map<uint64_t, Entry>& slots) {
+  if (b.edges.count(s)) return;
+  for (auto id : {e.v1, e.v2}) {
+    auto i = slots.find(id);
+    if (i != slots.end() && i->second.v && i->second.v->k == "vertex") {
+      b.vertices[id] = i->second.v->xyz;
+      b.persistent_ids[id] = i->second.v->native_pid;
+    }
+  }
+  b.edges[s] = {EntityId(e.v1), EntityId(e.v2)};
+  b.persistent_ids[s] = e.native_pid;
+  b.edge_flags[s] =
+      pack_draw(e.hidden, e.soft, e.smooth, e.locked, e.casts_shadows, e.receives_shadows);
+  b.edge_dictionaries[s] = extract_legacy_attribute_dictionaries(e.attrs, slots);
+  // The edge's parent Curve (the CCurve/CArcCurve slot) and, if that curve is an analytic arc, its
+  // frame: it arrives on the edge that first references the CArcCurve; every later edge on the arc
+  // back-refs it.
+  if (e.curve) {
+    b.edge_curves[s] = EntityId(*e.curve);
+    auto curve = slots.find(*e.curve);
+    if (curve != slots.end() && curve->second.v)
+      b.persistent_ids[*e.curve] = curve->second.v->native_pid;
+    if (e.curve_value && e.curve_value->k == "arccurve")
+      b.arc_curves[EntityId(*e.curve)] = e.curve_value->arc;
+  }
+}
+
+// SketchUp's Dynamic Components extension stores its data in an attribute
+// dictionary literally named "dynamic_attributes" - a stable, publicly
+// documented part of the SketchUp Ruby API
+// (Entity#attribute_dictionary("dynamic_attributes")). CAttributeContainer/
+// CAttributeNamed reading above already fully decodes an entity's
+// attribute dictionaries for other purposes (CFaceTextureCoords lookup on
+// faces) - this just looks up that one dictionary by name, mirroring what
+// the VFF path's dynamic-properties extraction does for D007/DC05 TLV
+// data.
+
 void fill(GeometryBuilder& b,
           const std::vector<std::tuple<uint64_t, std::string, std::shared_ptr<V>>>& ents,
           const std::unordered_map<uint64_t, Entry>& slots) {
@@ -1533,14 +1815,22 @@ void fill(GeometryBuilder& b,
     auto s = std::get<0>(x);
     auto v = std::get<2>(x);
     if (!v) continue;
+    b.persistent_ids[s] = v->native_pid;
     if (v->k == "edge")
       add_edge(b, s, *v, slots);
+    else if (v->k == "arccurve")
+      b.arc_curves[EntityId(s)] = v->arc;
     else if (v->k == "face") {
       RawFace f;
       f.normal = {v->plane[0], v->plane[1], v->plane[2]};
       if (v->mat) f.material_id = v->mat;
       if (v->back_mat) f.back_material_id = v->back_mat;
       f.hidden = v->hidden != 0;
+      f.locked = v->locked;
+      f.casts_shadows = v->casts_shadows;
+      f.receives_shadows = v->receives_shadows;
+      f.attribute_dictionaries = extract_legacy_attribute_dictionaries(v->attrs, slots);
+      if (v->layer) f.layer = std::to_string(v->layer);
       for (auto& lp : v->loops) {
         std::vector<CoEdge> co;
         for (auto& u : lp->uses) {
@@ -1581,6 +1871,10 @@ void fill(GeometryBuilder& b,
       b.faces[s] = std::move(f);
     } else if (v->k == "instance") {
       RawInstance i;
+      if (v->native_pid) i.id = v->native_pid;
+      i.locked = v->locked;
+      i.casts_shadows = v->casts_shadows;
+      i.receives_shadows = v->receives_shadows;
       i.name = v->name;
       i.ref_idx = v->def;
       i.matrix = v->xf;
@@ -1604,6 +1898,10 @@ void fill(GeometryBuilder& b,
       // Image entity parsed without error but never appeared anywhere a
       // caller could see it.
       RawInstance i;
+      if (v->native_pid) i.id = v->native_pid;
+      i.locked = v->locked;
+      i.casts_shadows = v->casts_shadows;
+      i.receives_shadows = v->receives_shadows;
       i.ref_idx = v->def;
       i.ref_guid = v->guid;
       i.matrix = v->xf;
@@ -1616,18 +1914,37 @@ void fill(GeometryBuilder& b,
       if (v->plane.size() == 4) {
         sp.plane = {v->plane[0], v->plane[1], v->plane[2], v->plane[3]};
       }
+      if (v->layer) sp.layer = std::to_string(v->layer);
       sp.name = v->name;
       sp.label = v->label;
+      sp.persistent_id = v->native_pid;
       sp.hidden = v->hidden != 0;
       b.section_planes.push_back(std::move(sp));
     } else if (v->k == "text") {
-      TextEntity te;
+      TextEntity te = v->annotation_text ? v->annotation_text->geometry : TextEntity{};
+      if (!te.point && v->annotation_text && v->annotation_text->vertex) {
+        const auto it = slots.find(*v->annotation_text->vertex);
+        if (it != slots.end() && it->second.v && it->second.v->k == "vertex")
+          te.point = it->second.v->xyz;
+      }
+      if (v->layer) te.layer = std::to_string(v->layer);
       te.text = v->text;
+      te.persistent_id = v->native_pid;
       te.hidden = v->hidden != 0;
       b.texts.push_back(std::move(te));
     } else if (v->k == "dimension") {
-      Dimension dim;
+      Dimension dim = v->dimension->geometry;
+      const auto resolve = [&](std::optional<Vec3>& point, const std::optional<uint64_t>& ref) {
+        if (point || !ref) return;
+        const auto it = slots.find(*ref);
+        if (it != slots.end() && it->second.v && it->second.v->k == "vertex")
+          point = it->second.v->xyz;
+      };
+      resolve(dim.a, v->dimension->connect1);
+      resolve(dim.b, v->dimension->connect2);
+      if (v->layer) dim.layer = std::to_string(v->layer);
       dim.text = v->text;
+      dim.persistent_id = v->native_pid;
       dim.hidden = v->hidden != 0;
       b.dimensions.push_back(std::move(dim));
     } else if (v->k == "constructionline") {
@@ -1636,10 +1953,16 @@ void fill(GeometryBuilder& b,
       cl.direction = v->direction;
       cl.start = v->start;
       cl.end = v->end;
+      if (v->layer) cl.layer = std::to_string(v->layer);
+      cl.persistent_id = v->native_pid;
+      cl.hidden = v->hidden != 0;
       b.construction_lines.push_back(std::move(cl));
     } else if (v->k == "constructionpoint") {
       ConstructionPoint cp;
       cp.position = v->xyz;
+      if (v->layer) cp.layer = std::to_string(v->layer);
+      cp.persistent_id = v->native_pid;
+      cp.hidden = v->hidden != 0;
       b.construction_points.push_back(std::move(cp));
     }
   }
@@ -1663,30 +1986,6 @@ bool is_allowed_page_flags(uint32_t flags) {
   for (auto f : kPageAllowedFlags)
     if (f == flags) return true;
   return false;
-}
-
-// Same conversion R::utf16() applies per UTF-16 code unit (no surrogate
-// pairing - matches this file's existing, already-shipped string
-// decoding elsewhere), just addressed by a raw (pos, char_count) range
-// instead of a cursor, since the page scan below needs to decode a name
-// it has already found the bounds of without re-walking a marker.
-std::string decode_utf16le_range(const ByteBuffer& d, size_t pos, size_t char_count) {
-  std::string s;
-  for (size_t i = 0; i < char_count; ++i) {
-    uint16_t c = uint16_t(d[pos]) | uint16_t(d[pos + 1]) << 8;
-    pos += 2;
-    if (c < 0x80) {
-      s += char(c);
-    } else if (c < 0x800) {
-      s += char(0xc0 | (c >> 6));
-      s += char(0x80 | (c & 63));
-    } else {
-      s += char(0xe0 | (c >> 12));
-      s += char(0x80 | ((c >> 6) & 63));
-      s += char(0x80 | (c & 63));
-    }
-  }
-  return s;
 }
 
 // Consume one reference to an object of `cls_name` - a null tag, a
@@ -1751,6 +2050,24 @@ void read_dib_body(R& r) {
 }
 
 }  // namespace
+
+// Declared in internal.hpp so the entity list's bookkeeping is unit-testable
+// without the full Archive type (see LegacySlotTable).
+LegacyEntityListResult read_legacy_entity_list(const ByteBuffer& data, std::size_t pos, int ver,
+                                               std::uint32_t count, LegacySlotTable table) {
+  Archive ar(data, ver);
+  ar.r.p = pos;
+  ar.slots = table.slots;
+  ar.class_slot = table.class_slot;
+  ar.next = table.next;
+  LegacyEntityListResult out;
+  for (auto& [slot, name, value] : ar.entity_list(count, false)) out.items.emplace_back(slot, name);
+  out.next = ar.r.p;
+  table.slots = std::move(ar.slots);
+  table.class_slot = std::move(ar.class_slot);
+  table.next = ar.next;
+  return out;
+}
 
 // Best-effort scan for CViewPage (scene) records: name + hidden-layer
 // slot ids only, for the narrow flag combinations this reader
@@ -1837,6 +2154,320 @@ std::vector<RawPage> scan_pages_for_layers(const ByteBuffer& data, std::size_t s
   return pages;
 }
 
+// ── full scene records ───────────────────────────────────────────────────
+//
+// Ground truth, all read byte-exactly: the gondola_v20.skp fixture (SketchUp 2020, one scene,
+// flags 0x1FF); SketchUp's own 3D Warehouse model "Skill Builder: Creating Section Animations
+// with Scenes" in its SketchUp 2017 format (eight scenes, 0x7F) and SketchUp 2015 saves (nine
+// scenes, 0x7F) - not redistributable, so not committed; files written by openskp.create, which
+// SketchUp Free opens with working scenes; and files built and saved through SketchUp's C API as
+// 2017 to 2020 (schema 15), whose names, cameras and hidden layers SketchUp's own library reads
+// back identically.
+//
+// The scene list sits in the document tail as a u32 count right before the first record (which
+// declares the CViewPage class), then one record per scene, then a ref to the selected scene. A
+// record is: the class tag | a null attribute ref | (schema 13+, SketchUp 2016+, only) a pid | name
+// | description | u32 capture flags | the camera (CCamera, or null) | the thumbnail (CDib, or
+// null) | (schema 13) a byte | then one section per capture flag that is set:
+//
+//   0x02 style       the rendering options (length by file version, see rendering_options_len)
+//                    + a CSkpStyle ref or object
+//   0x04 shadows     2 bytes (schema 13+: 3) + the shadow info
+//   0x08 axes        (schema 13+: a flag byte +) 110 bytes
+//   0x10 hidden      a byte, u32 n, n entity refs
+//   0x20 layers      u32 n, n refs to the layers (tags) the scene hides
+//   0x40 sections    u32 n, n section-plane refs
+//
+// | 22 bytes (transition and delay time, flags) | u32 n + an n-byte PNG.
+//
+// Schema 15 (a file saved through the C API as 2017 to 2020) differs: flag 0x01 is the camera,
+// which is only there when the flag is set, with no CDib tag, no byte after it and no thumbnail;
+// the rendering options are 3 bytes longer; the style options have two more value types
+// (3: 2 bytes, 5: 4 bytes); and the trailer is 21 bytes with no PNG after it.
+//
+// A record this reader can't fully read, or flags outside 0x1FF, make read_page_list give up (it
+// returns nullopt) and parse_legacy falls back to scan_pages_for_layers, which finds scene names
+// and hidden layers only - the same order as Python.
+namespace {
+
+constexpr uint32_t kPageKnownFlags = 0x1FF;
+constexpr size_t kPageAxesLen = 110;
+constexpr size_t kPageTrailerLen = 22;
+constexpr size_t kShadowInfoFixedLen = 60;  // after the city and country strings
+
+// The rendering options' length by SketchUp major version, measured on the model-level copy of the
+// same block in every fixture from 2014 to 2020 (and in the 2020 scene); other versions aren't
+// known, so give up there.
+int rendering_options_len(int ver) {
+  switch (ver) {
+    case 14:
+    case 15:
+    case 16:
+    case 17:
+      return 206;
+    case 18:
+      return 211;
+    case 19:
+      return 212;
+    case 20:
+      return 213;
+    default:
+      return -1;
+  }
+}
+
+// CSkpStyle option values: type tag -> byte size (-1 when unknown)
+int style_value_size(uint32_t type) {
+  switch (type) {
+    case 1:
+      return 1;
+    case 3:
+      return 2;
+    case 4:
+    case 5:
+    case 6:
+      return 4;
+    case 7:
+      return 8;
+    default:
+      return -1;
+  }
+}
+
+struct PageError : std::runtime_error {
+  using std::runtime_error::runtime_error;
+};
+
+enum class PageTag { null_tag, decl, class_ref, obj };
+
+// One archive tag, with the 0x7FFF escape to 32 bits resolved.
+std::pair<PageTag, uint64_t> read_page_tag(R& r) {
+  uint32_t v = r.u16();
+  if (v == 0) return {PageTag::null_tag, 0};
+  if (v == 0xFFFF) return {PageTag::decl, 0};
+  if (v == 0x7FFF) {
+    uint32_t w = r.u32();
+    return (w & 0x80000000u) ? std::pair<PageTag, uint64_t>{PageTag::class_ref, w & 0x7FFFFFFFu}
+                             : std::pair<PageTag, uint64_t>{PageTag::obj, w};
+  }
+  return (v & 0x8000) ? std::pair<PageTag, uint64_t>{PageTag::class_ref, v & 0x7FFFu}
+                      : std::pair<PageTag, uint64_t>{PageTag::obj, v};
+}
+
+int popcount8(unsigned mask) {
+  int n = 0;
+  for (int bit = 0; bit < 8; ++bit)
+    if (mask & (1u << bit)) ++n;
+  return n;
+}
+
+void skip_page_pid(R& r) { r.raw(size_t(popcount8(r.u8()))); }
+
+// The classes the scene records declare or refer to: the schema each was declared with and, once
+// seen, the slot its class-refs use - every class-ref to one class must carry the same slot, which
+// catches a record read from the wrong offset early.
+struct PageClasses {
+  // CCamera and CDib are declared in the document prefix; the scene records only refer to them, at
+  // the schemas every v6+ file uses.
+  std::map<std::string, int> schema{{"CCamera", 5}, {"CDib", 3}};
+  std::map<std::string, uint64_t> slot;
+
+  // After a decl or class tag: the declaration's header (if any); returns the schema the object
+  // was written with.
+  int object(R& r, PageTag kind, uint64_t s, const std::string& name) {
+    if (kind == PageTag::decl) {
+      int sch = r.u16();
+      size_t n = r.u16();
+      auto bytes = r.raw(n);
+      std::string got(bytes.begin(), bytes.end());
+      if (n != name.size() || got != name) throw PageError("expected a " + name + " declaration");
+      schema[name] = sch;
+    } else {
+      auto have = slot.find(name);
+      if (have == slot.end())
+        slot[name] = s;
+      else if (have->second != s)
+        throw PageError(name + " class-ref to another slot");
+    }
+    auto it = schema.find(name);
+    if (it == schema.end()) throw PageError(name + " object of an unknown schema");
+    return it->second;
+  }
+};
+
+void read_page_camera(R& r, RawPage& page) {
+  auto eye = r.f64s(3);
+  auto target = r.f64s(3);
+  auto up = r.f64s(3);
+  r.f64s(2);  // constants 1.0, 1000.0
+  uint8_t perspective = r.u8();
+  double fov = r.f64();
+  double ortho_height = r.f64();
+  r.raw(137 - 105);
+  r.u16();
+  r.utf16();
+  r.raw(33);
+  page.eye = Vec3{eye[0], eye[1], eye[2]};
+  page.target = Vec3{target[0], target[1], target[2]};
+  page.up = Vec3{up[0], up[1], up[2]};
+  page.fov = fov;
+  page.parallel = perspective == 0;
+  page.ortho_height = ortho_height;
+}
+
+// A CSkpStyle object's body: no attributes, a pid (schema 2+), GUID, a string, u32, name,
+// description, then its options - each a u32 key and a u32 count of (u32 type, value) pairs.
+void skip_page_style(R& r, int schema) {
+  if (r.u16() != 0) throw PageError("style with attributes");
+  if (schema >= 2) skip_page_pid(r);
+  r.raw(16);
+  r.utf16();
+  r.u32();
+  r.utf16();
+  r.utf16();
+  uint32_t n = r.u32();
+  for (uint32_t i = 0; i < n; ++i) {
+    r.u32();
+    uint32_t m = r.u32();
+    for (uint32_t j = 0; j < m; ++j) {
+      int size = style_value_size(r.u32());
+      if (size < 0) throw PageError("unknown style value type");
+      r.raw(size_t(size));
+    }
+  }
+}
+
+std::vector<EntityId> read_page_refs(R& r, uint32_t n) {
+  if (n > (r.d.size() - r.p) / 2) throw PageError("implausible ref count");
+  std::vector<EntityId> refs;
+  for (uint32_t i = 0; i < n; ++i) {
+    auto [kind, v] = read_page_tag(r);
+    if (kind != PageTag::obj) throw PageError("expected a back-ref");
+    refs.push_back(EntityId(v));
+  }
+  return refs;
+}
+
+RawPage read_page_record(Archive& ar, R& r, PageClasses& classes) {
+  auto [kind, slot] = read_page_tag(r);
+  if (kind != PageTag::decl && kind != PageTag::class_ref)
+    throw PageError("expected a CViewPage record");
+  int schema = classes.object(r, kind, slot, "CViewPage");
+  if (r.u16() != 0) throw PageError("scene with attributes");
+  if (schema >= 13) skip_page_pid(r);
+  RawPage page;
+  page.name = r.utf16();
+  r.utf16();  // description
+  uint32_t flags = r.u32();
+  if (flags & ~kPageKnownFlags) throw PageError("scene capture flags");
+  if (schema >= 15) {
+    // saved through SketchUp's C API: the camera is there when its flag is, and there is no
+    // thumbnail
+    if (flags & 0x01) {
+      std::tie(kind, slot) = read_page_tag(r);
+      if (kind != PageTag::decl && kind != PageTag::class_ref) throw PageError("expected a camera");
+      classes.object(r, kind, slot, "CCamera");
+      read_page_camera(r, page);
+    }
+  } else {
+    std::tie(kind, slot) = read_page_tag(r);
+    if (kind == PageTag::decl || kind == PageTag::class_ref) {
+      classes.object(r, kind, slot, "CCamera");
+      read_page_camera(r, page);
+    }
+    std::tie(kind, slot) = read_page_tag(r);
+    if (kind == PageTag::decl || kind == PageTag::class_ref) {
+      classes.object(r, kind, slot, "CDib");
+      read_dib_body(r);
+    }
+    if (schema >= 13) r.u8();
+  }
+  if (flags & 0x02) {
+    int base = rendering_options_len(ar.ver);
+    if (base < 0) throw PageError("rendering options of an unknown version");
+    r.raw(size_t(base + (schema >= 15 ? 3 : 0)));
+    std::tie(kind, slot) = read_page_tag(r);
+    if (kind == PageTag::decl || kind == PageTag::class_ref)
+      skip_page_style(r, classes.object(r, kind, slot, "CSkpStyle"));
+  }
+  if (flags & 0x04) {
+    r.raw(schema >= 13 ? 3 : 2);
+    r.u32();  // time
+    r.u8();
+    r.utf16();  // city
+    r.utf16();  // country
+    r.raw(kShadowInfoFixedLen);
+  }
+  if (flags & 0x08) r.raw(kPageAxesLen + (schema >= 13 ? 1 : 0));
+  if (flags & 0x10) {
+    r.u8();
+    read_page_refs(r, r.u32());
+  }
+  if (flags & 0x20) page.hidden_layer_ids = read_page_refs(r, r.u32());
+  if (flags & 0x40) read_page_refs(r, r.u32());
+  if (schema >= 15) {
+    r.raw(kPageTrailerLen - 1);
+    return page;
+  }
+  r.raw(kPageTrailerLen);
+  uint32_t png = r.u32();
+  if (png > r.d.size() - r.p) throw PageError("implausible thumbnail length");
+  r.raw(png);
+  return page;
+}
+
+// Every scene, with its camera and hidden layers, read as a sequence from the scene list in the
+// file tail. nullopt when there is a scene list this reader can't fully read; an empty list when
+// there is none.
+std::optional<std::vector<RawPage>> read_page_list(const ByteBuffer& data, Archive& ar) {
+  static const std::string kClass = "CViewPage";
+  size_t start = std::string::npos;
+  for (size_t i = ar.r.p; i + 6 + kClass.size() <= data.size(); ++i) {
+    if (data[i] != 0xFF || data[i + 1] != 0xFF) continue;
+    uint8_t schema = data[i + 2];
+    if (schema != 0x0C && schema != 0x0D && schema != 0x0F) continue;
+    if (data[i + 3] != 0x00 || data[i + 4] != 0x09 || data[i + 5] != 0x00) continue;
+    if (std::equal(kClass.begin(), kClass.end(), data.begin() + i + 6)) {
+      start = i;
+      break;
+    }
+  }
+  if (start == std::string::npos) {
+    // a scene list in a schema this reader doesn't know
+    auto it = std::search(data.begin() + std::min(ar.r.p, data.size()), data.end(), kClass.begin(),
+                          kClass.end());
+    if (it != data.end()) return std::nullopt;
+    return std::vector<RawPage>{};
+  }
+  try {
+    if (start < 4) return std::nullopt;
+    uint32_t count = read_u32(data, start - 4);
+    if (count < 1 || count > 10000) throw PageError("implausible scene count");
+    R r{data, start};
+    PageClasses classes;
+    std::vector<RawPage> pages;
+    for (uint32_t i = 0; i < count; ++i) pages.push_back(read_page_record(ar, r, classes));
+    // the list ends with a ref to the selected scene (or a null ref)
+    auto [kind, v] = read_page_tag(r);
+    (void)v;
+    if (kind != PageTag::obj && kind != PageTag::null_tag) throw PageError("no selected-scene ref");
+    for (auto& page : pages) {
+      std::vector<EntityId> kept;
+      for (auto id : page.hidden_layer_ids) {
+        auto it = ar.slots.find(id);
+        if (it != ar.slots.end() && !it->second.cls && it->second.name == "CLayer")
+          kept.push_back(id);
+      }
+      page.hidden_layer_ids = std::move(kept);
+    }
+    return pages;
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+}  // namespace
+
 RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
   emit_log(o, LogLevel::information,
            "Parsing legacy MFC container (" + std::to_string(data.size()) + " bytes)");
@@ -1899,6 +2530,7 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
     for (auto& m : mats) {
       auto v = m.second;
       auto x = std::make_shared<RawMaterial>();
+      x->native_pid = v->native_pid;
       x->name = v->name;
       x->r = v->r;
       x->g = v->g;
@@ -1906,7 +2538,7 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
       x->a = v->a;
       x->transparency = std::clamp(1.0 - v->opacity, 0.0, 1.0);
       x->colorized = v->colorized;
-      x->colorize_type = v->colorized ? 1 : 0;
+      x->colorize_type = v->colorize_type;
       if (v->tex_dib || v->inline_tex) {
         RawTexture t;
         t.filename = v->tex_file;
@@ -1927,12 +2559,16 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
       out.material_id_to_name[m.first] = x->name;
     }
     for (auto& l : layers) {
+      out.layer_persistent_ids[l.second->name] = l.second->native_pid;
+      if (l.second->native_pid)
+        out.layer_persistent_id_aliases[l.second->name].insert(l.second->native_pid);
       out.layer_id_to_name[l.first] = l.second->name;
       if (!out.layer_colors.count(l.second->name)) out.layer_order.push_back(l.second->name);
       out.layer_colors[l.second->name] = {uint8_t(l.second->r), uint8_t(l.second->g),
                                           uint8_t(l.second->b)};
       out.layer_hidden[l.second->name] = l.second->hidden != 0;
       auto dicts = extract_legacy_attribute_dictionaries(l.second->attrs, ar.slots);
+      out.layer_parsed_dictionaries[l.second->name] = dicts;
       // Layer::attribute_dictionaries stays string-typed by design (matches
       // Instance's own pre-#368 contract for the model-level scene/JSON/IFC
       // consumers PR #369 wired it into) - the shared extraction above
@@ -1957,18 +2593,30 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
     for (auto& s : ar.slots)
       if (!s.second.cls && s.second.name == "CComponentDefinition" && s.second.v) {
         RawDefinition d;
+        d.native_pid = s.second.v->native_pid;
+        d.description = s.second.v->description;
+        d.path = s.second.v->path;
+        d.load_time = s.second.v->load_time;
+        d.hidden = s.second.v->hidden != 0;
+        d.thumbnail_camera = s.second.v->camera;
+        d.parsed_dictionaries = extract_legacy_attribute_dictionaries(s.second.v->attrs, ar.slots);
         d.name = s.second.v->name;
         d.guid = s.second.v->guid;
         d.always_faces_camera = s.second.v->faces_camera;
         d.shadows_face_sun = s.second.v->shadows_face_sun;
         d.is_image = image_def_ids.count(s.first) != 0;
+        d.is_group = s.second.v->is_group;
+        d.type_known = s.second.v->type_known;
         fill(d.builder, s.second.v->ents, ar.slots);
         out.definitions[s.first] = std::move(d);
       }
     fill(out.root.builder, root, ar.slots);
     try {
-      out.pages =
-          scan_pages_for_layers(data, ar.r.p, LegacySlotTable{ar.slots, ar.class_slot, ar.next});
+      // whole scene records first; the narrow scan only when the full reader gives up on one
+      auto pages = read_page_list(data, ar);
+      out.pages = pages ? std::move(*pages)
+                        : scan_pages_for_layers(data, ar.r.p,
+                                                LegacySlotTable{ar.slots, ar.class_slot, ar.next});
     } catch (const std::exception&) {
       out.pages.clear();
     }

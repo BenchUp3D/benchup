@@ -1,5 +1,5 @@
 //! Normalize externally authored surfaces without moving shared vertices.
-use crate::{DVec3, Edge, Face, Model, faces};
+use crate::{DVec3, Edge, Face, Model, Vertex, document::EPS, faces};
 use std::collections::{BTreeMap, BTreeSet};
 
 impl Model {
@@ -16,6 +16,22 @@ impl Model {
                 *ring = faces::strip_spurs(std::mem::take(ring));
             }
         }
+        // Some source faces walk the same curve out and back using different
+        // vertex IDs. They have no filled surface, but their edges are editable.
+        let retraced: BTreeSet<_> = self
+            .faces
+            .values()
+            .filter(|face| retraces_boundary(&self.vertices, &face.vertices))
+            .map(|face| face.id)
+            .collect();
+        if !retraced.is_empty() {
+            for id in &retraced {
+                self.remove_imported_face(id);
+            }
+            for object in self.objects.values_mut() {
+                object.entities.retain(|id| !retraced.contains(id));
+            }
+        }
         self.deduplicate_imported_faces();
         let warped: Vec<_> = self
             .faces
@@ -28,7 +44,7 @@ impl Model {
             .cloned()
             .collect();
         if warped.is_empty() {
-            return Ok(());
+            return self.separate_coincident_imported_faces();
         }
         let mut edges: BTreeMap<_, _> = self
             .edges
@@ -176,10 +192,9 @@ impl Model {
                 object.entities.extend(&added);
             }
         }
-        // Tessellation can also reproduce a triangle already present in the
-        // source. Keep one editable surface per exact boundary and properties.
+        // Tessellation can also reproduce a triangle already present in the source.
         self.deduplicate_imported_faces();
-        Ok(())
+        self.separate_coincident_imported_faces()
     }
 
     fn deduplicate_imported_faces(&mut self) {
@@ -210,11 +225,7 @@ impl Model {
             return;
         }
         for id in duplicates.keys() {
-            self.faces.remove(id);
-            self.face_colors.remove(id);
-            self.hidden.remove(id);
-            self.locked.remove(id);
-            self.entity_tags.remove(id);
+            self.remove_imported_face(id);
         }
         for object in self.objects.values_mut() {
             object.entities = std::mem::take(&mut object.entities)
@@ -223,13 +234,89 @@ impl Model {
                 .collect();
         }
     }
+
+    /// Distinct surfaces sharing one outer boundary need separate topology to
+    /// retain their colors and holes in a model that requires unique face rings.
+    fn separate_coincident_imported_faces(&mut self) -> Result<(), &'static str> {
+        let mut seen = BTreeSet::new();
+        let coincident: Vec<_> = self.faces.values()
+            .filter(|face| !seen.insert(faces::canonical_ring(&face.vertices)))
+            .cloned()
+            .collect();
+        if coincident.is_empty() {
+            return Ok(());
+        }
+        let edges: BTreeMap<_, _> = self.edges.values()
+            .map(|edge| ((edge.a.min(edge.b), edge.a.max(edge.b)), edge.id))
+            .collect();
+        for mut face in coincident {
+            let mut points = BTreeSet::new();
+            let mut pairs = BTreeSet::new();
+            for ring in std::iter::once(&face.vertices).chain(&face.holes) {
+                points.extend(ring.iter().copied());
+                pairs.extend(ring.iter().zip(ring.iter().cycle().skip(1))
+                    .map(|(&a, &b)| (a.min(b), a.max(b))));
+            }
+            if self.next_id.saturating_add((points.len() + pairs.len()) as u64) > 1_000_000 {
+                return Err(tr!("core.document.model_is_too_large"));
+            }
+            let mut remap = BTreeMap::new();
+            for old in points {
+                let position = self.vertices.get(&old)
+                    .ok_or(tr!("core.document.invalid_face_boundary"))?.position;
+                let id = self.id();
+                self.vertices.insert(id, Vertex { id, position });
+                remap.insert(old, id);
+            }
+            let mut added = Vec::with_capacity(pairs.len());
+            for (a, b) in pairs {
+                let source = edges.get(&(a, b))
+                    .ok_or(tr!("core.document.face_boundary_is_missing_an_edge"))?;
+                let id = self.id();
+                self.edges.insert(id, Edge { id, a: remap[&a], b: remap[&b] });
+                if self.hidden.contains(source) {
+                    self.hidden.insert(id);
+                }
+                added.push(id);
+            }
+            for id in face.vertices.iter_mut().chain(face.holes.iter_mut().flatten()) {
+                *id = remap[id];
+            }
+            for object in self.objects.values_mut().filter(|object| object.entities.contains(&face.id)) {
+                object.entities.extend(&added);
+            }
+            self.faces.insert(face.id, face);
+        }
+        Ok(())
+    }
+
+    fn remove_imported_face(&mut self, id: &u64) {
+        self.faces.remove(id);
+        self.face_colors.remove(id);
+        self.hidden.remove(id);
+        self.locked.remove(id);
+        self.entity_tags.remove(id);
+    }
+}
+
+fn retraces_boundary(vertices: &BTreeMap<u64, Vertex>, ring: &[u64]) -> bool {
+    let len = ring.len();
+    if len < 4 || len % 2 != 0 {
+        return false;
+    }
+    let matches = |i, j| {
+        vertices.get(&ring[i]).zip(vertices.get(&ring[j])).is_some_and(|(a, b)| {
+            a.position.distance_squared(b.position) <= EPS * EPS
+        })
+    };
+    (0..len)
+        .find(|&i| matches((i + len - 1) % len, (i + 1) % len))
+        .is_some_and(|i| (2..len / 2).all(|d| matches((i + len - d) % len, (i + d) % len)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Vertex;
-
     fn imported_face(rings: &[&[[f64; 3]]]) -> Model {
         let mut model = Model::default();
         let mut vertices = BTreeMap::new();
@@ -268,6 +355,24 @@ mod tests {
             },
         );
         model
+    }
+
+    #[test]
+    fn retraced_imported_boundary_keeps_edges_without_an_empty_face() {
+        let mut model = imported_face(&[&[
+            [0., 0., 0.],
+            [1., 0., 0.],
+            [1., 1., 0.],
+            [0., 1., 0.],
+            [1., 1., 1e-12],
+            [1., 0., 1e-12],
+        ]]);
+        let edges = model.edges.clone();
+
+        model.normalize_imported_faces().unwrap();
+        model.validate().unwrap();
+        assert!(model.faces.is_empty());
+        assert_eq!(model.edges, edges);
     }
 
     #[test]
@@ -428,7 +533,7 @@ mod tests {
     }
 
     #[test]
-    fn coincident_boundaries_with_different_holes_or_colors_are_not_silently_removed() {
+    fn coincident_boundaries_with_different_holes_or_colors_keep_both_surfaces() {
         for different_hole in [false, true] {
             let mut model = imported_face(&[
                 &[[0., 0., 0.], [4., 0., 0.], [4., 4., 0.], [0., 4., 0.]],
@@ -441,10 +546,25 @@ mod tests {
             } else {
                 model.face_colors.insert(copy.id, [210, 45, 30]);
             }
-            model.faces.insert(copy.id, copy);
+            let original = *model.faces.keys().next().unwrap();
+            let copy_id = copy.id;
+            model.faces.insert(copy_id, copy);
+            let group = model.id();
+            model.objects.insert(group, serde_json::from_value(serde_json::json!({
+                "id": group, "name": "Overlap", "kind": "Group",
+                "entities": model.edges.keys().chain(model.faces.keys()).collect::<Vec<_>>(),
+            })).unwrap());
             model.normalize_imported_faces().unwrap();
             assert_eq!(model.faces.len(), 2);
-            assert!(model.validate().is_err());
+            model.validate().unwrap();
+            assert_ne!(model.faces[&original].vertices, model.faces[&copy_id].vertices);
+            assert_eq!(model.face_area(&model.faces[&original]), 12.);
+            assert_eq!(model.face_area(&model.faces[&copy_id]), if different_hole { 16. } else { 12. });
+            assert_eq!(model.face_colors.get(&copy_id).copied(), (!different_hole).then_some([210, 45, 30]));
+            assert_eq!(model.objects[&group].entities.len(), model.edges.len() + model.faces.len());
+            let before = model.clone();
+            model.normalize_imported_faces().unwrap();
+            assert_eq!(model, before);
         }
     }
 

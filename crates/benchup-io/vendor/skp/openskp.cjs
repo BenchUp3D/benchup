@@ -53,6 +53,7 @@ __export(index_exports, {
   exportSTL: () => exportSTL,
   extractThumbnail: () => extractThumbnail,
   faceUvBasis: () => faceUvBasis,
+  fromFragments: () => fromFragments,
   generateIFCGUID: () => generateIFCGUID,
   isDrawableEdge: () => isDrawableEdge,
   openExisting: () => openExisting,
@@ -85,6 +86,220 @@ function emitLog(options, level, message) {
 }
 function emitProgress(options, stage, current, total) {
   options?.onProgress?.({ stage, current, total });
+}
+
+// src/errors.ts
+var SkpParseError = class _SkpParseError extends Error {
+  constructor(message, context = {}) {
+    const parts = [message];
+    if (context.stage !== void 0) parts.push(`stage=${context.stage}`);
+    if (context.recordIndex !== void 0 && context.totalRecords !== void 0) {
+      parts.push(`record=${context.recordIndex}/${context.totalRecords}`);
+    }
+    if (context.tag !== void 0) parts.push(`tag=${context.tag}`);
+    if (context.offset !== void 0) parts.push(`offset=0x${context.offset.toString(16).toUpperCase()}`);
+    if (context.definitionId !== void 0) parts.push(`definitionId=${context.definitionId}`);
+    super(parts.join(" | "));
+    this.name = "SkpParseError";
+    this.stage = context.stage;
+    this.recordIndex = context.recordIndex;
+    this.totalRecords = context.totalRecords;
+    this.tag = context.tag;
+    this.offset = context.offset;
+    this.definitionId = context.definitionId;
+    this.cause = context.cause;
+    Object.setPrototypeOf(this, _SkpParseError.prototype);
+  }
+};
+
+// src/parser.ts
+var CONTAINER_TAGS = /* @__PURE__ */ new Set([
+  "F401",
+  "F701",
+  "D430",
+  "D530",
+  "C832",
+  "7C15",
+  "8813",
+  "8913",
+  "8A13",
+  "8B13",
+  "8C13",
+  "8D13",
+  "4C1D",
+  "6419",
+  "F901",
+  "7017",
+  "7117",
+  "D007",
+  "C409",
+  "9411",
+  "9511",
+  "0F01",
+  "384A",
+  "B80B",
+  "9713",
+  "2C4C",
+  "AC0D",
+  "AE0D",
+  "F601",
+  "F801",
+  "983A",
+  "993A",
+  "8C3C",
+  "8D3C",
+  // Image-entity placement: an Image placed in the model wraps a standard
+  // 6419 instance node inside 9013 -> 401F. Without these two containers,
+  // that inner instance stays buried in an opaque payload and the image
+  // definition looks "never placed".
+  "9013",
+  "401F",
+  // VFF per-definition guide lines/points and their entity/drawbase wrappers.
+  "9113",
+  "9213",
+  "6942",
+  "6C42",
+  "6842"
+]);
+function readU32(data, offset) {
+  if (offset + 4 > data.length) {
+    throw new Error("Out of bounds readU32");
+  }
+  const view = new DataView(data.buffer, data.byteOffset + offset, 4);
+  return view.getUint32(0, true);
+}
+function readF64(data, offset) {
+  if (offset + 8 > data.length) {
+    throw new Error("Out of bounds readF64");
+  }
+  const view = new DataView(data.buffer, data.byteOffset + offset, 8);
+  return view.getFloat64(0, true);
+}
+function readI32(data, offset) {
+  if (offset + 4 > data.length) {
+    throw new Error("Out of bounds readI32");
+  }
+  const view = new DataView(data.buffer, data.byteOffset + offset, 4);
+  return view.getInt32(0, true);
+}
+function parseVarInt(data, offset, length) {
+  let val = 0;
+  for (let i = 0; i < length; i++) {
+    val += data[offset + i] * Math.pow(256, i);
+  }
+  return val;
+}
+var MAX_TLV_DEPTH = 64;
+function nestingError(tag, offset) {
+  return new SkpParseError(`TLV records nest deeper than ${MAX_TLV_DEPTH} levels`, {
+    stage: "tlv_walk",
+    tag,
+    offset
+  });
+}
+function parseTlvRecursive(data, start, end, containerTags = CONTAINER_TAGS, depth = 0) {
+  let pos = start;
+  const elements = [];
+  while (pos <= end - 6) {
+    const tagBytes = data.subarray(pos, pos + 2);
+    const size = readU32(data, pos + 2);
+    if (pos + 6 + size > end) {
+      break;
+    }
+    let tagHex = "";
+    for (let i = 0; i < 2; i++) {
+      const hex = tagBytes[i].toString(16).toUpperCase();
+      tagHex += hex.length === 1 ? "0" + hex : hex;
+    }
+    let children = [];
+    const isContainer = containerTags.has(tagHex);
+    if (isContainer && size > 0) {
+      if (depth >= MAX_TLV_DEPTH) throw nestingError(tagHex, pos);
+      children = parseTlvRecursive(
+        data,
+        pos + 6,
+        pos + 6 + size,
+        containerTags,
+        depth + 1
+      );
+    }
+    const payload = children.length > 0 ? new Uint8Array(0) : data.subarray(pos + 6, pos + 6 + size);
+    elements.push({
+      offset: pos,
+      tag: tagHex,
+      size,
+      children,
+      payload
+    });
+    pos += 6 + size;
+  }
+  return elements;
+}
+function flatHeaders(data, start, end) {
+  const headers = [];
+  let pos = start;
+  while (pos <= end - 6) {
+    const tagBytes = data.subarray(pos, pos + 2);
+    const size = readU32(data, pos + 2);
+    if (pos + 6 + size > end) break;
+    let tagHex = "";
+    for (let i = 0; i < 2; i++) {
+      const hex = tagBytes[i].toString(16).toUpperCase();
+      tagHex += hex.length === 1 ? "0" + hex : hex;
+    }
+    headers.push([tagHex, pos, size]);
+    pos += 6 + size;
+  }
+  return headers;
+}
+function requireCompleteTopLevel(data, start, end) {
+  let pos = start;
+  while (pos <= end - 6) {
+    const size = readU32(data, pos + 2);
+    if (pos + 6 + size > end) {
+      const tag = (data[pos] << 8 | data[pos + 1]).toString(16).toUpperCase().padStart(4, "0");
+      throw new SkpParseError(
+        `model.dat is truncated: the top-level record declares ${size} bytes but only ${end - pos - 6} remain`,
+        { stage: "tlv_walk", tag, offset: pos }
+      );
+    }
+    pos += 6 + size;
+  }
+}
+var PASS_THROUGH_WRAPPERS = /* @__PURE__ */ new Set(["F901", "7017", "7117"]);
+function expandWrappers(data, headers, containerTags, depth = 0) {
+  const out = [];
+  for (const header of headers) {
+    const [tag, offset, size] = header;
+    if (PASS_THROUGH_WRAPPERS.has(tag) && containerTags.has(tag)) {
+      if (depth >= MAX_TLV_DEPTH) throw nestingError(tag, offset);
+      out.push(
+        ...expandWrappers(data, flatHeaders(data, offset + 6, offset + 6 + size), containerTags, depth + 1)
+      );
+    } else {
+      out.push(header);
+    }
+  }
+  return out;
+}
+function* iterTopLevelLazy(data, start, end, containerTags = CONTAINER_TAGS) {
+  requireCompleteTopLevel(data, start, end);
+  let headers = flatHeaders(data, start, end);
+  if (headers.length === 1 && headers[0][0] === "F401") {
+    const [, f401Offset, f401Size] = headers[0];
+    headers = flatHeaders(data, f401Offset + 6, f401Offset + 6 + f401Size);
+  }
+  headers = expandWrappers(data, headers, containerTags);
+  const total = headers.length;
+  let index = 0;
+  for (const [, offset, size] of headers) {
+    const recordEnd = offset + 6 + size;
+    const nodes = parseTlvRecursive(data, offset, recordEnd, containerTags);
+    if (nodes.length > 0) {
+      yield { index, total, node: nodes[0] };
+    }
+    index++;
+  }
 }
 
 // src/vff.ts
@@ -157,18 +372,25 @@ var META_WRAPPER_TAG = [100, 0];
 var META_UNITS_TAG = [109, 0];
 function readMetaUnits(metaBytes) {
   const view = new DataView(metaBytes.buffer, metaBytes.byteOffset, metaBytes.byteLength);
-  let pos = 0;
-  while (pos + 6 <= metaBytes.length) {
-    const tag = [metaBytes[pos], metaBytes[pos + 1]];
-    const size = view.getUint32(pos + 2, true);
-    if (pos + 6 + size > metaBytes.length) break;
-    if (tag[0] === META_WRAPPER_TAG[0] && tag[1] === META_WRAPPER_TAG[1]) {
-      return readMetaUnits(metaBytes.subarray(pos + 6, pos + 6 + size));
+  let start = 0;
+  let end = metaBytes.length;
+  for (let level = 0; level <= MAX_TLV_DEPTH; level++) {
+    let pos = start;
+    let inner = null;
+    while (pos + 6 <= end) {
+      const size = view.getUint32(pos + 2, true);
+      if (pos + 6 + size > end) break;
+      if (metaBytes[pos] === META_WRAPPER_TAG[0] && metaBytes[pos + 1] === META_WRAPPER_TAG[1]) {
+        inner = [pos + 6, pos + 6 + size];
+        break;
+      }
+      if (metaBytes[pos] === META_UNITS_TAG[0] && metaBytes[pos + 1] === META_UNITS_TAG[1]) {
+        return new TextDecoder("utf-8").decode(metaBytes.subarray(pos + 6, pos + 6 + size));
+      }
+      pos += 6 + size;
     }
-    if (tag[0] === META_UNITS_TAG[0] && tag[1] === META_UNITS_TAG[1]) {
-      return new TextDecoder("utf-8").decode(metaBytes.subarray(pos + 6, pos + 6 + size));
-    }
-    pos += 6 + size;
+    if (inner === null) return null;
+    [start, end] = inner;
   }
   return null;
 }
@@ -241,173 +463,6 @@ function extractSkpContents(data, options) {
   };
 }
 
-// src/parser.ts
-var CONTAINER_TAGS = /* @__PURE__ */ new Set([
-  "F401",
-  "F701",
-  "D430",
-  "D530",
-  "C832",
-  "7C15",
-  "8813",
-  "8913",
-  "8A13",
-  "8B13",
-  "8C13",
-  "8D13",
-  "4C1D",
-  "6419",
-  "F901",
-  "7017",
-  "7117",
-  "D007",
-  "C409",
-  "9411",
-  "9511",
-  "0F01",
-  "384A",
-  "B80B",
-  "9713",
-  "2C4C",
-  "AC0D",
-  "AE0D",
-  "F601",
-  "F801",
-  "983A",
-  "993A",
-  "8C3C",
-  "8D3C",
-  // Image-entity placement: an Image placed in the model wraps a standard
-  // 6419 instance node inside 9013 -> 401F. Without these two containers,
-  // that inner instance stays buried in an opaque payload and the image
-  // definition looks "never placed".
-  "9013",
-  "401F"
-]);
-function readU32(data, offset) {
-  if (offset + 4 > data.length) {
-    throw new Error("Out of bounds readU32");
-  }
-  const view = new DataView(data.buffer, data.byteOffset + offset, 4);
-  return view.getUint32(0, true);
-}
-function readF64(data, offset) {
-  if (offset + 8 > data.length) {
-    throw new Error("Out of bounds readF64");
-  }
-  const view = new DataView(data.buffer, data.byteOffset + offset, 8);
-  return view.getFloat64(0, true);
-}
-function readI32(data, offset) {
-  if (offset + 4 > data.length) {
-    throw new Error("Out of bounds readI32");
-  }
-  const view = new DataView(data.buffer, data.byteOffset + offset, 4);
-  return view.getInt32(0, true);
-}
-function parseVarInt(data, offset, length) {
-  let val = 0;
-  for (let i = 0; i < length; i++) {
-    val += data[offset + i] * Math.pow(256, i);
-  }
-  return val;
-}
-function parseTlvRecursive(data, start, end, containerTags = CONTAINER_TAGS, depth = 0) {
-  let pos = start;
-  const elements = [];
-  while (pos <= end - 6) {
-    const tagBytes = data.subarray(pos, pos + 2);
-    const size = readU32(data, pos + 2);
-    if (pos + 6 + size > end) {
-      break;
-    }
-    let tagHex = "";
-    for (let i = 0; i < 2; i++) {
-      const hex = tagBytes[i].toString(16).toUpperCase();
-      tagHex += hex.length === 1 ? "0" + hex : hex;
-    }
-    let children = [];
-    const isContainer = containerTags.has(tagHex);
-    if (isContainer && size > 0) {
-      children = parseTlvRecursive(
-        data,
-        pos + 6,
-        pos + 6 + size,
-        containerTags,
-        depth + 1
-      );
-    }
-    const payload = children.length > 0 ? new Uint8Array(0) : data.subarray(pos + 6, pos + 6 + size);
-    elements.push({
-      offset: pos,
-      tag: tagHex,
-      size,
-      children,
-      payload
-    });
-    pos += 6 + size;
-  }
-  return elements;
-}
-function flatHeaders(data, start, end) {
-  const headers = [];
-  let pos = start;
-  while (pos <= end - 6) {
-    const tagBytes = data.subarray(pos, pos + 2);
-    const size = readU32(data, pos + 2);
-    if (pos + 6 + size > end) break;
-    let tagHex = "";
-    for (let i = 0; i < 2; i++) {
-      const hex = tagBytes[i].toString(16).toUpperCase();
-      tagHex += hex.length === 1 ? "0" + hex : hex;
-    }
-    headers.push([tagHex, pos, size]);
-    pos += 6 + size;
-  }
-  return headers;
-}
-function* iterTopLevelLazy(data, start, end, containerTags = CONTAINER_TAGS) {
-  let headers = flatHeaders(data, start, end);
-  if (headers.length === 1 && headers[0][0] === "F401") {
-    const [, f401Offset, f401Size] = headers[0];
-    headers = flatHeaders(data, f401Offset + 6, f401Offset + 6 + f401Size);
-  }
-  const total = headers.length;
-  let index = 0;
-  for (const [, offset, size] of headers) {
-    const recordEnd = offset + 6 + size;
-    const nodes = parseTlvRecursive(data, offset, recordEnd, containerTags);
-    if (nodes.length > 0) {
-      yield { index, total, node: nodes[0] };
-    }
-    index++;
-  }
-}
-
-// src/errors.ts
-var SkpParseError = class _SkpParseError extends Error {
-  constructor(message, context = {}) {
-    const parts = [message];
-    if (context.stage !== void 0) parts.push(`stage=${context.stage}`);
-    if (context.recordIndex !== void 0 && context.totalRecords !== void 0) {
-      parts.push(`record=${context.recordIndex}/${context.totalRecords}`);
-    }
-    if (context.tag !== void 0) parts.push(`tag=${context.tag}`);
-    if (context.offset !== void 0) parts.push(`offset=0x${context.offset.toString(16).toUpperCase()}`);
-    if (context.definitionId !== void 0) parts.push(`definitionId=${context.definitionId}`);
-    super(parts.join(" | "));
-    this.name = "SkpParseError";
-    this.stage = context.stage;
-    this.recordIndex = context.recordIndex;
-    this.totalRecords = context.totalRecords;
-    this.tag = context.tag;
-    this.offset = context.offset;
-    this.definitionId = context.definitionId;
-    this.cause = context.cause;
-    Object.setPrototypeOf(this, _SkpParseError.prototype);
-  }
-};
-
 // src/edge-flags.ts
 var EdgeFlagStore = class {
   constructor() {
@@ -419,6 +474,8 @@ var EdgeFlagStore = class {
     this.baseId = 0;
     this.initialized = false;
     this.count = 0;
+    /** Highest slot ever handed out; slots above it hold nothing. */
+    this.highSlot = 0;
   }
   /** Number of ids actually stored. */
   get size() {
@@ -437,21 +494,25 @@ var EdgeFlagStore = class {
       return 0;
     }
     if (id < this.baseId) {
-      const shift = this.baseId - id;
-      const needed = shift + this.flags.length;
-      const nextFlags = new Uint8Array(Math.max(needed, this.flags.length * 2));
-      nextFlags.set(this.flags, shift);
-      this.flags = nextFlags;
-      const nextPresent = new Uint8Array(Math.ceil(nextFlags.length / 8));
-      for (let slot2 = 0; slot2 < this.flags.length - shift; slot2++) {
+      const used = this.highSlot + 1;
+      const gap = this.baseId - id;
+      const headroom = Math.max(64, used);
+      const shift = gap + headroom;
+      const nextLength = shift + used;
+      const nextFlags = new Uint8Array(nextLength);
+      nextFlags.set(this.flags.subarray(0, used), shift);
+      const nextPresent = new Uint8Array(Math.ceil(nextLength / 8));
+      for (let slot2 = 0; slot2 < used; slot2++) {
         if ((this.present[slot2 >> 3] & 1 << (slot2 & 7)) !== 0) {
           const moved = slot2 + shift;
           nextPresent[moved >> 3] |= 1 << (moved & 7);
         }
       }
+      this.flags = nextFlags;
       this.present = nextPresent;
-      this.baseId = id;
-      return 0;
+      this.baseId -= shift;
+      this.highSlot += shift;
+      return headroom;
     }
     const slot = this.slotFor(id);
     if (slot >= this.flags.length) {
@@ -463,6 +524,7 @@ var EdgeFlagStore = class {
       nextPresent.set(this.present);
       this.present = nextPresent;
     }
+    if (slot > this.highSlot) this.highSlot = slot;
     return slot;
   }
   set(id, flags) {
@@ -558,17 +620,181 @@ var MapVertexStore = class extends BaseVertexStore {
 };
 var DefaultVertexStore = MapVertexStore;
 
+// src/edge-store.ts
+var INITIAL_CAPACITY2 = 256;
+var NULL_END = 4294967295;
+var SIDE_END = 4294967294;
+function fits(v) {
+  return Number.isInteger(v) && v >= 0 && v < SIDE_END;
+}
+function checkId(id) {
+  if (!Number.isInteger(id) || id < 0 || id > 4294967295) {
+    throw new RangeError(`edge id ${id} is not a u32`);
+  }
+}
+var BaseEdgeStore = class {
+  constructor() {
+    /** `[v1, v2]` per slot, in insertion order. */
+    this.ends = new Uint32Array(INITIAL_CAPACITY2 * 2);
+    /** Ids in insertion order; `idList[i]` owns slot `i`. */
+    this.idList = new Uint32Array(INITIAL_CAPACITY2);
+    this.count = 0;
+    /** Endpoints that are not a u32 vertex id or `null`, keyed by
+     * `slot * 2 + end`. Empty on every real file measured. */
+    this.side = null;
+  }
+  get size() {
+    return this.count;
+  }
+  grow() {
+    if (this.count < this.idList.length) return;
+    const nextCapacity = this.idList.length * 2;
+    const nextEnds = new Uint32Array(nextCapacity * 2);
+    nextEnds.set(this.ends);
+    this.ends = nextEnds;
+    const nextIds = new Uint32Array(nextCapacity);
+    nextIds.set(this.idList);
+    this.idList = nextIds;
+  }
+  write(at, v) {
+    if (v === null) {
+      this.ends[at] = NULL_END;
+    } else if (fits(v)) {
+      this.ends[at] = v;
+    } else {
+      this.ends[at] = SIDE_END;
+      (this.side ?? (this.side = /* @__PURE__ */ new Map())).set(at, v);
+      return;
+    }
+    this.side?.delete(at);
+  }
+  read(at) {
+    const v = this.ends[at];
+    if (v === NULL_END) return null;
+    if (v === SIDE_END) return this.side.get(at);
+    return v;
+  }
+  set(id, ends) {
+    checkId(id);
+    const existing = this.slotOf(id);
+    const slot = existing >= 0 ? existing : this.count;
+    if (existing < 0) {
+      this.grow();
+      this.idList[slot] = id;
+      this.count++;
+      this.remember(id, slot);
+    }
+    this.write(slot * 2, ends[0]);
+    this.write(slot * 2 + 1, ends[1]);
+  }
+  get(id) {
+    const slot = this.slotOf(id);
+    if (slot < 0) return void 0;
+    return [this.read(slot * 2), this.read(slot * 2 + 1)];
+  }
+  has(id) {
+    return this.slotOf(id) >= 0;
+  }
+  v1(id) {
+    const slot = this.slotOf(id);
+    return slot < 0 ? void 0 : this.read(slot * 2);
+  }
+  v2(id) {
+    const slot = this.slotOf(id);
+    return slot < 0 ? void 0 : this.read(slot * 2 + 1);
+  }
+  *entries() {
+    for (let i = 0; i < this.count; i++) {
+      yield [this.idList[i], [this.read(i * 2), this.read(i * 2 + 1)]];
+    }
+  }
+};
+var DENSE_MIN_SPAN = 1 << 16;
+var DENSE_MAX_SPAN_PER_EDGE = 8;
+var DenseEdgeStore = class extends BaseEdgeStore {
+  constructor() {
+    super(...arguments);
+    this.dense = null;
+    this.baseId = 0;
+    /** Highest offset in use in `dense`. */
+    this.high = -1;
+    this.fallback = null;
+  }
+  slotOf(id) {
+    if (this.fallback) {
+      const slot = this.fallback.get(id);
+      return slot === void 0 ? -1 : slot;
+    }
+    if (!this.dense) return -1;
+    const at = id - this.baseId;
+    return at >= 0 && at < this.dense.length ? this.dense[at] : -1;
+  }
+  tooSparse(span) {
+    return span > DENSE_MIN_SPAN && span > (this.count + 1) * DENSE_MAX_SPAN_PER_EDGE;
+  }
+  toMap() {
+    const m = /* @__PURE__ */ new Map();
+    for (let slot = 0; slot < this.count - 1; slot++) m.set(this.idList[slot], slot);
+    this.fallback = m;
+    this.dense = null;
+  }
+  remember(id, slot) {
+    if (this.fallback) {
+      this.fallback.set(id, slot);
+      return;
+    }
+    if (!this.dense) {
+      this.dense = new Int32Array(INITIAL_CAPACITY2).fill(-1);
+      this.baseId = id;
+    }
+    let at = id - this.baseId;
+    if (at < 0) {
+      const used = this.high + 1;
+      const shift = -at + Math.max(INITIAL_CAPACITY2, used);
+      if (this.tooSparse(shift + used)) {
+        this.toMap();
+        this.fallback.set(id, slot);
+        return;
+      }
+      const next = new Int32Array(shift + used).fill(-1);
+      next.set(this.dense.subarray(0, used), shift);
+      this.dense = next;
+      this.baseId -= shift;
+      this.high += shift;
+      at += shift;
+    } else if (at >= this.dense.length) {
+      if (this.tooSparse(at + 1)) {
+        this.toMap();
+        this.fallback.set(id, slot);
+        return;
+      }
+      const next = new Int32Array(Math.max(at + 1, this.dense.length * 2)).fill(-1);
+      next.set(this.dense);
+      this.dense = next;
+    }
+    this.dense[at] = slot;
+    if (at > this.high) this.high = at;
+  }
+};
+var DefaultEdgeStore = DenseEdgeStore;
+
 // src/geometry.ts
 var GeometryBuilder = class {
   constructor() {
     /** id -> [x, y, z]. Backed by a flat Float64Array rather than a Map of
      * boxed arrays: see vertex-store.ts for the memory rationale. */
     this.vertices = new DefaultVertexStore();
-    this.edges = /* @__PURE__ */ new Map();
-    // id -> [v1, v2]
+    /** id -> [v1, v2]. Backed by flat typed arrays rather than a Map of
+     * boxed pairs: see edge-store.ts for the memory rationale. */
+    this.edges = new DefaultEdgeStore();
     /** Edge id -> display flag byte (D307). Backed by a Uint8Array rather
      * than a Map: the value is one byte, and a Map entry costs ~30. */
     this.edgeFlags = new EdgeFlagStore();
+    /** Edge id -> the entity id of the Curve the edge belongs to (SketchUp's
+     * `Edge#curve`). Absent means the edge belongs to no curve. */
+    this.edgeCurves = /* @__PURE__ */ new Map();
+    /** Curve id -> its analytic arc, for the curves that are arcs. */
+    this.arcCurves = /* @__PURE__ */ new Map();
     this.faces = /* @__PURE__ */ new Map();
     // id -> face data
     this.instances = [];
@@ -697,6 +923,28 @@ function extractGeometryFromNodes(elements, builder, options) {
           if (d307 && d307.payload.length > 0) {
             builder.edgeFlags.set(eId, d307.payload[0]);
           }
+        }
+        const bb0b = findChildTag(el.children, "BB0B");
+        if (bb0b && bb0b.payload.length > 0) {
+          const curveId = parseVarInt(bb0b.payload, 0, bb0b.payload.length);
+          if (curveId) builder.edgeCurves.set(eId, curveId);
+        }
+      }
+    } else if (tag === "2C4C") {
+      const curve = findChildTag(el.children, "384A");
+      const arc = findChildTag(el.children, "2D4C");
+      if (curve && arc && arc.payload.length === 128) {
+        const curveId = extractEntityId(curve);
+        if (curveId !== null) {
+          const f = (i) => readF64(arc.payload, i * 8);
+          builder.arcCurves.set(curveId, {
+            center: [f(0), f(1), f(2)],
+            normal: [f(3), f(4), f(5)],
+            xAxis: [f(7), f(8), f(9)],
+            yAxis: [f(10), f(11), f(12)],
+            startAngle: f(14),
+            endAngle: f(15)
+          });
         }
       }
     } else if (tag === "AC0D") {
@@ -844,6 +1092,31 @@ function extractGeometryFromNodes(elements, builder, options) {
         hidden: instHidden,
         children: el.children
       });
+    } else if (tag === "6942") {
+      const body = findChildTag(el.children, "6A42");
+      if (body && body.payload.length >= 64) {
+        const p = body.payload;
+        const point = [readF64(p, 0), readF64(p, 8), readF64(p, 16)];
+        const direction = [readF64(p, 24), readF64(p, 32), readF64(p, 40)];
+        const endpoint = (distance) => Math.abs(distance) < 1e20 ? [
+          point[0] + direction[0] * distance,
+          point[1] + direction[1] * distance,
+          point[2] + direction[2] * distance
+        ] : null;
+        builder.constructionLines.push({
+          point,
+          direction,
+          start: endpoint(readF64(p, 48)),
+          end: endpoint(readF64(p, 56))
+        });
+      }
+    } else if (tag === "6C42") {
+      const pos = findChildTag(el.children, "6D42");
+      if (pos && pos.payload.length >= 24) {
+        builder.constructionPoints.push({
+          position: [readF64(pos.payload, 0), readF64(pos.payload, 8), readF64(pos.payload, 16)]
+        });
+      }
     } else if (el.children && el.children.length > 0) {
       extractGeometryFromNodes(el.children, builder, options);
     }
@@ -895,6 +1168,7 @@ function collectDefs(nodes, defsDict = /* @__PURE__ */ new Map(), options) {
       let guid = null;
       let name = null;
       let isImage = false;
+      let isGroup = false;
       let facesCamera = false;
       let shadowsFaceSun = false;
       for (const child of el.children) {
@@ -914,7 +1188,9 @@ function collectDefs(nodes, defsDict = /* @__PURE__ */ new Map(), options) {
             emitLog(options, "debug", `Failed to decode definition name: ${e.message}`);
           }
         } else if (child.tag === "8315" && child.payload.length > 0) {
-          isImage = parseVarInt(child.payload, 0, child.payload.length) === 2;
+          const kind = parseVarInt(child.payload, 0, child.payload.length);
+          isImage = kind === 2;
+          isGroup = kind === 1;
         } else if (child.tag === "581B") {
           let pos = 0;
           const pl = child.payload;
@@ -938,6 +1214,7 @@ function collectDefs(nodes, defsDict = /* @__PURE__ */ new Map(), options) {
           guid: guid || "",
           name: name || "",
           isImage,
+          isGroup,
           alwaysFacesCamera: facesCamera,
           shadowsFaceSun,
           builder
@@ -1116,16 +1393,22 @@ function findNameOverride(attributeDicts) {
 }
 function reconstructLoopVertices(loop, edges) {
   const loopVerts = [];
-  for (const { edgeId, orientation } of loop) {
-    const edge = edges.get(edgeId);
-    if (edge) {
-      const [v1, v2] = edge;
-      const vStart = orientation === 1 ? v1 : v2;
-      if (vStart !== null) {
-        if (loopVerts.length === 0 || loopVerts[loopVerts.length - 1] !== vStart) {
-          loopVerts.push(vStart);
-        }
+  const pushStart = (vStart) => {
+    if (vStart !== null) {
+      if (loopVerts.length === 0 || loopVerts[loopVerts.length - 1] !== vStart) {
+        loopVerts.push(vStart);
       }
+    }
+  };
+  if (edges instanceof Map) {
+    for (const { edgeId, orientation } of loop) {
+      const edge = edges.get(edgeId);
+      if (edge) pushStart(orientation === 1 ? edge[0] : edge[1]);
+    }
+  } else {
+    for (const { edgeId, orientation } of loop) {
+      const vStart = orientation === 1 ? edges.v1(edgeId) : edges.v2(edgeId);
+      if (vStart !== void 0) pushStart(vStart);
     }
   }
   if (loopVerts.length > 1 && loopVerts[0] === loopVerts[loopVerts.length - 1]) {
@@ -1229,19 +1512,19 @@ function parseStyleXml(xmlText) {
   let m;
   while ((m = itemRegex.exec(xmlText)) !== null) {
     const id = m[1] !== void 0 ? m[1] : m[2];
-    if (id !== "4000" && id !== "4001") continue;
+    if (id !== "2002" && id !== "2003") continue;
     const inner = m[3];
     const variantMatch = inner.match(/<(?:[a-zA-Z0-9_]+:)?variant\b[^>]*>(-?\d+)<\/(?:[a-zA-Z0-9_]+:)?variant>/);
     if (!variantMatch) continue;
     const raw = parseInt(variantMatch[1], 10);
     if (Number.isNaN(raw)) continue;
     const v = raw >>> 0;
-    colors[id] = [v >> 16 & 255, v >> 8 & 255, v & 255];
+    colors[id] = [v & 255, v >> 8 & 255, v >> 16 & 255];
   }
   return {
     name,
-    frontColor: colors["4000"] ?? null,
-    backColor: colors["4001"] ?? null
+    frontColor: colors["2002"] ?? null,
+    backColor: colors["2003"] ?? null
   };
 }
 function lstripChars(s, chars) {
@@ -1286,6 +1569,13 @@ function resolveTextureBytes(materialFiles, xmlName, filename, imagePath) {
 }
 
 // src/transforms.ts
+function foldScale(m) {
+  if (m.length < 13 || m.length >= 16 || m[12] === 1) return m;
+  const s = m[12];
+  const out = m.slice(0, 12).map((v) => v * s);
+  out.push(1);
+  return out;
+}
 function transformPoint(matrix, point) {
   if (!matrix || matrix.length < 12) {
     return point;
@@ -1297,15 +1587,16 @@ function transformPoint(matrix, point) {
     const tz = matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14];
     return [tx, ty, tz];
   } else {
-    const tx = matrix[0] * x + matrix[1] * y + matrix[2] * z + matrix[9];
-    const ty = matrix[3] * x + matrix[4] * y + matrix[5] * z + matrix[10];
-    const tz = matrix[6] * x + matrix[7] * y + matrix[8] * z + matrix[11];
+    const m = foldScale(matrix);
+    const tx = m[0] * x + m[1] * y + m[2] * z + m[9];
+    const ty = m[3] * x + m[4] * y + m[5] * z + m[10];
+    const tz = m[6] * x + m[7] * y + m[8] * z + m[11];
     return [tx, ty, tz];
   }
 }
 function multiplyMatrices(a, b) {
-  if (!a || a.length === 0) return b;
-  if (!b || b.length === 0) return a;
+  if (!a || a.length === 0) return b && b.length === 13 ? foldScale(b) : b;
+  if (!b || b.length === 0) return a.length === 13 ? foldScale(a) : a;
   if (a.length === 16 && b.length === 16) {
     const result = new Array(16).fill(0);
     for (let row = 0; row < 4; row++) {
@@ -1319,10 +1610,12 @@ function multiplyMatrices(a, b) {
     }
     return result;
   } else {
-    const aPad = a.length < 13 ? [...a, ...new Array(13 - a.length).fill(0)] : a;
-    const bPad = b.length < 13 ? [...b, ...new Array(13 - b.length).fill(0)] : b;
-    if (a.length < 13 && aPad[12] === 0) aPad[12] = 1;
-    if (b.length < 13 && bPad[12] === 0) bPad[12] = 1;
+    const aRaw = a.length < 13 ? [...a, ...new Array(13 - a.length).fill(0)] : a;
+    const bRaw = b.length < 13 ? [...b, ...new Array(13 - b.length).fill(0)] : b;
+    if (a.length < 13 && aRaw[12] === 0) aRaw[12] = 1;
+    if (b.length < 13 && bRaw[12] === 0) bRaw[12] = 1;
+    const aPad = foldScale(aRaw);
+    const bPad = foldScale(bRaw);
     const p_r0 = [aPad[0], aPad[1], aPad[2], aPad[9]];
     const p_r1 = [aPad[3], aPad[4], aPad[5], aPad[10]];
     const p_r2 = [aPad[6], aPad[7], aPad[8], aPad[11]];
@@ -1346,23 +1639,58 @@ function multiplyMatrices(a, b) {
     out[9] = dot(p_r0, c_c3);
     out[10] = dot(p_r1, c_c3);
     out[11] = dot(p_r2, c_c3);
-    out[12] = aPad[12] * bPad[12];
+    out[12] = 1;
     return out;
   }
 }
 
 // src/triangulator.ts
 var import_earcut = __toESM(require("earcut"));
+function splitQuadAlong02(p) {
+  if (p.some((q2) => !q2)) return true;
+  const q = p;
+  const area2 = (a, b, c) => {
+    const ux = q[b].x - q[a].x, uy = q[b].y - q[a].y, uz = q[b].z - q[a].z;
+    const vx = q[c].x - q[a].x, vy = q[c].y - q[a].y, vz = q[c].z - q[a].z;
+    return [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx];
+  };
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const t012 = area2(0, 1, 2);
+  const t023 = area2(0, 2, 3);
+  if (dot(t012, t023) >= 0) return true;
+  const t123 = area2(1, 2, 3);
+  const t130 = area2(1, 3, 0);
+  return Math.sqrt(dot(t123, t123)) + Math.sqrt(dot(t130, t130)) >= Math.sqrt(dot(t012, t012)) + Math.sqrt(dot(t023, t023));
+}
 function triangulateFace3D(vertices3D, loops, normal) {
   if (loops.length === 0) return [];
+  const getVertex = (id) => {
+    let pt;
+    if (typeof vertices3D.get === "function") {
+      pt = vertices3D.get(id);
+    } else {
+      pt = vertices3D[id];
+    }
+    if (!pt) return null;
+    if (Array.isArray(pt)) {
+      return { x: pt[0], y: pt[1], z: pt[2] };
+    }
+    return pt;
+  };
   if (loops.length === 1 && loops[0].length === 3) {
     return [loops[0]];
   }
   if (loops.length === 1 && loops[0].length === 4) {
     const v = loops[0];
+    if (splitQuadAlong02(v.map(getVertex))) {
+      return [
+        [v[0], v[1], v[2]],
+        [v[0], v[2], v[3]]
+      ];
+    }
     return [
-      [v[0], v[1], v[2]],
-      [v[0], v[2], v[3]]
+      [v[1], v[2], v[3]],
+      [v[1], v[3], v[0]]
     ];
   }
   let nx = normal[0];
@@ -1406,19 +1734,6 @@ function triangulateFace3D(vertices3D, loops, normal) {
     vy /= vLen;
     vz /= vLen;
   }
-  const getVertex = (id) => {
-    let pt;
-    if (typeof vertices3D.get === "function") {
-      pt = vertices3D.get(id);
-    } else {
-      pt = vertices3D[id];
-    }
-    if (!pt) return null;
-    if (Array.isArray(pt)) {
-      return { x: pt[0], y: pt[1], z: pt[2] };
-    }
-    return pt;
-  };
   const loops2d = [];
   for (const loop of loops) {
     const pts = [];
@@ -1540,9 +1855,76 @@ function triangulateByFilteringHoles(loops, loops2d) {
 }
 
 // src/face-groups.ts
+var SMOOTH_EDGE = 16;
+function smoothCornerNormals(builder, ctx) {
+  const edgeFaces = /* @__PURE__ */ new Map();
+  for (const [fId, face] of builder.faces.entries()) {
+    if (ctx.respectVisibility && face.hidden) continue;
+    for (const loop of face.loops) {
+      for (const { edgeId } of loop) {
+        if (((builder.edgeFlags.get(edgeId) ?? 0) & SMOOTH_EDGE) === 0) continue;
+        let faces = edgeFaces.get(edgeId);
+        if (!faces) edgeFaces.set(edgeId, faces = []);
+        if (!faces.includes(fId)) faces.push(fId);
+      }
+    }
+  }
+  if (edgeFaces.size === 0) return null;
+  const parent = /* @__PURE__ */ new Map();
+  const touch = (key) => {
+    if (!parent.has(key)) parent.set(key, key);
+    return key;
+  };
+  const find = (key) => {
+    let root = key;
+    while (parent.get(root) !== root) root = parent.get(root);
+    while (parent.get(key) !== root) {
+      const next = parent.get(key);
+      parent.set(key, root);
+      key = next;
+    }
+    return root;
+  };
+  for (const [edgeId, faces] of edgeFaces) {
+    if (faces.length !== 2) continue;
+    const ends = builder.edges.get(edgeId);
+    if (!ends) continue;
+    const a = builder.faces.get(faces[0]).normal;
+    const b = builder.faces.get(faces[1]).normal;
+    if (a[0] * b[0] + a[1] * b[1] + a[2] * b[2] <= 0) continue;
+    for (const vId of ends) {
+      if (vId === null) continue;
+      const left = find(touch(`${vId}:${faces[0]}`));
+      const right = find(touch(`${vId}:${faces[1]}`));
+      if (left !== right) parent.set(left, right);
+    }
+  }
+  const sums = /* @__PURE__ */ new Map();
+  for (const key of parent.keys()) {
+    const normal = builder.faces.get(Number(key.slice(key.indexOf(":") + 1))).normal;
+    const root = find(key);
+    const sum = sums.get(root);
+    if (sum) {
+      sum[0] += normal[0];
+      sum[1] += normal[1];
+      sum[2] += normal[2];
+    } else {
+      sums.set(root, [normal[0], normal[1], normal[2]]);
+    }
+  }
+  return (vId, fId) => {
+    const key = `${vId}:${fId}`;
+    if (!parent.has(key)) return null;
+    const root = find(key);
+    const sum = sums.get(root);
+    const length = Math.hypot(sum[0], sum[1], sum[2]) || 1;
+    return { root, n: [sum[0] / length, sum[1] / length, sum[2] / length] };
+  };
+}
 function buildLocalFaceGroups(builder, ctx) {
   const faceGroups = /* @__PURE__ */ new Map();
-  const addSide = (triangles, fn, color, doubleSided, reverse, mat, uvTransform, xr, yr) => {
+  const smoothCorner = smoothCornerNormals(builder, ctx);
+  const addSide = (triangles, fn, color, doubleSided, reverse, mat, uvTransform, xr, yr, fId) => {
     const texIndex = ctx.textureIndexFor(mat?.texture);
     const colorAlpha = color.a !== void 0 ? color.a / 255 : 1;
     const transparency = colorAlpha * (mat?.transparency ?? 1);
@@ -1576,19 +1958,21 @@ function buildLocalFaceGroups(builder, ctx) {
         if (idx === void 0) {
           const p = builder.vertices.get(vId);
           const [u, v] = computeFaceUv(p, xr, yr, uvTransform, tileW, tileH);
-          const key = `${vId},${u},${v}`;
+          const smooth = smoothCorner?.(vId, fId) ?? null;
+          const normal = smooth ? reverse ? [-smooth.n[0], -smooth.n[1], -smooth.n[2]] : smooth.n : sideNormal;
+          const key = smooth ? `${vId},${u},${v},${smooth.root}` : `${vId},${u},${v}`;
           idx = group.localVMap.get(key);
           if (idx === void 0) {
             group.localVerts.push(p);
             group.localUvs.push([u, v]);
-            group.normalsAccum.push([sideNormal[0], sideNormal[1], sideNormal[2]]);
+            group.normalsAccum.push([normal[0], normal[1], normal[2]]);
             idx = group.localVerts.length - 1;
             group.localVMap.set(key, idx);
           } else {
             const accum = group.normalsAccum[idx];
-            accum[0] += sideNormal[0];
-            accum[1] += sideNormal[1];
-            accum[2] += sideNormal[2];
+            accum[0] += normal[0];
+            accum[1] += normal[1];
+            accum[2] += normal[2];
           }
           faceLocalMap.set(vId, idx);
         }
@@ -1599,7 +1983,7 @@ function buildLocalFaceGroups(builder, ctx) {
       }
     }
   };
-  for (const [_fId, fData] of builder.faces.entries()) {
+  for (const [fId, fData] of builder.faces.entries()) {
     if (ctx.respectVisibility && fData.hidden) continue;
     const fallbackColor = ctx.inheritedMaterial?.color ?? ctx.fallbackLayerColor;
     const frontMat = ctx.resolveMaterial(fData.materialId) ?? ctx.inheritedMaterial;
@@ -1629,11 +2013,11 @@ function buildLocalFaceGroups(builder, ctx) {
     const uvTransform = fData.uvTransform;
     const uvTransformBack = fData.uvTransformBack;
     const sameColor = frontColor.r === backColor.r && frontColor.g === backColor.g && frontColor.b === backColor.b;
-    if (sameColor) {
-      addSide(triangles, fn, frontColor, true, false, frontMat, uvTransform, xr, yr);
+    if (sameColor || ctx.frontSideOnly) {
+      addSide(triangles, fn, frontColor, true, false, frontMat, uvTransform, xr, yr, fId);
     } else {
-      addSide(triangles, fn, frontColor, false, false, frontMat, uvTransform, xr, yr);
-      addSide(triangles, fn, backColor, false, true, backMat, uvTransformBack, xr, yr);
+      addSide(triangles, fn, frontColor, false, false, frontMat, uvTransform, xr, yr, fId);
+      addSide(triangles, fn, backColor, false, true, backMat, uvTransformBack, xr, yr, fId);
     }
   }
   return faceGroups;
@@ -1719,7 +2103,7 @@ function buildModelFromParsed(parsed) {
     // group). Kept out of `definitions` (which is numeric-ID-only, one
     // entry per real component/group definition) and exposed here instead,
     // matching the .NET and Dart ports' `Root`/`root` field.
-    root: rootDefinition ?? { id: 0, guid: "ROOT", name: "ROOT_MODEL", vertices: [], edges: [], faces: [], instances: [], sectionPlanes: [], texts: [], dimensions: [], constructionLines: [], constructionPoints: [], isImage: false, alwaysFacesCamera: false, shadowsFaceSun: false },
+    root: rootDefinition ?? { id: 0, guid: "ROOT", name: "ROOT_MODEL", vertices: [], edges: [], faces: [], instances: [], sectionPlanes: [], texts: [], dimensions: [], constructionLines: [], constructionPoints: [], arcs: /* @__PURE__ */ new Map(), isImage: false, isGroup: false, alwaysFacesCamera: false, shadowsFaceSun: false },
     layers: finalLayersList,
     pages: finalPagesList,
     dimensions: finalDimensionsList,
@@ -1744,9 +2128,25 @@ function buildDefinition(id, d, layerIdToName) {
       v2Id: v2 ?? 0,
       soft: (flags & 8) !== 0,
       smooth: (flags & 16) !== 0,
-      hidden: (flags & 1) !== 0
+      hidden: (flags & 1) !== 0,
+      curveId: d.builder.edgeCurves?.get(eId) ?? null
     };
   });
+  const arcs = /* @__PURE__ */ new Map();
+  for (const [curveId, f] of d.builder.arcCurves ?? []) {
+    const radius = Math.hypot(f.xAxis[0], f.xAxis[1], f.xAxis[2]);
+    const sweep = ((f.endAngle - f.startAngle) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+    arcs.set(curveId, {
+      center: [...f.center],
+      normal: [...f.normal],
+      xAxis: [...f.xAxis],
+      yAxis: [...f.yAxis],
+      startAngle: f.startAngle,
+      endAngle: f.endAngle,
+      radius,
+      isFullCircle: Math.min(sweep, 2 * Math.PI - sweep) < 1e-9
+    });
+  }
   const faces = Array.from(d.builder.faces.entries()).map(([fId, fData]) => ({
     id: fId,
     loops: fData.loops,
@@ -1810,7 +2210,9 @@ function buildDefinition(id, d, layerIdToName) {
     dimensions,
     constructionLines,
     constructionPoints,
+    arcs,
     isImage: d.isImage,
+    isGroup: d.isGroup || false,
     alwaysFacesCamera: d.alwaysFacesCamera,
     shadowsFaceSun: d.shadowsFaceSun || false
   };
@@ -1932,7 +2334,8 @@ function buildSceneFromParsed(parsed, options) {
         inheritedMaterial,
         fallbackLayerColor: getLayerColor(parentLayer),
         definitionId: defId,
-        respectVisibility: options?.respectEdgeVisibility
+        respectVisibility: options?.respectEdgeVisibility,
+        frontSideOnly: options?.frontSideOnly
       });
       for (const group of faceGroups.values()) {
         if (group.localFaces.length === 0) continue;
@@ -2198,6 +2601,20 @@ function retryCountAfterV20Filler(r, countPos, limit, ar) {
   r.pos = hit.next;
   return hit.count;
 }
+function findEmptyRootAfterV20Filler(data, countPos) {
+  let markerAt = -1;
+  for (let i = countPos; i < countPos + 12 && i + 4 <= data.length; i++) {
+    if (data[i] === 255 && data[i + 1] === 254 && data[i + 2] === 255) {
+      markerAt = i;
+      break;
+    }
+  }
+  if (markerAt < 0 || data[markerAt + 3] !== 0) return null;
+  const rootCountAt = markerAt + 4 + 13;
+  if (rootCountAt + 4 > data.length) return null;
+  for (let i = markerAt + 3; i < rootCountAt + 4; i++) if (data[i] !== 0) return null;
+  return rootCountAt;
+}
 function plausibleListTag(ar, data, at) {
   if (at + 2 > data.length) return false;
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
@@ -2330,8 +2747,10 @@ var Archive = class {
   constructor(data, ver) {
     this.slots = /* @__PURE__ */ new Map();
     this.classSlot = /* @__PURE__ */ new Map();
+    this.seenLineStyle = false;
     this.classSchema = /* @__PURE__ */ new Map();
     this.currentClass = null;
+    this.currentObjSlot = null;
     this.nextSlot = 0;
     this.walkBase = 0;
     this.readers = {};
@@ -2351,6 +2770,17 @@ var Archive = class {
     this.annotWatermark = null;
     this.burnStack = [];
     // per-entity-list burned-item credits
+    // per-entity-list instances an annotation's path wrote in full (see
+    // pathRef) that the list has not listed yet, in order
+    this.inlineStack = [];
+    // Called as each CComponentDefinition record completes. walkModel uses it
+    // to build that definition's geometry right away and release its entity
+    // objects, so the walk never holds the whole model's entity graph (see
+    // releaseDefinitionEntities). Probe archives leave it null.
+    this.onDefinitionDone = null;
+    this.prebuilt = /* @__PURE__ */ new Map();
+    // [first, end) slot range of each built definition's own records.
+    this.releasedSpans = [];
     this.clineTail = null;
     this.data = data;
     this.ver = ver;
@@ -2385,6 +2815,7 @@ var Archive = class {
       const name = new TextDecoder("utf-8").decode(nameBytes);
       this.alloc(["class", name, schema]);
       this.classSlot.set(name, this.nextSlot - 1);
+      if (name === "CLayer") this.firstLayerClass ?? (this.firstLayerClass = this.nextSlot - 1);
       this.classSchema.set(name, schema);
       return this.newObj(r, name);
     }
@@ -2417,18 +2848,85 @@ var Archive = class {
       throw new LegacyParseError(`no reader for class ${name} ${r.ctx()}`);
     }
     const prevClass = this.currentClass;
+    const prevSlot = this.currentObjSlot;
     this.currentClass = name;
+    this.currentObjSlot = slot;
     let value;
     try {
       value = reader(this, r);
     } finally {
       this.currentClass = prevClass;
+      this.currentObjSlot = prevSlot;
     }
     this.slots.set(slot, ["obj", name, value]);
+    if (name === "CComponentDefinition" && value && this.onDefinitionDone) {
+      this.onDefinitionDone(slot, value);
+    }
     if (name === "CDimensionLinear" || name === "CText") {
       this.annotWatermark = this.nextSlot;
     }
     return [slot, name, value];
+  }
+  // 0xffff CLayer, a class-ref to a CLayer already in classSlot, or —
+  // when `unmatchedClassRef` — any short 0x8000 class-ref. The last form
+  // is only for the throwaway slot-base probe, which numbers from 1<<20 so
+  // the file's 0x8000|real_slot will not match classSlot.
+  clayerRecordAt(at, unmatchedClassRef = false) {
+    if (at + 2 > this.data.length) return false;
+    const tag = this.data[at] | this.data[at + 1] << 8;
+    if (tag === 65535 && at + 12 <= this.data.length && (this.data[at + 4] | this.data[at + 5] << 8) === 6 && matchesAscii(this.data, at + 6, "CLayer")) {
+      return true;
+    }
+    const layCs = this.classSlot.get("CLayer");
+    if (layCs !== void 0 && isClassRef(this.data, at, layCs)) return true;
+    return unmatchedClassRef && (tag & 32768) !== 0 && tag !== 65535;
+  }
+  // Colour CLayer ends in a 21-byte tail. Some v18 zero-material files
+  // (custom tag listed first, then Layer0) write 12 zero bytes + u32 after
+  // that, then another CLayer. Skip those 16 bytes only when they precede
+  // a CLayer; leave a definition-list back-ref alone.
+  skipClayerColourExt() {
+    const pad = 12;
+    const ext = 16;
+    if (this.r.pos + ext + 2 > this.data.length) return;
+    for (let i = 0; i < pad; i++) {
+      if (this.data[this.r.pos + i] !== 0) return;
+    }
+    if (this.clayerRecordAt(this.r.pos + ext, true)) this.r.pos += ext;
+  }
+  // v18 template Layer0 after a custom tag: <parent u16><active u16><dc u32>.
+  // Consume parent only when both u16s are already CLayer objects. A lone
+  // back-ref then a definition count (usual layout) stays put.
+  skipClayerParentRef(selfSlot) {
+    if (this.r.pos + 4 > this.data.length || selfSlot === null) return;
+    const a = this.data[this.r.pos] | this.data[this.r.pos + 1] << 8;
+    const b = this.data[this.r.pos + 2] | this.data[this.r.pos + 3] << 8;
+    if (!a || a & 32768 || a === 32767 || a === selfSlot) return;
+    if (!b || b & 32768 || b === 32767) return;
+    const ea = this.slots.get(a);
+    const eb = this.slots.get(b);
+    if (ea === void 0 || eb === void 0) return;
+    if (ea[0] === "class" || eb[0] === "class") return;
+    if (ea[1] !== "CLayer" || eb[1] !== "CLayer") return;
+    this.r.pos += 2;
+  }
+  // Extra CLayer records past declared layerCount (v18: count=1 custom
+  // tag, then Layer0). Skip null separators; stop at the definition-list
+  // anchor. `unmatchedClassRef` only on the throwaway probe.
+  collectTrailingLayers(slotsOut, layersOut, unmatchedClassRef = false) {
+    while (this.r.pos + 2 <= this.data.length) {
+      const tag = this.r.peekU16();
+      if (tag === 0) {
+        this.r.pos += 2;
+        continue;
+      }
+      if (!this.clayerRecordAt(this.r.pos, unmatchedClassRef)) break;
+      const [s, , v] = this.readObject(this.r, "CLayer");
+      if (v != null) {
+        if (slotsOut) slotsOut.push(s);
+        if (layersOut) layersOut.push([s, v]);
+      }
+    }
   }
   /** Map a FILE store-map index to the walker's numbering through the burn
    * bands. Returns the walker slot, or `null` when the reference points
@@ -2441,6 +2939,27 @@ var Archive = class {
       offset += width;
     }
     return slot - offset;
+  }
+  /** The walker slot of the back-reference at the cursor, without moving
+   * it; `null` when the next tag is anything else. */
+  peekBackref(r) {
+    if (r.pos + 2 > r.data.length) return null;
+    const view = new DataView(r.data.buffer, r.data.byteOffset, r.data.byteLength);
+    const tag = view.getUint16(r.pos, true);
+    let slot;
+    if (tag === 32767) {
+      if (r.pos + 6 > r.data.length) return null;
+      slot = view.getUint32(r.pos + 2, true);
+      if (slot & 2147483648) return null;
+    } else if (tag === 0 || tag & 32768) {
+      return null;
+    } else {
+      slot = tag;
+    }
+    if (this.burns.length > 0 && slot >= this.burns[0][0]) {
+      return this.translateRef(slot);
+    }
+    return slot;
   }
   backref(slot, r) {
     if (this.burns.length > 0 && slot >= this.burns[0][0]) {
@@ -2464,7 +2983,7 @@ var Archive = class {
   }
 };
 function preamble(ar, r) {
-  const [, , attrs] = ar.readObject(r, "CAttributeContainer");
+  const [attrsSlot, , attrs] = ar.readObject(r, "CAttributeContainer");
   let pid = 0;
   if (ar.hasPid) {
     const mask = r.u8();
@@ -2474,10 +2993,17 @@ function preamble(ar, r) {
       }
     }
   }
-  return { attrs, pid };
+  return { attrs, pid, attrsSlot };
+}
+var FIRST_V4 = 4;
+var FIRST_DIB_OBJECT = 6;
+var FIRST_NAMED_INSTANCE = 5;
+function earlyPreamble(ar, r) {
+  if (ar.ver < FIRST_V4) return { attrs: null, pid: 0, attrsSlot: null };
+  return preamble(ar, r);
 }
 function drawbase(ar, r) {
-  const b = r.raw(8);
+  const b = r.raw(ar.ver < FIRST_V4 ? 5 : ar.ver < 5 ? 7 : 8);
   const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
   const layCls = ar.classSlot.get("CLayer");
   const tag = r.peekU16();
@@ -2495,6 +3021,9 @@ function drawbase(ar, r) {
   } else {
     layer = r.u16();
   }
+  if (ar.ver < FIRST_V4) {
+    return { mat: 0, hidden: 0, soft: 0, smooth: 0, layer };
+  }
   return {
     mat: view.getUint16(0, true),
     hidden: b[2],
@@ -2504,7 +3033,7 @@ function drawbase(ar, r) {
   };
 }
 function readVertex(ar, r) {
-  preamble(ar, r);
+  earlyPreamble(ar, r);
   return { k: "vertex", xyz: r.f64s(3) };
 }
 function readEdge(ar, r) {
@@ -2512,11 +3041,11 @@ function readEdge(ar, r) {
   const db = drawbase(ar, r);
   const [s1] = ar.readObject(r, "CVertex");
   const [s2] = ar.readObject(r, "CVertex");
-  const [cs, cn] = ar.readObject(r);
+  const [cs, cn, cv] = ar.readObject(r);
   if (cn !== null && cn !== "CCurve" && cn !== "CArcCurve") {
     throw new LegacyParseError(`edge curve pointer resolved to ${cn} ${r.ctx()}`);
   }
-  return { k: "edge", db, curve: cs, v1: s1, v2: s2 };
+  return { k: "edge", db, curve: cs, curve_value: cv, v1: s1, v2: s2 };
 }
 function readCurve(ar, r) {
   preamble(ar, r);
@@ -2527,8 +3056,18 @@ function readCurve(ar, r) {
 function readArcCurve(ar, r) {
   preamble(ar, r);
   r.raw(5);
-  r.f64s(14);
-  return { k: "arccurve" };
+  const v = r.f64s(14);
+  return {
+    k: "arccurve",
+    params: {
+      center: [v[0], v[1], v[2]],
+      normal: [v[3], v[4], v[5]],
+      xAxis: [v[6], v[7], v[8]],
+      startAngle: v[9],
+      endAngle: v[10],
+      yAxis: [v[11], v[12], v[13]]
+    }
+  };
 }
 function registerBurn(ar, delta) {
   ar.burns.push([ar.annotWatermark + ar.cumDelta, delta]);
@@ -2539,7 +3078,7 @@ function registerBurn(ar, delta) {
   }
 }
 function readEdgeUse(ar, r) {
-  preamble(ar, r);
+  earlyPreamble(ar, r);
   const [es] = ar.readObject(r, "CEdge");
   const sense = r.u8();
   const p0 = r.pos;
@@ -2572,7 +3111,7 @@ function readLoop(ar, r) {
   const mySlot = ar.nextSlot - 1;
   const prev = ar.currentLoop;
   ar.currentLoop = mySlot;
-  preamble(ar, r);
+  earlyPreamble(ar, r);
   r.raw(2);
   const uses = [];
   while (true) {
@@ -2589,6 +3128,11 @@ function readLoop(ar, r) {
 function readFace(ar, r) {
   const pre = preamble(ar, r);
   const db = drawbase(ar, r);
+  let attrs = pre.attrs;
+  if (ar.ver < FIRST_V4 && attrs && typeof attrs === "object" && attrs.k === "material") {
+    db.mat = pre.attrsSlot;
+    attrs = null;
+  }
   const plane = r.f64s(4);
   const nloops = r.u32();
   if (nloops > 1e4) {
@@ -2600,7 +3144,7 @@ function readFace(ar, r) {
     loops.push(v);
   }
   const backMat = r.u16();
-  return { k: "face", db, plane, loops, back_mat: backMat, attrs: pre.attrs };
+  return { k: "face", db, plane, loops, back_mat: backMat, attrs };
 }
 function readAttrContainer(ar, r) {
   preamble(ar, r);
@@ -2646,7 +3190,7 @@ function readAttrNamed(ar, r) {
     if (key === "") break;
     entries[key] = readTyped(r.u8());
   }
-  r.u32();
+  if (ar.ver >= 7) r.u32();
   return { k: "dict", name: dictname, entries };
 }
 var DYNAMIC_ATTRIBUTES_DICT_NAME = "dynamic_attributes";
@@ -2669,8 +3213,40 @@ function extractLegacyDynamicProperties(attrs) {
   }
   return {};
 }
+function readLayerLineStyle(ar, r) {
+  if (ar.ver < 19 || r.pos + 2 > r.data.length) return;
+  const name = "CCustomLineStyle";
+  const tag = r.peekU16();
+  if (tag === 65535) {
+    const at = r.pos + 4;
+    if (at + 2 + name.length > r.data.length || (r.data[at] | r.data[at + 1] << 8) !== name.length || !matchesAscii(r.data, at + 2, name)) return;
+  } else if (tag & 32768) {
+    const style = ar.classSlot.get(name);
+    const layer = ar.classSlot.get("CLayer");
+    const firstLayer = ar.firstLayerClass;
+    if (style === void 0 || layer === void 0 || firstLayer === void 0 || style + layer - firstLayer !== (tag & 32767)) return;
+  } else {
+    if (tag === 0 || tag === 32767) return;
+    if (ar.walkBase >= 1 << 20) {
+      if (!ar.seenLineStyle) return;
+    } else {
+      const entry = ar.slots.get(tag);
+      if (entry?.[0] !== "obj" || entry[1] !== name) return;
+    }
+  }
+  ar.readObject(r, name);
+}
+function readCustomLineStyle(ar, r) {
+  earlyPreamble(ar, r);
+  if (ar.ver < 20) earlyPreamble(ar, r);
+  r.utf16();
+  r.utf16();
+  r.raw(24);
+  ar.seenLineStyle = true;
+  return { k: "linestyle" };
+}
 function readLayer(ar, r) {
-  preamble(ar, r);
+  earlyPreamble(ar, r);
   const name = r.utf16();
   const mid = [];
   while (mid.length < 8 && !bytesEqual(r.peek(3), STR_MARKER)) {
@@ -2685,14 +3261,25 @@ function readLayer(ar, r) {
   }
   const rgba = r.raw(4);
   r.utf16();
-  r.raw(21);
+  r.raw(ar.ver < FIRST_V4 ? 17 : 21);
+  readLayerLineStyle(ar, r);
+  ar.skipClayerColourExt();
+  ar.skipClayerParentRef(ar.currentObjSlot);
   return { k: "layer", name, hidden: mid.length ? mid[0] : 0, rgba: Array.from(rgba) };
 }
 function textureBlock(ar, r) {
-  r.raw(ar.ver >= 17 ? 2 : 1);
-  const [s, , dib] = ar.readObject(r, "CDib");
-  if (!(dib && typeof dib === "object" && dib.k === "dib")) {
-    throw new LegacyParseError(`texture object is not a dib ${r.ctx()}`);
+  let s;
+  let dib;
+  if (ar.ver < FIRST_DIB_OBJECT) {
+    s = null;
+    dib = readDib(ar, r);
+  } else {
+    r.pos -= 1;
+    preamble(ar, r);
+    [s, , dib] = ar.readObject(r, "CDib");
+    if (!(dib && typeof dib === "object" && dib.k === "dib")) {
+      throw new LegacyParseError(`texture object is not a dib ${r.ctx()}`);
+    }
   }
   const marker = findBytes(r.data, STR_MARKER, r.pos, r.pos + 28);
   if (marker - r.pos === 20) {
@@ -2708,20 +3295,22 @@ function textureBlock(ar, r) {
   const blob = r.raw(8);
   const opacity = r.f64();
   const useOp = r.u8();
-  const colorized = Boolean(blob[4]) || avg[3] === 255;
+  const colorized = blob[0] === 2;
   return {
-    rgba: Array.from(avg.subarray(0, 4)),
+    rgba: [avg[5], avg[6], avg[7], 255],
     opacity,
     use_opacity: useOp,
     tex_dib: s,
+    tex_data: s === null ? dib.data : null,
     tex_w: w,
     tex_h: h,
     tex_file: fname,
-    colorized
+    colorized,
+    colorize_type: blob[4] === 1 ? 1 : 0
   };
 }
 function readMaterial(ar, r) {
-  preamble(ar, r);
+  earlyPreamble(ar, r);
   const name = r.utf16();
   const texflag = r.u16();
   const out = { k: "material", name };
@@ -2740,10 +3329,12 @@ function readMaterial(ar, r) {
     out.opacity = tex.opacity;
     out.use_opacity = tex.use_opacity;
     out.tex_dib = tex.tex_dib;
+    out.tex_data = tex.tex_data;
     out.tex_w = tex.tex_w;
     out.tex_h = tex.tex_h;
     out.tex_file = tex.tex_file;
     out.colorized = tex.colorized;
+    out.colorize_type = tex.colorize_type;
   }
   return out;
 }
@@ -2782,12 +3373,19 @@ function readCamera(ar, r) {
   r.raw(137);
   r.u16();
   r.utf16();
-  r.raw(33);
+  r.raw(ar.ver >= 6 ? 33 : 10);
   return { k: "camera" };
 }
 function readThumbnail(ar, r) {
   preamble(ar, r);
+  if (ar.ver < FIRST_V4) {
+    r.raw(129);
+    return { k: "thumbnail", dib: null };
+  }
   ar.readObject(r, "CCamera");
+  if (ar.ver < 6) {
+    return { k: "thumbnail", dib: null };
+  }
   const [, , dib] = ar.readObject(r, "CDib");
   return { k: "thumbnail", dib };
 }
@@ -2815,6 +3413,37 @@ function entityRef(ar, r) {
     throw new LegacyParseError(`entity ref is a new object ${r.ctx()}`);
   }
   return tag;
+}
+function connectionPaths(ar, r) {
+  const extra = entityRef(ar, r);
+  const lists = [];
+  for (let k = 0; k < 2; k++) {
+    const count = r.u32();
+    if (count > 1e3) {
+      throw new LegacyParseError(`implausible dimension path length ${r.ctx()}`);
+    }
+    const refs = [];
+    for (let i = 0; i < count; i++) refs.push(pathRef(ar, r, i === 0));
+    lists.push(refs);
+  }
+  return [extra, lists[0], lists[1]];
+}
+function pathRef(ar, r, member = false) {
+  const tag = r.peekU16();
+  let isNew = tag === 65535 || tag !== 32767 && (tag & 32768) !== 0;
+  if (tag === 32767) {
+    const view = new DataView(r.data.buffer, r.data.byteOffset, r.data.byteLength);
+    isNew = (view.getUint32(r.pos + 2, true) & 2147483648) !== 0;
+  }
+  if (isNew) {
+    const [slot] = ar.readObject(r);
+    const inline = ar.inlineStack;
+    if (member && inline && inline.length > 0) {
+      inline[inline.length - 1].add(slot);
+    }
+    return slot;
+  }
+  return entityRef(ar, r);
 }
 function readRelationship(ar, r) {
   preamble(ar, r);
@@ -2844,15 +3473,7 @@ function readConstructionLine(ar, r) {
   if (k === null) {
     const dflt = ar.ver === 17 ? 7 : 4;
     const order = [dflt, ...[0, 4, 7].filter((c) => c !== dflt)];
-    outer: for (const allowNull of [false, true]) {
-      for (const cand of order) {
-        if (strictNextTag(ar, r.data, r.pos + cand, allowNull)) {
-          k = cand;
-          break outer;
-        }
-      }
-    }
-    if (k === null) k = dflt;
+    k = order.find((size) => strictNextTag(ar, r.data, r.pos + size, false)) ?? [4, 0, 7].find((size) => strictNextTag(ar, r.data, r.pos + size, true)) ?? 4;
     ar.clineTail = k;
   }
   r.raw(k);
@@ -2889,7 +3510,10 @@ function readSectionPlane(ar, r) {
 function readSkFont(ar, r) {
   ar.readObject(r, "CAttributeContainer");
   if (ar.hasPid) {
-    r.u8();
+    const mask = r.u8();
+    let n = 0;
+    for (let bit = 0; bit < 8; bit++) if (mask & 1 << bit) n++;
+    r.raw(n);
   }
   r.utf16();
   r.raw(15);
@@ -2899,31 +3523,49 @@ function readDimLinear(ar, r) {
   preamble(ar, r);
   const db = drawbase(ar, r);
   const text = r.utf16();
-  ar.readObject(r, "CSkFont");
-  r.raw(37);
-  const c1 = entityRef(ar, r);
-  r.raw(42);
-  const c2 = entityRef(ar, r);
-  r.raw(82);
-  return { k: "dimension", db, text, connect: [c1, c2] };
+  if (ar.ver >= 6) ar.readObject(r, "CSkFont");
+  r.raw(ar.ver >= 6 ? 37 : 32);
+  const c1 = pathRef(ar, r);
+  const path1 = connectionPaths(ar, r);
+  r.raw(32);
+  const c2 = pathRef(ar, r);
+  const path2 = connectionPaths(ar, r);
+  r.raw(ar.ver >= 6 ? 72 : 68);
+  return { k: "dimension", db, text, connect: [c1, c2], paths: [path1, path2] };
+}
+function textDelimiter(r) {
+  let p = r.pos;
+  while (true) {
+    const idx = findBytes(r.data, STR_MARKER, p, r.pos + 512);
+    if (idx < 0) {
+      throw new LegacyParseError(`text delimiter not found ${r.ctx()}`);
+    }
+    const blk = r.data.subarray(idx - 11, idx);
+    if (blk[0] === 1 && blk[1] === 0 && blk[2] === 0 && blk[3] === 0 && blk[6] <= 8 && blk[7] === 0 && blk[8] === 0 && blk[9] === 0 && blk[10] <= 1) {
+      return idx;
+    }
+    p = idx + 3;
+  }
+}
+function anchoredConnection(data, pos) {
+  if (pos + 24 > data.length) return false;
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  if (view.getUint32(pos + 20, true) !== 4) return false;
+  const kind = view.getUint32(pos + 16, true);
+  return kind >= 2 && kind <= 15;
 }
 function readText(ar, r) {
   preamble(ar, r);
   const db = drawbase(ar, r);
   ar.readObject(r, "CSkFont");
-  let p = r.pos;
-  let idx;
-  while (true) {
-    idx = findBytes(r.data, STR_MARKER, p, r.pos + 512);
-    if (idx < 0) {
-      throw new LegacyParseError(`text delimiter not found ${r.ctx()}`);
-    }
-    const blk = r.data.subarray(idx - 11, idx);
-    if (blk[0] === 1 && blk[1] === 0 && blk[2] === 0 && blk[3] === 0 && blk[6] === 3 && blk[7] === 0 && blk[8] === 0 && blk[9] === 0 && blk[10] === 1) {
-      break;
-    }
-    p = idx + 3;
+  let connect = null;
+  let paths = null;
+  if (anchoredConnection(r.data, r.pos)) {
+    r.raw(16 + 32);
+    connect = entityRef(ar, r);
+    paths = connectionPaths(ar, r);
   }
+  const idx = textDelimiter(r);
   r.raw(idx - r.pos);
   const text = r.utf16();
   r.raw(5);
@@ -2939,21 +3581,36 @@ function readText(ar, r) {
     r.raw(6);
     attach.push(val);
   }
-  return { k: "text", text, db, attach };
+  return { k: "text", text, db, attach, connect, paths };
 }
 function readEntityList(ar, r, count, owner) {
   const ents = [];
   ar.burnStack.push(0);
+  ar.inlineStack.push(/* @__PURE__ */ new Set());
   try {
-    return readEntityListInner(ar, r, count, owner, ents);
+    readEntityListInner(ar, r, count, owner, ents);
+    for (const slot of ar.inlineStack[ar.inlineStack.length - 1]) {
+      if (ents.length >= count) break;
+      const ent = ar.slots.get(slot);
+      ents.push([slot, ent ? ent[1] : null, ent ? ent[2] : null]);
+    }
+    return ents;
   } finally {
     ar.burnStack.pop();
+    ar.inlineStack.pop();
   }
 }
 function readEntityListInner(ar, r, count, owner, ents) {
   const view = new DataView(r.data.buffer, r.data.byteOffset, r.data.byteLength);
   while (ents.length < count) {
     const p = r.pos;
+    const inline = ar.inlineStack.length > 0 ? ar.inlineStack[ar.inlineStack.length - 1] : null;
+    if (inline && inline.size > 0 && ents.length + inline.size >= count) {
+      const next = ar.peekBackref(r);
+      if (next === null || !inline.has(next)) {
+        break;
+      }
+    }
     const hasBurnCredit = owner === "def" && ar.burnStack.length > 0 && ar.burnStack[ar.burnStack.length - 1] > 0;
     if (hasBurnCredit && p + 25 <= r.data.length && view.getUint32(p, true) === 0 && bytesEqual(r.data.subarray(p + 22, p + 25), STR_MARKER)) {
       break;
@@ -2963,6 +3620,7 @@ function readEntityListInner(ar, r, count, owner, ents) {
     try {
       const [s, n, v] = ar.readObject(r);
       ar.inEntityList = prevFlag;
+      inline?.delete(s);
       ents.push([s, n, v]);
     } catch (e) {
       ar.inEntityList = prevFlag;
@@ -2984,7 +3642,7 @@ function readEntityListInner(ar, r, count, owner, ents) {
 }
 function readDefinition(ar, r) {
   preamble(ar, r);
-  r.raw(ar.ver >= 17 ? 22 : 20);
+  r.raw(ar.ver >= 17 ? 22 : ar.ver >= 5 ? 20 : ar.ver >= FIRST_V4 ? 19 : 13);
   const nlayers = r.u32();
   if (nlayers > 1e4) {
     throw new LegacyParseError(`implausible def layer count ${r.ctx()}`);
@@ -2997,6 +3655,9 @@ function readDefinition(ar, r) {
     }
     ar.readObject(r, "CLayer");
     got += 1;
+  }
+  if (ar.ver === 19 && nlayers > 0 && r.peekU16() === 0) {
+    r.pos += 2;
   }
   const decl = r.u16();
   if (decl === 32767) {
@@ -3062,6 +3723,7 @@ function readDefinition(ar, r) {
   }
   const gap = r.raw(tpos - r.pos);
   const behavior = gap.length >= 9 ? gap[gap.length - 9] : 0;
+  const isGroup = gap.length >= 4 && (gap[gap.length - 4] | gap[gap.length - 3] << 8 | gap[gap.length - 2] << 16 | gap[gap.length - 1] << 24) === 1;
   ar.readObject(r, "CThumbnail");
   return {
     k: "definition",
@@ -3069,11 +3731,11 @@ function readDefinition(ar, r) {
     guid: toHex(guid),
     ents,
     faces_camera: Boolean(behavior & 1),
-    shadows_face_sun: Boolean(behavior & 2)
+    shadows_face_sun: Boolean(behavior & 2),
+    is_group: isGroup
   };
 }
 function readInstance(ar, r) {
-  const cls = ar.currentClass;
   const pre = preamble(ar, r);
   const db = drawbase(ar, r);
   const [ds, dn] = ar.readObject(r, "CComponentDefinition");
@@ -3081,10 +3743,8 @@ function readInstance(ar, r) {
     throw new LegacyParseError(`instance definition ref is ${dn} ${r.ctx()}`);
   }
   const xf = r.f64s(13);
-  const name = r.utf16();
-  const minSchema = cls === "CGroup" ? 1 : 5;
-  const schema = cls !== null ? ar.classSchema.get(cls) : void 0;
-  const guid = schema === void 0 || schema >= minSchema ? r.raw(16) : new Uint8Array(0);
+  const name = ar.ver >= FIRST_NAMED_INSTANCE || bytesEqual(r.peek(3), STR_MARKER) ? r.utf16() : "";
+  const guid = ar.ver >= 14 ? r.raw(16) : new Uint8Array(0);
   return { k: "instance", db, def: ds, xf, name, guid: toHex(guid), attrs: pre.attrs };
 }
 var READERS = {
@@ -3096,6 +3756,7 @@ var READERS = {
   CLoop: readLoop,
   CFace: readFace,
   CLayer: readLayer,
+  CCustomLineStyle: readCustomLineStyle,
   CMaterial: readMaterial,
   CDib: readDib,
   CAttributeContainer: readAttrContainer,
@@ -3182,15 +3843,19 @@ function probeLayerAnchorBases(data, ver, start, matCount) {
   if (ver >= 17) {
     boot.r.u8();
   }
-  const layerCount = boot.r.u32();
-  if (!(layerCount >= 1 && layerCount <= 1e5)) {
-    throw new LegacyParseError("implausible layer count in base probe");
+  let layerCount = 0;
+  if (ver >= FIRST_V4) {
+    layerCount = boot.r.u32();
+    if (!(layerCount >= 1 && layerCount <= 1e5)) {
+      throw new LegacyParseError("implausible layer count in base probe");
+    }
   }
   const layerSlots = [];
   for (let i = 0; i < layerCount; i++) {
     const [s2] = boot.readObject(boot.r, "CLayer");
     layerSlots.push(s2);
   }
+  boot.collectTrailingLayers(layerSlots, null, true);
   const [s, n] = boot.readObject(boot.r);
   if (n !== "premodel") {
     throw new LegacyParseError(`base probe: anchor resolved to ${n}`);
@@ -3221,23 +3886,61 @@ function walk(data) {
     start = layerHdr - (ver >= 17 ? 9 : 8);
   }
   const bases = matCount >= 2 ? [bootstrapTwoMaterials(data, ver, start)] : probeLayerAnchorBases(data, ver, start, matCount);
-  let lastExc = null;
+  let bestExc = null;
+  let bestAt = -1;
   for (const base of bases) {
     try {
       return walkModel(data, ver, start, matCount, base);
     } catch (exc) {
       if (!(exc instanceof LegacyParseError)) throw exc;
-      lastExc = exc;
+      const m = /@0x([0-9a-f]+)/.exec(exc.message);
+      const at = m ? parseInt(m[1], 16) : -1;
+      if (bestExc === null || at > bestAt) {
+        bestExc = exc;
+        bestAt = at;
+      }
     }
   }
-  if (lastExc !== null) throw lastExc;
+  if (bestExc !== null) throw bestExc;
   throw new LegacyParseError("no viable slot base candidate");
+}
+var RELEASED_ENTITIES = new Map(
+  ["CVertex", "CEdge", "CEdgeUse", "CLoop", "CFace"].map((name) => [name, ["obj", name, null]])
+);
+function buildAndReleaseDefinition(ar, slot, def) {
+  const builder = new LegacyBuilder();
+  try {
+    fillBuilder(builder, def.ents, ar.slots);
+  } catch (e) {
+    throw new SkpParseError(`Failed while building component definitions: ${e.message}`, {
+      stage: "legacy_defs",
+      definitionId: slot,
+      cause: e
+    });
+  }
+  ar.prebuilt.set(slot, builder);
+  def.ents = [];
+  ar.releasedSpans.push([slot + 1, ar.nextSlot]);
+  for (let k = slot + 1; k < ar.nextSlot; k++) {
+    const ent = ar.slots.get(k);
+    if (ent === void 0 || ent[0] !== "obj" || ent[2] === null || ent[1] === null) continue;
+    const placeholder = RELEASED_ENTITIES.get(ent[1]);
+    if (placeholder !== void 0) ar.slots.set(k, placeholder);
+  }
+}
+function definitionStartsAt(ar, data, at) {
+  if (data[at] === 255 && data[at + 1] === 255 && matchesAscii(data.subarray(at, at + 26), 6, "CComponentDefinition")) {
+    return true;
+  }
+  const defCls = ar.classSlot.get("CComponentDefinition");
+  return defCls !== void 0 && isClassRef(data, at, defCls);
 }
 function walkModel(data, ver, start, matCount, base) {
   const ar = new Archive(data, ver);
   Object.assign(ar.readers, READERS);
   ar.nextSlot = base;
   ar.walkBase = base;
+  ar.onDefinitionDone = (slot, def) => buildAndReleaseDefinition(ar, slot, def);
   const r = ar.r;
   r.pos = start;
   const materials = [];
@@ -3249,8 +3952,8 @@ function walkModel(data, ver, start, matCount, base) {
   if (ver >= 17) {
     r.u8();
   }
-  const layerCount = r.u32();
-  if (layerCount > 1e5) {
+  const layerCount = ver < FIRST_V4 ? 2 ** 30 : r.u32();
+  if (layerCount > 1e5 && ver >= FIRST_V4) {
     throw new LegacyParseError("implausible layer count");
   }
   const layers = [];
@@ -3267,20 +3970,7 @@ function walkModel(data, ver, start, matCount, base) {
     if (v === null) continue;
     layers.push([s, v]);
   }
-  const layCls = ar.classSlot.get("CLayer");
-  while (true) {
-    const tag = r.peekU16();
-    if (tag === 0) {
-      r.pos += 2;
-      continue;
-    }
-    if (layCls !== void 0 && tag === (32768 | layCls)) {
-      const [s, , v] = ar.readObject(r, "CLayer");
-      if (v !== null) layers.push([s, v]);
-      continue;
-    }
-    break;
-  }
+  ar.collectTrailingLayers(null, layers);
   const [, dn] = ar.readObject(r);
   if (dn !== "CLayer") {
     throw new LegacyParseError(`definition-list anchor is ${dn}, not a layer`);
@@ -3288,7 +3978,19 @@ function walkModel(data, ver, start, matCount, base) {
   let defCount = r.u32();
   if (defCount > 1e6) {
     const retry = retryCountAfterV20Filler(r, r.pos - 4, 1e6, ar);
-    if (retry !== null) defCount = retry;
+    if (retry !== null) {
+      defCount = retry;
+      if (!definitionStartsAt(ar, r.data, r.pos)) {
+        defCount = 0;
+        r.pos -= 4;
+      }
+    } else {
+      const rootCountAt = findEmptyRootAfterV20Filler(r.data, r.pos - 4);
+      if (rootCountAt !== null) {
+        defCount = 0;
+        r.pos = rootCountAt;
+      }
+    }
   }
   if (defCount > 1e6) {
     throw new LegacyParseError("implausible definition count");
@@ -3317,10 +4019,247 @@ function walkModel(data, ver, start, matCount, base) {
   const root = readEntityList(ar, r, rootCount, "root");
   return { ar, root, layers, materials };
 }
+var PAGE_DECL_RE = [255, 255, null, 0, 9, 0, 67, 86, 105, 101, 119, 80, 97, 103, 101];
+var PAGE_KNOWN_FLAGS = 511;
+var RENDERING_OPTIONS_LEN = { 14: 206, 15: 206, 16: 206, 17: 206, 18: 211, 19: 212, 20: 213 };
+var PAGE_AXES_LEN = 110;
+var PAGE_TRAILER_LEN = 22;
+var SHADOW_INFO_FIXED_LEN = 60;
+var STYLE_VALUE_SIZES = { 1: 1, 3: 2, 4: 4, 5: 4, 6: 4, 7: 8 };
+function findPageDecl(data, from) {
+  const n = PAGE_DECL_RE.length;
+  for (let i = from; i + n <= data.length; i++) {
+    let ok = true;
+    for (let j = 0; j < n; j++) {
+      const want = PAGE_DECL_RE[j];
+      if (want === null) {
+        const v = data[i + j];
+        if (v !== 12 && v !== 13 && v !== 15) {
+          ok = false;
+          break;
+        }
+      } else if (data[i + j] !== want) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) return i;
+  }
+  return -1;
+}
+function readTag(r) {
+  const v = r.u16();
+  if (v === 0) return ["null", 0];
+  if (v === 65535) return ["decl", 0];
+  if (v === 32767) {
+    const w = r.u32();
+    return (w & 2147483648) !== 0 ? ["class", w & 2147483647] : ["obj", w];
+  }
+  return (v & 32768) !== 0 ? ["class", v & 32767] : ["obj", v];
+}
+function popcount8(mask) {
+  let n = 0;
+  for (let bit = 0; bit < 8; bit++) if (mask & 1 << bit) n++;
+  return n;
+}
+function skipPid(r) {
+  r.raw(popcount8(r.u8()));
+}
+var PageClasses = class {
+  constructor() {
+    // CCamera and CDib are declared in the document prefix; the scene records only refer to them, at
+    // the schemas every v6+ file uses.
+    this.schema = /* @__PURE__ */ new Map([
+      ["CCamera", 5],
+      ["CDib", 3]
+    ]);
+    this.slot = /* @__PURE__ */ new Map();
+  }
+  /** After a 'decl' or 'class' tag: the declaration's header (if any); returns the schema the
+   * object was written with. */
+  object(r, kind, slot, name) {
+    if (kind === "decl") {
+      const schema2 = r.u16();
+      const n = r.u16();
+      const got = new TextDecoder("ascii").decode(r.raw(n));
+      if (n !== name.length || got !== name) {
+        throw new LegacyParseError(`expected a ${name} declaration ${r.ctx()}`);
+      }
+      this.schema.set(name, schema2);
+    } else {
+      const have = this.slot.get(name);
+      if (have === void 0) this.slot.set(name, slot);
+      else if (have !== slot) throw new LegacyParseError(`${name} class-ref to another slot ${r.ctx()}`);
+    }
+    const schema = this.schema.get(name);
+    if (schema === void 0) throw new LegacyParseError(`${name} object of an unknown schema ${r.ctx()}`);
+    return schema;
+  }
+};
+function readPageCamera(r) {
+  const eye = r.f64s(3);
+  const target = r.f64s(3);
+  const up = r.f64s(3);
+  r.f64s(2);
+  const perspective = r.u8();
+  const fov = r.f64();
+  const orthoHeight = r.f64();
+  r.raw(137 - 105);
+  r.u16();
+  r.utf16();
+  r.raw(33);
+  return { eye, target, up, fov, parallel: perspective === 0, orthoHeight };
+}
+function skipPageStyle(r, schema) {
+  if (r.u16() !== 0) throw new LegacyParseError(`style with attributes ${r.ctx()}`);
+  if (schema >= 2) skipPid(r);
+  r.raw(16);
+  r.utf16();
+  r.u32();
+  r.utf16();
+  r.utf16();
+  const n = r.u32();
+  for (let i = 0; i < n; i++) {
+    r.u32();
+    const m = r.u32();
+    for (let j = 0; j < m; j++) {
+      const size = STYLE_VALUE_SIZES[r.u32()];
+      if (size === void 0) throw new LegacyParseError(`unknown style value type ${r.ctx()}`);
+      r.raw(size);
+    }
+  }
+}
+function readPageRefs(r, n) {
+  if (n > Math.floor((r.data.length - r.pos) / 2)) {
+    throw new LegacyParseError(`implausible ref count ${n} ${r.ctx()}`);
+  }
+  const refs = [];
+  for (let i = 0; i < n; i++) {
+    const [kind, v] = readTag(r);
+    if (kind !== "obj") throw new LegacyParseError(`expected a back-ref ${r.ctx()}`);
+    refs.push(v);
+  }
+  return refs;
+}
+function readPageRecord(ar, r, classes) {
+  let [kind, slot] = readTag(r);
+  if (kind !== "decl" && kind !== "class") throw new LegacyParseError(`expected a CViewPage record ${r.ctx()}`);
+  const schema = classes.object(r, kind, slot, "CViewPage");
+  if (r.u16() !== 0) throw new LegacyParseError(`scene with attributes ${r.ctx()}`);
+  if (schema >= 13) skipPid(r);
+  const page = {
+    name: r.utf16(),
+    eye: null,
+    target: null,
+    up: null,
+    fov: 35,
+    parallel: false,
+    orthoHeight: 0,
+    hiddenLayerIds: []
+  };
+  r.utf16();
+  const flags = r.u32();
+  if (flags & ~PAGE_KNOWN_FLAGS) throw new LegacyParseError(`scene capture flags 0x${flags.toString(16)} ${r.ctx()}`);
+  const takeCamera = () => {
+    [kind, slot] = readTag(r);
+    if (kind === "decl" || kind === "class") {
+      classes.object(r, kind, slot, "CCamera");
+      const c = readPageCamera(r);
+      page.eye = c.eye;
+      page.target = c.target;
+      page.up = c.up;
+      page.fov = c.fov;
+      page.parallel = c.parallel;
+      page.orthoHeight = c.orthoHeight;
+    }
+  };
+  if (schema >= 15) {
+    if (flags & 1) {
+      [kind, slot] = readTag(r);
+      if (kind !== "decl" && kind !== "class") throw new LegacyParseError(`expected a camera ${r.ctx()}`);
+      classes.object(r, kind, slot, "CCamera");
+      const c = readPageCamera(r);
+      page.eye = c.eye;
+      page.target = c.target;
+      page.up = c.up;
+      page.fov = c.fov;
+      page.parallel = c.parallel;
+      page.orthoHeight = c.orthoHeight;
+    }
+  } else {
+    takeCamera();
+    [kind, slot] = readTag(r);
+    if (kind === "decl" || kind === "class") {
+      classes.object(r, kind, slot, "CDib");
+      readDib(ar, r);
+    }
+    if (schema >= 13) r.u8();
+  }
+  if (flags & 2) {
+    const base = RENDERING_OPTIONS_LEN[ar.ver];
+    if (base === void 0) throw new LegacyParseError(`rendering options of a v${ar.ver} scene`);
+    r.raw(base + (schema >= 15 ? 3 : 0));
+    [kind, slot] = readTag(r);
+    if (kind === "decl" || kind === "class") skipPageStyle(r, classes.object(r, kind, slot, "CSkpStyle"));
+  }
+  if (flags & 4) {
+    r.raw(schema >= 13 ? 3 : 2);
+    r.u32();
+    r.u8();
+    r.utf16();
+    r.utf16();
+    r.raw(SHADOW_INFO_FIXED_LEN);
+  }
+  if (flags & 8) r.raw(PAGE_AXES_LEN + (schema >= 13 ? 1 : 0));
+  if (flags & 16) {
+    r.u8();
+    readPageRefs(r, r.u32());
+  }
+  if (flags & 32) page.hiddenLayerIds = readPageRefs(r, r.u32());
+  if (flags & 64) readPageRefs(r, r.u32());
+  if (schema >= 15) {
+    r.raw(PAGE_TRAILER_LEN - 1);
+    return page;
+  }
+  r.raw(PAGE_TRAILER_LEN);
+  const png = r.u32();
+  if (png > r.data.length - r.pos) throw new LegacyParseError(`implausible thumbnail length ${png} ${r.ctx()}`);
+  r.raw(png);
+  return page;
+}
+function readPageList(data, ar) {
+  const start = findPageDecl(data, ar.r.pos);
+  if (start < 0) {
+    return findBytes(data, new TextEncoder().encode("CViewPage"), ar.r.pos, data.length) >= 0 ? null : [];
+  }
+  try {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const count = view.getUint32(start - 4, true);
+    if (count < 1 || count > 1e4) throw new LegacyParseError(`implausible scene count ${count}`);
+    const r = new R(data, start);
+    const classes = new PageClasses();
+    const pages = [];
+    for (let i = 0; i < count; i++) pages.push(readPageRecord(ar, r, classes));
+    const [kind] = readTag(r);
+    if (kind !== "obj" && kind !== "null") {
+      throw new LegacyParseError(`no selected-scene ref after the scenes ${r.ctx()}`);
+    }
+    for (const page of pages) {
+      page.hiddenLayerIds = page.hiddenLayerIds.filter((id) => {
+        const ent = ar.slots.get(id);
+        return ent !== void 0 && ent[0] === "obj" && ent[1] === "CLayer";
+      });
+    }
+    return pages;
+  } catch (e) {
+    if (e instanceof LegacyParseError || e instanceof RangeError) return null;
+    throw e;
+  }
+}
 var LegacyBuilder = class {
   constructor() {
     this.vertices = new DefaultVertexStore();
-    this.edges = /* @__PURE__ */ new Map();
+    this.edges = new DefaultEdgeStore();
     this.edgeFlags = new EdgeFlagStore();
     this.faces = /* @__PURE__ */ new Map();
     this.instances = [];
@@ -3329,6 +4268,8 @@ var LegacyBuilder = class {
     this.dimensions = [];
     this.constructionLines = [];
     this.constructionPoints = [];
+    this.edgeCurves = /* @__PURE__ */ new Map();
+    this.arcCurves = /* @__PURE__ */ new Map();
   }
 };
 function addEdge(builder, slot, e, slots) {
@@ -3349,6 +4290,13 @@ function addEdge(builder, slot, e, slots) {
   if (flags) {
     builder.edgeFlags.set(slot, flags);
   }
+  if (e.curve !== null && e.curve !== void 0) {
+    builder.edgeCurves.set(slot, e.curve);
+    const cv = e.curve_value;
+    if (cv && typeof cv === "object" && cv.k === "arccurve") {
+      builder.arcCurves.set(e.curve, cv.params);
+    }
+  }
 }
 function fillBuilder(builder, ents, slots) {
   for (const [s, , v] of ents) {
@@ -3356,6 +4304,8 @@ function fillBuilder(builder, ents, slots) {
     const k = v.k;
     if (k === "edge") {
       addEdge(builder, s, v, slots);
+    } else if (k === "arccurve") {
+      builder.arcCurves.set(s, v.params);
     } else if (k === "face") {
       const loops = [];
       for (const lp of v.loops) {
@@ -3498,8 +4448,8 @@ function parseLegacyToRaw(data, options) {
     const colorized = v.colorized || false;
     let texture = null;
     if ("tex_dib" in v) {
-      const dib = slots.get(v.tex_dib);
-      const texData = dib && dib[2] ? dib[2].data : null;
+      const dib = v.tex_dib !== null ? slots.get(v.tex_dib) : void 0;
+      const texData = dib && dib[2] ? dib[2].data : v.tex_data ?? null;
       const isPng = texData && texData.length >= 4 && texData[0] === 137 && texData[1] === 80 && texData[2] === 78 && texData[3] === 71;
       const ext = isPng ? ".png" : ".jpg";
       const fname = v.tex_file || `${v.name}${ext}`;
@@ -3511,10 +4461,8 @@ function parseLegacyToRaw(data, options) {
       transparency: trans,
       id: null,
       texture,
-      // colourize type is not decoded in the legacy record; tint (1) is
-      // the correct rendering for the grey base textures observed.
       colorized,
-      colorizeType: colorized ? 1 : 0
+      colorizeType: v.colorize_type ?? 0
     };
     materialsMap.set(v.name, matObj);
     materialIdToName.set(s, v.name);
@@ -3542,12 +4490,16 @@ function parseLegacyToRaw(data, options) {
       lastSlot = s;
       if (ent[0] === "obj" && ent[1] === "CComponentDefinition" && ent[2]) {
         const d = ent[2];
-        const b = new LegacyBuilder();
-        fillBuilder(b, d.ents, slots);
+        let b = ar.prebuilt.get(s);
+        if (b === void 0) {
+          b = new LegacyBuilder();
+          fillBuilder(b, d.ents, slots);
+        }
         defsDict.set(s, {
           guid: d.guid,
           name: d.name,
           isImage: imageDefIds.has(s),
+          isGroup: d.is_group || false,
           alwaysFacesCamera: d.faces_camera || false,
           shadowsFaceSun: d.shadows_face_sun || false,
           builder: b
@@ -3572,10 +4524,12 @@ function parseLegacyToRaw(data, options) {
     guid: "ROOT",
     name: "ROOT_MODEL",
     isImage: false,
+    isGroup: false,
     alwaysFacesCamera: false,
     shadowsFaceSun: false,
     builder: rootBuilder
   });
+  const pages = readPageList(data, ar) ?? [];
   emitLog(
     options,
     "info",
@@ -3590,11 +4544,11 @@ function parseLegacyToRaw(data, options) {
     layerColors,
     layerHidden,
     layerIdToName,
-    // Classic (pre-2021) files carry no equivalent VFF entity families -
-    // the legacy CArchive walker never surfaces scenes or model-level
-    // linear dimensions (legacy files still surface text-only dimensions
-    // per definition, via each entity list's own CDimensionLinear reads).
-    pages: [],
+    // Scenes come from the scene list in the document tail (see readPageList).
+    // Classic files carry no model-level linear dimensions - they surface as
+    // text-only dimensions per definition, via each entity list's own
+    // CDimensionLinear reads.
+    pages,
     dimensions: [],
     materialIdToName,
     materialsMap,
@@ -3823,7 +4777,7 @@ function parsePages(node) {
           page.hiddenLayerIds.push(parseVarInt(hidden, off + 1, ln));
           off += 1 + ln;
         }
-        if (page.eye !== null && page.target !== null) pages.push(page);
+        pages.push(page);
       }
     }
   }
@@ -3928,7 +4882,8 @@ function buildInstancedSceneFromParsed(parsed, options) {
       inheritedMaterial,
       fallbackLayerColor: getLayerColor(layer),
       definitionId: defId,
-      respectVisibility: options?.respectEdgeVisibility
+      respectVisibility: options?.respectEdgeVisibility,
+      frontSideOnly: options?.frontSideOnly
     });
     const primitives = [];
     const scale = 0.0254;
@@ -3978,8 +4933,9 @@ function buildInstancedSceneFromParsed(parsed, options) {
     return id;
   }
   const activeDefinitions = /* @__PURE__ */ new Set();
-  function toGltfMatrix(m) {
+  function toGltfMatrix(raw) {
     const scale = 0.0254;
+    const m = foldScale(raw);
     const a = m[0], b = m[1], c = m[2];
     const d = m[3], e = m[4], f = m[5];
     const g = m[6], h = m[7], i = m[8];
@@ -4015,10 +4971,12 @@ function buildInstancedSceneFromParsed(parsed, options) {
       const refIdx = inst.refIdx;
       const newMatrix = multiplyMatrices(currentMatrix, inst.matrix);
       let lName = parentLayer;
+      let ownLayer;
       let instMaterial = inheritedMaterial;
       let properties = { ...inst.properties || {} };
       if (inst.layerId !== null && inst.layerId !== void 0) {
-        lName = layerIdToName.get(inst.layerId) || parentLayer;
+        ownLayer = layerIdToName.get(inst.layerId);
+        lName = ownLayer || parentLayer;
       }
       if (inst.materialId !== null && inst.materialId !== void 0) {
         const matName = materialIdToName.get(inst.materialId);
@@ -4082,6 +5040,7 @@ function buildInstancedSceneFromParsed(parsed, options) {
         nameIsGenerated,
         definitionName: childDefName,
         layer: lName,
+        ...ownLayer ? { ownLayer } : {},
         matrix: toGltfMatrix(inst.matrix),
         positionMm: [
           Math.round(tx * 100) / 100,
@@ -4185,7 +5144,7 @@ function buildInstancedSceneFromParsed(parsed, options) {
     "info",
     `Instanced scene build complete: ${instanceCounter.count} instances, ${meshResources.length} mesh resources (${((Date.now() - t0) / 1e3).toFixed(2)}s)`
   );
-  return { sceneHierarchy, meshResources, gltfMaterials, textures, bounds, layerHidden: Object.fromEntries(layerHidden) };
+  return { sceneHierarchy, meshResources, gltfMaterials, textures, bounds, layerHidden: Object.fromEntries(layerHidden), layerColors: Object.fromEntries(layerColors) };
 }
 
 // src/thumbnail.ts
@@ -6697,6 +7656,293 @@ function toFragments(scene, options = {}) {
   const rawBytes = builder.asUint8Array();
   return options.raw ? rawBytes : fflate.zlibSync(rawBytes);
 }
+var SUPPORTED_REPRESENTATION_CLASSES = /* @__PURE__ */ new Set([1 /* SHELL */]);
+function cross3(a, b) {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0]
+  ];
+}
+function computeFlatNormals(points, triangles) {
+  const normals = points.map(() => [0, 0, 1]);
+  for (const [a, b, c] of triangles) {
+    const pa = points[a];
+    const pb = points[b];
+    const pc = points[c];
+    const u = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]];
+    const v = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]];
+    let n = cross3(u, v);
+    const length = Math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    if (length > 1e-12) {
+      n = [n[0] / length, n[1] / length, n[2] / length];
+    }
+    normals[a] = n;
+    normals[b] = n;
+    normals[c] = n;
+  }
+  return normals;
+}
+function transformToMatrix16(transform) {
+  const pos = transform.position(new DoubleVector());
+  const xDirS = transform.xDirection(new FloatVector());
+  const yDirS = transform.yDirection(new FloatVector());
+  const xDir = [xDirS.x(), xDirS.y(), xDirS.z()];
+  const yDir = [yDirS.x(), yDirS.y(), yDirS.z()];
+  const zDir = cross3(xDir, yDir);
+  return [
+    xDir[0],
+    xDir[1],
+    xDir[2],
+    0,
+    yDir[0],
+    yDir[1],
+    yDir[2],
+    0,
+    zDir[0],
+    zDir[1],
+    zDir[2],
+    0,
+    pos.x(),
+    pos.y(),
+    pos.z(),
+    1
+  ];
+}
+function extractNameAttribute(attribute) {
+  if (attribute === null) return "";
+  for (let i = 0; i < attribute.dataLength(); i++) {
+    const raw = attribute.data(i);
+    try {
+      const triple = JSON.parse(raw);
+      if (Array.isArray(triple) && triple.length >= 2 && triple[0] === "Name") {
+        return String(triple[1]);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return "";
+}
+function fromFragments(data) {
+  let rawBytes;
+  try {
+    rawBytes = fflate.unzlibSync(data);
+  } catch {
+    rawBytes = data;
+  }
+  const bb = new flatbuffers15.ByteBuffer(rawBytes);
+  const model = Model.getRootAsModel(bb);
+  const meshes = model.meshes();
+  const gltfMaterials = [];
+  if (meshes !== null) {
+    for (let i = 0; i < meshes.materialsLength(); i++) {
+      const mat = meshes.materials(i);
+      gltfMaterials.push({
+        pbrMetallicRoughness: {
+          baseColorFactor: [mat.r() / 255, mat.g() / 255, mat.b() / 255, mat.a() / 255],
+          metallicFactor: 0,
+          roughnessFactor: 1
+        },
+        doubleSided: mat.renderedFaces() !== 0 /* ONE */
+      });
+    }
+  }
+  if (gltfMaterials.length === 0) {
+    gltfMaterials.push({
+      pbrMetallicRoughness: { baseColorFactor: [0.8, 0.8, 0.8, 1], metallicFactor: 0, roughnessFactor: 1 }
+    });
+  }
+  const nShells = meshes !== null ? meshes.shellsLength() : 0;
+  const shellGeometry = new Array(nShells).fill(null);
+  const shellTriangles = new Array(nShells).fill(null);
+  function decodeShell(shellIdx) {
+    if (shellGeometry[shellIdx] !== null) {
+      return { points: shellGeometry[shellIdx], triangles: shellTriangles[shellIdx] };
+    }
+    const shell = meshes.shells(shellIdx);
+    const nPoints = shell.pointsLength();
+    const points = [];
+    for (let j = 0; j < nPoints; j++) {
+      const p = shell.points(j);
+      points.push([p.x(), p.y(), p.z()]);
+    }
+    const isBig = shell.type() === 1 /* BIG */;
+    const triangles = [];
+    if (isBig) {
+      for (let j = 0; j < shell.bigProfilesLength(); j++) {
+        const profile = shell.bigProfiles(j);
+        if (profile.indicesLength() >= 3) {
+          triangles.push([profile.indices(0), profile.indices(1), profile.indices(2)]);
+        }
+      }
+    } else {
+      for (let j = 0; j < shell.profilesLength(); j++) {
+        const profile = shell.profiles(j);
+        if (profile.indicesLength() >= 3) {
+          triangles.push([profile.indices(0), profile.indices(1), profile.indices(2)]);
+        }
+      }
+    }
+    shellGeometry[shellIdx] = points;
+    shellTriangles[shellIdx] = triangles;
+    return { points, triangles };
+  }
+  const nSamples = meshes !== null ? meshes.samplesLength() : 0;
+  const samplesByItem = /* @__PURE__ */ new Map();
+  for (let k = 0; k < nSamples; k++) {
+    const itemIdx = meshes.meshesItems(k);
+    if (!samplesByItem.has(itemIdx)) samplesByItem.set(itemIdx, []);
+    samplesByItem.get(itemIdx).push(k);
+  }
+  const nItems = model.localIdsLength();
+  const localIdToItemIndex = /* @__PURE__ */ new Map();
+  for (let i = 0; i < nItems; i++) {
+    localIdToItemIndex.set(model.localIds(i), i);
+  }
+  const guidByItem = /* @__PURE__ */ new Map();
+  const nGuidItems = model.guidsItemsLength();
+  for (let i = 0; i < nGuidItems; i++) {
+    const lid = model.guidsItems(i);
+    const itemIdx = localIdToItemIndex.get(lid);
+    if (itemIdx !== void 0 && i < model.guidsLength()) {
+      guidByItem.set(itemIdx, model.guids(i));
+    }
+  }
+  let metadata = {};
+  const metadataRaw = model.metadata();
+  if (metadataRaw) {
+    try {
+      metadata = JSON.parse(metadataRaw);
+    } catch {
+      metadata = {};
+    }
+  }
+  const layerHidden = { ...metadata.layer_hidden || {} };
+  const generatedNameGuids = new Set(metadata.generated_name_guids || []);
+  const meshResources = [];
+  const resourceBySignature = /* @__PURE__ */ new Map();
+  let warnedUnsupported = false;
+  function buildResourceForItem(itemIdx, itemName) {
+    const sampleIndices = samplesByItem.get(itemIdx) || [];
+    const signature = [];
+    const primitives = [];
+    for (const k of sampleIndices) {
+      const sample = meshes.samples(k);
+      const repIdx = sample.representation();
+      const matIdx = sample.material();
+      const representation = repIdx < meshes.representationsLength() ? meshes.representations(repIdx) : null;
+      const repClass = representation !== null ? representation.representationClass() : 1 /* SHELL */;
+      if (!SUPPORTED_REPRESENTATION_CLASSES.has(repClass)) {
+        if (!warnedUnsupported) {
+          console.warn(
+            `openskp fromFragments: skipping a sample with unsupported RepresentationClass=${repClass} (only SHELL is read today).`
+          );
+          warnedUnsupported = true;
+        }
+        continue;
+      }
+      signature.push([repIdx, matIdx]);
+      const shellIdx = representation.id();
+      if (shellIdx >= nShells) continue;
+      const { points, triangles } = decodeShell(shellIdx);
+      const normals = computeFlatNormals(points, triangles);
+      const positions = new Float32Array(points.length * 3);
+      const normalsArr = new Float32Array(points.length * 3);
+      for (let i = 0; i < points.length; i++) {
+        positions[i * 3] = points[i][0];
+        positions[i * 3 + 1] = points[i][1];
+        positions[i * 3 + 2] = points[i][2];
+        normalsArr[i * 3] = normals[i][0];
+        normalsArr[i * 3 + 1] = normals[i][1];
+        normalsArr[i * 3 + 2] = normals[i][2];
+      }
+      const uvs = new Float32Array(points.length * 2);
+      const indices = new Uint32Array(triangles.length * 3);
+      for (let i = 0; i < triangles.length; i++) {
+        indices[i * 3] = triangles[i][0];
+        indices[i * 3 + 1] = triangles[i][1];
+        indices[i * 3 + 2] = triangles[i][2];
+      }
+      primitives.push({ positions, normals: normalsArr, uvs, indices, materialIndex: matIdx < gltfMaterials.length ? matIdx : 0 });
+    }
+    const sigKey = signature.map(([r, m]) => `${r}:${m}`).join(",");
+    if (sigKey && resourceBySignature.has(sigKey)) {
+      return resourceBySignature.get(sigKey);
+    }
+    const resourceId = `frag-${itemIdx}`;
+    meshResources.push({
+      id: resourceId,
+      definitionId: itemIdx,
+      definitionName: itemName || resourceId,
+      variantKey: "default",
+      primitives
+    });
+    if (sigKey) resourceBySignature.set(sigKey, resourceId);
+    return resourceId;
+  }
+  function buildNode(spatial) {
+    const localId = spatial.localId();
+    const category = spatial.category() || "";
+    let name = "";
+    let guid = "";
+    let meshResourceId;
+    let matrix = IDENTITY_MATRIX;
+    let nameIsGenerated = false;
+    if (localId !== null) {
+      const itemIdx = localIdToItemIndex.get(localId);
+      if (itemIdx !== void 0) {
+        const attribute = itemIdx < model.attributesLength() ? model.attributes(itemIdx) : null;
+        name = extractNameAttribute(attribute);
+        guid = guidByItem.get(itemIdx) || "";
+        nameIsGenerated = Boolean(guid) && generatedNameGuids.has(guid);
+        if (samplesByItem.has(itemIdx)) {
+          meshResourceId = buildResourceForItem(itemIdx, name || category);
+          const transform = meshes.globalTransforms(samplesByItem.get(itemIdx)[0]);
+          matrix = transformToMatrix16(transform);
+        }
+      }
+    }
+    const children = [];
+    for (let i = 0; i < spatial.childrenLength(); i++) {
+      children.push(buildNode(spatial.children(i)));
+    }
+    return {
+      name,
+      nameIsGenerated,
+      definitionName: category,
+      layer: category,
+      matrix,
+      positionMm: [0, 0, 0],
+      properties: {},
+      attributeDictionaries: {},
+      guid,
+      meshResourceId,
+      children
+    };
+  }
+  const rootSpatial = model.spatialStructure();
+  const sceneHierarchy = rootSpatial !== null ? buildNode(rootSpatial) : {
+    name: "ROOT",
+    nameIsGenerated: false,
+    definitionName: "ROOT",
+    layer: "",
+    matrix: IDENTITY_MATRIX,
+    positionMm: [0, 0, 0],
+    properties: {},
+    attributeDictionaries: {},
+    guid: "",
+    children: []
+  };
+  return {
+    bounds: null,
+    sceneHierarchy,
+    meshResources,
+    gltfMaterials,
+    textures: [],
+    layerHidden
+  };
+}
 
 // src/instanced-glb.ts
 function stripTextureRefs(materials) {
@@ -6967,16 +8213,36 @@ function sanitizeMaterialName(name) {
   const clean = name.trim().replace(/[^\w.-]/g, "_");
   return clean || "default_material";
 }
+function materialNames(scene) {
+  const bases = scene.gltfMaterials.map(
+    (mat, i) => sanitizeMaterialName(mat?.name || `Material_${i}`)
+  );
+  const reserved = new Set(bases);
+  const used = /* @__PURE__ */ new Set();
+  return bases.map((base, i) => {
+    let name = base;
+    if (used.has(name)) {
+      const stem = `${base}_${i + 1}`;
+      name = stem;
+      let suffix = 1;
+      while (used.has(name) || reserved.has(name)) {
+        name = `${stem}_${suffix++}`;
+      }
+    }
+    used.add(name);
+    return name;
+  });
+}
 function toMTL(scene) {
   const lines = [
     "# OpenSKP MTL Material Library Export",
     `# Materials: ${scene.gltfMaterials.length}`,
     ""
   ];
+  const names = materialNames(scene);
   for (let idx = 0; idx < scene.gltfMaterials.length; idx++) {
     const mat = scene.gltfMaterials[idx];
-    const rawName = mat.name || `Material_${idx}`;
-    const matName = sanitizeMaterialName(rawName);
+    const matName = names[idx];
     const pbr = mat.pbrMetallicRoughness || {};
     const baseColor = pbr.baseColorFactor || [0.8, 0.8, 0.8, 1];
     const r = (baseColor[0] ?? 0.8).toFixed(6);
@@ -7010,6 +8276,7 @@ function toOBJ(scene, mtlFilename) {
     lines.push(`mtllib ${mtlFilename}`);
   }
   lines.push("");
+  const names = materialNames(scene);
   let vertOffset = 1;
   let uvOffset = 1;
   let normOffset = 1;
@@ -7037,8 +8304,7 @@ function toOBJ(scene, mtlFilename) {
     }
     const matIdx = prim.materialIndex;
     if (matIdx >= 0 && matIdx < scene.gltfMaterials.length) {
-      const matRaw = scene.gltfMaterials[matIdx].name || `Material_${matIdx}`;
-      lines.push(`usemtl ${sanitizeMaterialName(matRaw)}`);
+      lines.push(`usemtl ${names[matIdx]}`);
     }
     const triCount = Math.floor(prim.indices.length / 3);
     const hasUvs = uvCount === vertCount;
@@ -7247,11 +8513,12 @@ function exportSTL(scene, outputPath, options) {
 function getMaterialRGBA(scene, matIdx) {
   if (matIdx >= 0 && scene.gltfMaterials && matIdx < scene.gltfMaterials.length) {
     const mat = scene.gltfMaterials[matIdx];
-    if (mat && mat.baseColorFactor && Array.isArray(mat.baseColorFactor) && mat.baseColorFactor.length >= 4) {
-      const r = Math.max(0, Math.min(255, Math.round(mat.baseColorFactor[0] * 255)));
-      const g = Math.max(0, Math.min(255, Math.round(mat.baseColorFactor[1] * 255)));
-      const b = Math.max(0, Math.min(255, Math.round(mat.baseColorFactor[2] * 255)));
-      const a = Math.max(0, Math.min(255, Math.round(mat.baseColorFactor[3] * 255)));
+    const color = mat?.pbrMetallicRoughness?.baseColorFactor;
+    if (Array.isArray(color) && color.length >= 4) {
+      const r = Math.max(0, Math.min(255, Math.round(color[0] * 255)));
+      const g = Math.max(0, Math.min(255, Math.round(color[1] * 255)));
+      const b = Math.max(0, Math.min(255, Math.round(color[2] * 255)));
+      const a = Math.max(0, Math.min(255, Math.round(color[3] * 255)));
       return [r, g, b, a];
     }
   }
@@ -11265,6 +12532,9 @@ function u32Bytes(v) {
 function readU16(buf, pos) {
   return (buf[pos] | buf[pos + 1] << 8) & 65535;
 }
+function readU322(buf, pos) {
+  return (buf[pos] | buf[pos + 1] << 8 | buf[pos + 2] << 16 | buf[pos + 3] << 24) >>> 0;
+}
 function writeU16At(buf, pos, v) {
   buf[pos] = v & 255;
   buf[pos + 1] = v >> 8 & 255;
@@ -11822,7 +13092,7 @@ var ArchiveWriter = class {
   }
   /** Close out a CComponentDefinition record: relationship count, GUID,
    * name, timestamp, behavior flags, and a default thumbnail. */
-  writeDefinitionTail(name) {
+  writeDefinitionTail(name, isGroup = false) {
     this.pushU32(0);
     this.pushU16(0);
     this.pushBytes(randomGuidBytes());
@@ -11830,8 +13100,11 @@ var ArchiveWriter = class {
     this.writeStr("");
     this.writeStr("");
     this.pushU32(Math.floor(Date.now() / 1e3));
-    this.pushZeros(43);
+    const groupFlagPos = this.bytes.length + 39;
+    this.pushZeros(39);
+    this.pushU32(isGroup ? 1 : 0);
     this.writeThumbnail();
+    return groupFlagPos;
   }
   writeInstanceLike(className, schema, realAttrs, definitionSlot, name, translation, matrix3x3, mat, layer, attributeDicts = [], hidden = false) {
     this.newOfKnownClass(className, schema);
@@ -12074,7 +13347,7 @@ var ArchiveWriter = class {
     this.pushF64(nx);
     this.pushF64(ny);
     this.pushF64(nz);
-    this.pushF64(d);
+    this.pushF64(-d);
     this.pushU32(1 + holes.length);
     const loopSlot = this.newOfKnownClass("CLoop", 1);
     this.preamble(0);
@@ -12390,6 +13663,7 @@ var ComponentDefinitionBuilder = class {
       attributeDicts,
       options.hidden ?? false
     );
+    if (definition.groupFlagPos !== void 0) this._skp._patchDefinitionCount(definition.groupFlagPos, 1);
   }
   /** @internal called automatically once the defining callback (passed
    * to addComponentDefinition/addGroup) returns. */
@@ -12399,7 +13673,7 @@ var ComponentDefinitionBuilder = class {
     }
     const writer = this._skp._definitionWriter();
     this._skp._patchDefinitionCount(this.countPatchPos, this.newEntityCount);
-    writer.writeDefinitionTail(this.name);
+    this.groupFlagPos = writer.writeDefinitionTail(this.name, this.groupPlacement !== void 0);
     this.closed = true;
     this._skp._clearOpenDefinition();
     if (this.groupPlacement !== void 0) {
@@ -12442,7 +13716,14 @@ var SkpBuilder = class {
     this.newEntityCount = 0;
     this.faceCount = 0;
     this.data = loadScaffold();
-    this.materialWriter = new ArchiveWriter(this.base, {});
+    this.pidStart = readU322(this.data, PID_COUNTER_POS) + 1;
+    this.materialWriter = new ArchiveWriter(this.base, {}, this.pidStart);
+  }
+  /** The next free persistent ID: sections are written in order (materials,
+   * layers, definitions, root geometry), each continuing where the previous
+   * one stopped. */
+  nextPid() {
+    return (this.geometryWriter ?? this.definitionWriterInstance ?? this.layerWriter ?? this.materialWriter).nextPid;
   }
   addMaterial(name, rgba, opacity) {
     if (this.geometryWriter !== null) throw new SkpWriteError("addMaterial must be called before any addFace calls");
@@ -12523,7 +13804,7 @@ var SkpBuilder = class {
     if (this.layerWriter === null) {
       const materialShift = this.materialWriter.nextSlot - this.base;
       this.layerWriterStart = this.layerWriterBase + materialShift;
-      this.layerWriter = new ArchiveWriter(this.layerWriterStart, this.materialShiftedClassSlot());
+      this.layerWriter = new ArchiveWriter(this.layerWriterStart, this.materialShiftedClassSlot(), this.materialWriter.nextPid);
     }
     const slot = this.layerWriter.writeLayer(name, true, options.hidden ?? false, rgba);
     this.layersByName.set(name, slot);
@@ -12579,7 +13860,11 @@ var SkpBuilder = class {
     }
     if (this.definitionWriterInstance === null) {
       this.definitionWriterStart = this.scaffoldNextSlot + (this.materialWriter.nextSlot - this.base) + this.layerShift();
-      this.definitionWriterInstance = new ArchiveWriter(this.definitionWriterStart, this.postLayerClassSlot());
+      this.definitionWriterInstance = new ArchiveWriter(
+        this.definitionWriterStart,
+        this.postLayerClassSlot(),
+        this.nextPid()
+      );
     }
     const [slot, countPatchPos] = this.definitionWriterInstance.writeDefinitionHeader(attributeDicts);
     this.definitionCount += 1;
@@ -12746,7 +14031,8 @@ var SkpBuilder = class {
     const materialShift = this.materialWriter.nextSlot - this.base;
     this.geometryWriter = new ArchiveWriter(
       this.scaffoldNextSlot + materialShift + this.layerShift() + this.definitionShift(),
-      this.postDefinitionClassSlot()
+      this.postDefinitionClassSlot(),
+      this.nextPid()
     );
     for (const [comp, [translation, matrix3x3, mat, layer, attributeDicts, hidden]] of this.pendingGroups) {
       this.newEntityCount += this.geometryWriter.writeGroup(comp.slot, comp.name, translation, matrix3x3, mat, layer, attributeDicts, hidden);
@@ -12942,13 +14228,8 @@ var SkpBuilder = class {
         parts.push(part instanceof Uint8Array ? part : Uint8Array.from(part));
       }
     };
-    const layerPids = this.layerWriter ? this.layerWriter.nextPid - 1 : 0;
-    const pidDelta = this.materialCount + layerPids;
     const prefix = Array.from(this.data.subarray(0, this.materialInsertPos - 4));
-    if (pidDelta) {
-      const u16 = readU16(prefix, PID_COUNTER_POS);
-      writeU16At(prefix, PID_COUNTER_POS, u16 + pidDelta);
-    }
+    writeU32At(prefix, PID_COUNTER_POS, this.nextPid() - 1);
     for (let i = 0; i < ISO_CAMERA_PREFIX_PATCH.length; i++) {
       prefix[ISO_CAMERA_PREFIX_OFFSET + i] = ISO_CAMERA_PREFIX_PATCH[i];
     }
@@ -13462,6 +14743,7 @@ function parseToRaw(buffer, options) {
     guid: "ROOT",
     name: "ROOT_MODEL",
     isImage: false,
+    isGroup: false,
     alwaysFacesCamera: false,
     shadowsFaceSun: false,
     builder: rootBuilder
@@ -13890,6 +15172,7 @@ var SkpFile = class _SkpFile {
   exportSTL,
   extractThumbnail,
   faceUvBasis,
+  fromFragments,
   generateIFCGUID,
   isDrawableEdge,
   openExisting,

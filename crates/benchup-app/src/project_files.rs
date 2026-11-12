@@ -19,7 +19,11 @@ pub enum Outcome {
     #[cfg(target_arch = "wasm32")]
     BrowserOpened(Box<Document>, String, String),
     Saved(Option<PathBuf>),
-    Imported(Box<benchup_core::Model>, std::collections::BTreeSet<u64>),
+    Imported {
+        model: Box<benchup_core::Model>,
+        selected: std::collections::BTreeSet<u64>,
+        recovered: bool,
+    },
     Exported,
     Cancelled,
 }
@@ -548,11 +552,11 @@ pub fn import(
             .and_then(|n| n.to_str())
             .unwrap_or(tr!("project_files.sketchup_import"));
         (if extension == "skp" {
-            crate::interchange::import_skp(&bytes, name)
+            crate::interchange::import_skp_with_recovery(&bytes, name)
         } else {
-            crate::mesh_exchange::import(&bytes, &extension, name)
+            crate::mesh_exchange::import(&bytes, &extension, name).map(|model| (model, false))
         })
-        .and_then(|imported| prepare_import(model, &imported))
+        .and_then(|(imported, recovered)| prepare_import(model, &imported, recovered))
     })
 }
 
@@ -592,9 +596,9 @@ pub fn import(
                                 &js_sys::Uint8Array::new(&buffer).to_vec(),
                                 &extension,
                                 name,
-                            )
+                            ).map(|model| (model, false))
                         })
-                        .and_then(|imported| prepare_import(model, &imported))
+                        .and_then(|(imported, recovered)| prepare_import(model, &imported, recovered))
                     }
                     Err(_) => Err(tr!("project_files.the_browser_could_not_read_this_geometry_file").into()),
                 }
@@ -648,6 +652,7 @@ pub fn export(ctx: &eframe::egui::Context, name: String, contents: Vec<u8>, stl:
 pub fn prepare_import(
     mut model: benchup_core::Model,
     imported: &benchup_core::Model,
+    recovered: bool,
 ) -> Result<Outcome, String> {
     imported.validate().map_err(str::to_owned)?;
     let selected = model.paste_entities(imported, benchup_core::DVec3::ZERO);
@@ -655,7 +660,7 @@ pub fn prepare_import(
         return Err(tr!("project_files.the_imported_geometry_cannot_be_inserted_in_this").into());
     }
     model.validate().map_err(str::to_owned)?;
-    Ok(Outcome::Imported(Box::new(model), selected))
+    Ok(Outcome::Imported { model: Box::new(model), selected, recovered })
 }
 
 pub(crate) fn render_cut_report(

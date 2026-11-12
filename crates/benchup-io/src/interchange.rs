@@ -46,12 +46,25 @@ pub const MAX_SKP_BYTES: usize = 64 * 1024 * 1024;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn import_skp(bytes: &[u8], name: &str) -> Result<Model, String> {
+    import_skp_with_recovery(bytes, name).map(|(model, _)| model)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn import_skp_with_recovery(bytes: &[u8], name: &str) -> Result<(Model, bool), String> {
     if bytes.len() > MAX_SKP_BYTES {
         return Err(tr!("interchange.sketchup_import_is_limited_to_64_mib_per").into());
     }
-    let json =
-        parse_skp(bytes).map_err(|e| tr!("interchange.could_not_read_sketchup_file", e = e))?;
-    decode_model(&json, name)
+    let (json, recovered) = match parse_skp(bytes) {
+        Ok(json) => (json, false),
+        Err(e) if e.contains("stage=zip_extract") => {
+            let json = crate::skp_recovery::recover(bytes)
+                .and_then(|bytes| parse_skp(&bytes).ok())
+                .ok_or_else(|| tr!("interchange.could_not_read_sketchup_file", e = e))?;
+            (json, true)
+        }
+        Err(e) => return Err(tr!("interchange.could_not_read_sketchup_file", e = e)),
+    };
+    decode_model(&json, name).map(|model| (model, recovered))
 }
 
 fn decode_model(json: &str, name: &str) -> Result<Model, String> {
@@ -82,11 +95,24 @@ fn parse_skp(bytes: &[u8]) -> Result<String, String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub async fn import_skp_async(bytes: &[u8], name: &str) -> Result<Model, String> {
-    use wasm_bindgen::JsCast;
+pub async fn import_skp_async(bytes: &[u8], name: &str) -> Result<(Model, bool), String> {
     if bytes.len() > MAX_SKP_BYTES {
         return Err(tr!("interchange.sketchup_import_is_limited_to_64_mib_per").into());
     }
+    match parse_skp_async(bytes).await {
+        Ok(json) => decode_model(&json, name).map(|model| (model, false)),
+        Err(error) if error.contains("stage=zip_extract") => {
+            let bytes = crate::skp_recovery::recover(bytes).ok_or_else(|| error.clone())?;
+            let json = parse_skp_async(&bytes).await.map_err(|_| error)?;
+            decode_model(&json, name).map(|model| (model, true))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn parse_skp_async(bytes: &[u8]) -> Result<String, String> {
+    use wasm_bindgen::JsCast;
     // Parsing runs in a dedicated worker so the picker, spinner, and application
     // keep responding while the reader expands the component tree.
     let launch = js_sys::Function::new_with_args("source, bytes", include_str!("skp_worker.js"));
@@ -99,12 +125,11 @@ pub async fn import_skp_async(bytes: &[u8], name: &str) -> Result<Model, String>
         .map_err(js_error)?
         .dyn_into::<js_sys::Promise>()
         .map_err(js_error)?;
-    let json = wasm_bindgen_futures::JsFuture::from(promise)
+    wasm_bindgen_futures::JsFuture::from(promise)
         .await
         .map_err(js_error)?
         .as_string()
-        .ok_or(tr!("interchange.sketchup_reader_returned_no_model"))?;
-    decode_model(&json, name)
+        .ok_or_else(|| tr!("interchange.sketchup_reader_returned_no_model").into())
 }
 
 #[cfg(target_arch = "wasm32")]

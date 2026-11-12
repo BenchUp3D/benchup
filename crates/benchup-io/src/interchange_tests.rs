@@ -166,3 +166,33 @@ fn native_skp_rejects_truncated_containers_without_panicking() {
         }
     }
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn legacy_skp_keeps_geometry_after_tag_line_style_records() {
+    for bytes in [
+        include_bytes!("../tests/fixtures/tag-line-styles-2019.skp").as_slice(),
+        include_bytes!("../tests/fixtures/tag-line-styles-2020.skp").as_slice(),
+    ] {
+        let model = import_skp(bytes, "Line styles").unwrap();
+        assert_eq!(model.faces.len(), 6);
+        assert_eq!(model.edges.len(), 18);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn modern_skp_recovers_an_intact_model_with_a_missing_zip_directory() {
+    let bytes = include_bytes!("../tests/fixtures/modern-triangle.skp");
+    let directory = bytes.windows(4).position(|sig| sig == b"PK\x01\x02").unwrap();
+    let (expected, recovered) = import_skp_with_recovery(bytes, "Triangle").unwrap();
+    assert!(!recovered);
+    let (model, recovered) = import_skp_with_recovery(&bytes[..directory], "Triangle").unwrap();
+    assert!(recovered);
+    assert_eq!(model, expected);
+
+    let mut corrupt = bytes[..directory].to_vec();
+    let entry = corrupt.windows(4).position(|sig| sig == b"PK\x03\x04").unwrap();
+    corrupt[entry + 14] ^= 1;
+    assert!(import_skp(&corrupt, "Triangle").is_err());
+}

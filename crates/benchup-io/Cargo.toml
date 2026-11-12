@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 benchup-core = { path = "../benchup-core" }
 serde_json.workspace = true
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 benchup-skp = { path = "../benchup-skp" }

@@ -110,6 +110,36 @@ test('invalid and truncated files fail', () => {
     assert.throws(()=>read(new Uint8Array(fs.readFileSync(fixture).subarray(0,100))));
 });
 
+test('legacy tag line style objects preserve the geometry that follows them', () => {
+    for (const version of [2019, 2020]) {
+        const bytes = fs.readFileSync(path.join(base, `tests/fixtures/tag-line-styles-${version}.skp`));
+        const model = read(new Uint8Array(bytes));
+        assert.equal(Object.keys(model.faces).length, 6);
+        assert.equal(Object.keys(model.edges).length, 18);
+    }
+});
+
+test('a legacy text record with a zero flag keeps the faces after it', () => {
+    const builder = sdk.create();
+    const label = 'Audit label';
+    builder.addText(label, [0, 0, 0]);
+    builder.addFace([[0, 0, 0], [10, 0, 0], [0, 10, 0]]);
+    const bytes = Buffer.from(builder.toBytes());
+    const record = Buffer.concat([Buffer.from([255, 254, 255, label.length]), Buffer.from(label, 'utf16le')]);
+    const start = bytes.indexOf(record);
+    assert(start > 0);
+    assert.equal(bytes[start - 1], 1);
+    bytes[start - 1] = 0;
+    assert.equal(Object.keys(read(new Uint8Array(bytes)).faces).length, 1);
+});
+
+test('a legacy guide at the end of a definition preserves its following name and geometry', () => {
+    const bytes = fs.readFileSync(path.join(base, 'tests/fixtures/legacy-guide-options.skp'));
+    const model = read(new Uint8Array(bytes));
+    assert.equal(Object.keys(model.faces).length, 2);
+    assert(Object.values(model.objects).some(object => object.name === 'GuideDef'));
+});
+
 test('precision fixture passes tiny faces and warped holed boundaries to shared Rust normalization', () => {
     const m = read(new Uint8Array(fs.readFileSync(path.join(base,'tests/fixtures/precision-faces.skp'))));
     assert.equal(Object.keys(m.vertices).length, 11);

@@ -533,7 +533,7 @@ impl BenchUpApp {
                     }
                 }
             }
-            Ok(Outcome::Imported(model, selected)) => {
+            Ok(Outcome::Imported { model, selected, recovered }) => {
                 let before = std::mem::replace(&mut self.doc.model, *model);
                 self.set_tool(Tool::Select);
                 self.selected = selected;
@@ -547,7 +547,11 @@ impl BenchUpApp {
                     ctx,
                 );
                 self.fit(ctx);
-                self.say(ctx, tr!("projects.geometry_imported_as_editable_groups"));
+                self.say(ctx, if recovered {
+                    tr!("projects.geometry_recovered_from_a_damaged_sketchup_archive")
+                } else {
+                    tr!("projects.geometry_imported_as_editable_groups")
+                });
             }
             Ok(Outcome::Exported) => self.say(
                 ctx,

@@ -1,0 +1,73 @@
+diff --git a/packages/typescript/src/legacy.ts b/packages/typescript/src/legacy.ts
+index 0de73a2..2aa92f7 100644
+--- a/packages/typescript/src/legacy.ts
++++ b/packages/typescript/src/legacy.ts
+@@ -321,0 +322,2 @@ export class Archive {
++  firstLayerClass: number | undefined;
++  seenLineStyle = false;
+@@ -392,0 +395 @@ export class Archive {
++      if (name === 'CLayer') this.firstLayerClass ??= this.nextSlot - 1;
+@@ -915,0 +919,38 @@ export function extractLegacyDynamicProperties(attrs: any): Record<string, strin
++// BenchUp port of the upstream Python reader. A style is an archive object
++// even though BenchUp only imports the tag's name, color, and visibility.
++function readLayerLineStyle(ar: Archive, r: R): void {
++  if (ar.ver < 19 || r.pos + 2 > r.data.length) return;
++  const name = 'CCustomLineStyle';
++  const tag = r.peekU16();
++  if (tag === 0xffff) {
++    const at = r.pos + 4;
++    if (at + 2 + name.length > r.data.length ||
++        (r.data[at] | r.data[at + 1] << 8) !== name.length || !matchesAscii(r.data, at + 2, name)) return;
++  } else if (tag & 0x8000) {
++    const style = ar.classSlot.get(name);
++    const layer = ar.classSlot.get('CLayer');
++    const firstLayer = ar.firstLayerClass;
++    if (style === undefined || layer === undefined || firstLayer === undefined ||
++        style + layer - firstLayer !== (tag & 0x7fff)) return;
++  } else {
++    if (tag === 0 || tag === 0x7fff) return;
++    if (ar.walkBase >= (1 << 20)) {
++      if (!ar.seenLineStyle) return;
++    } else {
++      const entry = ar.slots.get(tag);
++      if (entry?.[0] !== 'obj' || entry[1] !== name) return;
++    }
++  }
++  ar.readObject(r, name);
++}
++
++function readCustomLineStyle(ar: Archive, r: R): object {
++  earlyPreamble(ar, r);
++  if (ar.ver < 20) earlyPreamble(ar, r);
++  r.utf16();
++  r.utf16();
++  r.raw(24);
++  ar.seenLineStyle = true;
++  return { k: 'linestyle' };
++}
++
+@@ -938,0 +980 @@ function readLayer(ar: Archive, r: R): any {
++  readLayerLineStyle(ar, r);
+@@ -1257,12 +1299,5 @@ function readConstructionLine(ar: Archive, r: R): any {
+-    // two passes: a zero tail full of padding can mimic a null tag, so
+-    // only accept a null-anchored candidate when no candidate lands on a
+-    // STRONG form (escape / known class / class definition)
+-    outer: for (const allowNull of [false, true]) {
+-      for (const cand of order) {
+-        if (strictNextTag(ar, r.data, r.pos + cand, allowNull)) {
+-          k = cand;
+-          break outer;
+-        }
+-      }
+-    }
+-    if (k === null) k = dflt;
++    // A guide at the end of a definition can be followed by zero padding.
++    // Match a strong tag first, then prefer the four-byte writer trailer.
++    k = order.find((size) => strictNextTag(ar, r.data, r.pos + size, false))
++      ?? [4, 0, 7].find((size) => strictNextTag(ar, r.data, r.pos + size, true))
++      ?? 4;
+@@ -1375 +1410 @@ function textDelimiter(r: R): number {
+-      blk[10] === 1
++      blk[10] <= 1
+@@ -1687,0 +1723 @@ export const READERS: Record<string, (ar: Archive, r: R) => any> = {
++  CCustomLineStyle: readCustomLineStyle,

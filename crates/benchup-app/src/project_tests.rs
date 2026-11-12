@@ -386,7 +386,7 @@ fn importing_adds_geometry_in_one_undo_step_and_keeps_project_destination() {
     app.project.path = Some("original.bup".into());
     let mut imported = Model::default();
     imported.add_edge(DVec3::Y, DVec3::Y * 2.).unwrap();
-    let result = crate::project_files::prepare_import(app.doc.model.clone(), &imported);
+    let result = crate::project_files::prepare_import(app.doc.model.clone(), &imported, false);
     deliver(&mut app, result, &ctx);
     assert_eq!(app.doc.model.edges.len(), 2);
     assert!(app.doc.model.edges.contains_key(&edge));
@@ -425,7 +425,7 @@ fn invalid_import_keeps_current_geometry_selection_and_history() {
     let mut invalid = Model::default();
     invalid.add_edge(DVec3::ZERO, DVec3::Y).unwrap();
     invalid.vertices.clear();
-    let result = crate::project_files::prepare_import(app.doc.model.clone(), &invalid);
+    let result = crate::project_files::prepare_import(app.doc.model.clone(), &invalid, false);
     deliver(&mut app, result, &ctx);
     assert_eq!(app.doc.model, before);
     assert!(app.selected.contains(&edge));
@@ -520,7 +520,7 @@ fn exchange_formats_use_atomic_import_and_undo_redo() {
         app.project.path = Some("existing.bup".into());
         let before = app.doc.model.clone();
         let imported = crate::mesh_exchange::import(bytes, extension, "Part").unwrap();
-        let result = crate::project_files::prepare_import(before.clone(), &imported);
+        let result = crate::project_files::prepare_import(before.clone(), &imported, false);
         deliver(&mut app, result, &ctx);
         let after = app.doc.model.clone();
         assert!(!app.selected.is_empty());
@@ -534,7 +534,7 @@ fn exchange_formats_use_atomic_import_and_undo_redo() {
         deliver(
             &mut app,
             crate::mesh_exchange::import(b"bad", extension, "Bad")
-                .and_then(|m| crate::project_files::prepare_import(after.clone(), &m)),
+                .and_then(|m| crate::project_files::prepare_import(after.clone(), &m, false)),
             &ctx,
         );
         assert_eq!(app.doc.model, after);
