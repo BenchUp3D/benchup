@@ -44,6 +44,18 @@ Select an edge with Router, then choose a profile in Properties to apply it imme
 
 Assign stock materials and wood types to parts, configure sanding and finishing products, and prepare cut lists, cutting plans, and workshop labels. Export cutting plans and time and cost estimates to PDF to take the design into the workshop.
 
+### PDF exports
+
+Use the Tools menu to turn the model into printable workshop documents. Each report includes the BenchUp header, project name, and generation date.
+
+![BenchUp PDF exports, from left to right: Time & Cost Estimates with material costs and work times, Cutting Plan with a color-coded stock layout, and Workshop Labels with part marks and dimensions](assets/screenshots/pdf-exports.png)
+
+- **Time & Cost Estimates** summarizes material costs, hands-on work, drying and waiting time, and the sequential total. Detailed tables break down stock and finishing supplies, workshop tasks, and joinery allowances. Use it to plan purchases and time; labor is not included in the material price.
+- **Cutting Plan** groups matching parts by material and size, lists quantities and finished cutting dimensions, and lays out marked parts on the selected stock. Color-coded diagrams show part placement, saw kerf, and offcuts, with grain direction and rotation settings taken into account. Parts that do not fit the stock are flagged separately.
+- **Workshop Labels** creates one printable label per piece, with the part mark, group or component name, and dimensions. Cut along the dotted borders and attach the labels to keep similar boards identifiable during assembly. The marks match those in the cutting plan.
+
+Cutting plans and labels can cover selected parts or all visible parts in the project. Assign stock materials to the parts first, and verify dimensions before cutting.
+
 ## Documentation
 
 This README covers developer installation, building, verification, and deployment.

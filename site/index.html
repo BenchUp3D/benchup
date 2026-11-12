@@ -71,6 +71,12 @@
       "url": "https://benchup3d.github.io/editor/assets/screenshots/router-tool.png",
       "width": 1440,
       "height": 900
+    },
+    {
+      "@type": "ImageObject",
+      "url": "https://benchup3d.github.io/editor/assets/screenshots/pdf-exports.png",
+      "width": 1947,
+      "height": 808
     }
   ],
   "downloadUrl": "https://github.com/BenchUp3D/editor/releases/latest",
@@ -86,7 +92,9 @@
     "Procedural wood materials with sanding and finishing previews",
     "Editable router profiles including chamfer, roundover, Roman ogee, and bead",
     "Stock materials, wood types, sanding, and finishing products",
-    "Cut lists, cutting plans, workshop labels, and PDF time and cost estimates",
+    "PDF time and cost estimates with material costs, hands-on work, and drying times",
+    "PDF cutting plans with marked parts, stock layouts, saw kerf, and offcuts",
+    "Printable workshop labels with matching part marks, names, and dimensions",
     "Local autosave and portable .bup projects",
     "SketchUp geometry import and Wavefront OBJ geometry export"
   ]
@@ -225,9 +233,30 @@
             </figure>
           </article>
         </div>
-        <div class="workshop-planning">
-          <h3>Prepare for the workshop</h3>
-          <p>Assign stock materials and wood types, configure sanding and finishing products, and prepare cut lists, cutting plans, and workshop labels. Export cutting plans and time and cost estimates to PDF to bring the design to the bench.</p>
+        <div class="workshop-planning" aria-labelledby="workshop-planning-title">
+          <h3 id="workshop-planning-title">Prepare for the workshop</h3>
+          <p>Assign stock materials and wood types, configure sanding and finishing products, then use the Tools menu to export printable PDFs. Every report includes the BenchUp header, project name, and generation date.</p>
+          <figure class="workspace-preview">
+            <a href="assets/screenshots/pdf-exports.png" aria-label="View the PDF export examples at full size">
+              <img src="assets/screenshots/pdf-exports.png" alt="BenchUp PDF exports, from left to right: Time &amp; Cost Estimates with material costs and work times, Cutting Plan with a color-coded stock layout, and Workshop Labels with part marks and dimensions." width="1947" height="808" loading="lazy" />
+            </a>
+            <figcaption><span>From the model to the workbench.</span><span>Time &amp; Cost Estimates · Cutting Plan · Workshop Labels — view full size</span></figcaption>
+          </figure>
+          <div class="features pdf-features">
+            <article>
+              <h4>Time &amp; Cost Estimates</h4>
+              <p>Plan purchases and workshop time with material costs, hands-on work, drying and waiting time, and the sequential total. Detailed tables cover stock and finishing supplies, workshop tasks, and joinery allowances. Labor is not included in the material price.</p>
+            </article>
+            <article>
+              <h4>Cutting Plan</h4>
+              <p>Group matching parts by material and size, with quantities and finished cutting dimensions. Color-coded stock layouts show marked parts, saw kerf, and offcuts, taking grain direction and rotation settings into account. Parts that do not fit are flagged separately.</p>
+            </article>
+            <article>
+              <h4>Workshop Labels</h4>
+              <p>Print one label per piece with its part mark, group or component name, and dimensions. Cut along the dotted borders and attach labels to keep similar boards identifiable during assembly. Part marks match the cutting plan.</p>
+            </article>
+          </div>
+          <p class="pdf-scope">Cutting plans and labels can cover selected parts or all visible parts in the project. Assign stock materials first, and verify dimensions before cutting.</p>
         </div>
         <p class="download-note">Start with <a href="play/">the browser editor</a> or <a href="#downloads">download the desktop app</a>. Read the <a href="https://github.com/BenchUp3D/editor/tree/main/docs">user guide</a> for modeling instructions and supported workflows.</p>
       </section>
