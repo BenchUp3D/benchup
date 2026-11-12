@@ -726,6 +726,7 @@ fn paint_face_icon(p: &egui::Painter, c: Pos2, fill: Color32, outline: Color32) 
 // same icon and palette in Settings and Materials.
 pub(super) fn section_icon(id: &str) -> &str {
     match id {
+        "time_estimates_joinery" => "connections/wood_joinery",
         "settings/treatment/sanding" | "entity/treatment/sanding" => "time_estimates_sanding",
         "settings/treatment/finishing" | "entity/treatment/finishing" => "time_estimates_finishing",
         "settings/treatment/pre_stain" | "entity/treatment/pre_stain" => "time_estimates_pre_stain",
