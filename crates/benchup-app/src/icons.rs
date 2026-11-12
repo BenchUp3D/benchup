@@ -475,6 +475,23 @@ fn paint_tool(p: &egui::Painter, rect: Rect, tool: Tool, colors: ToolPalette) {
             ));
             p.circle_filled(c, 2., red);
         }
+        Tool::Router => {
+            // Classic bearing-guided bit: steel shank, carbide cutting head,
+            // flute and pilot bearing, legible in both the rail and cursor.
+            p.rect_filled(Rect::from_min_max(xy(-0.22, -1.), xy(0.22, -0.15)), 1., metal);
+            p.rect_stroke(Rect::from_min_max(xy(-0.22, -1.), xy(0.22, -0.15)), 1.,
+                Stroke::new(1.3, outline), egui::StrokeKind::Inside);
+            p.add(egui::Shape::convex_polygon(
+                vec![xy(-0.58, -0.17), xy(0.58, -0.17), xy(0.58, 0.25),
+                    xy(0.28, 0.67), xy(-0.28, 0.67), xy(-0.58, 0.25)],
+                red, Stroke::new(1.3, outline),
+            ));
+            p.line_segment([xy(0.15, -0.12), xy(-0.12, 0.59)], Stroke::new(2., metal));
+            p.line_segment([xy(0., 0.67), xy(0., 0.85)], Stroke::new(2., outline));
+            p.rect_filled(Rect::from_min_max(xy(-0.3, 0.83), xy(0.3, 1.05)), 1., metal);
+            p.rect_stroke(Rect::from_min_max(xy(-0.3, 0.83), xy(0.3, 1.05)), 1.,
+                Stroke::new(1.3, outline), egui::StrokeKind::Inside);
+        }
         Tool::WoodGlue => {
             p.add(egui::Shape::line(
                 vec![xy(-0.85, 0.45), xy(-0.45, 0.05), xy(-0.05, 0.45), xy(0.35, 0.05), xy(0.8, 0.45)],
@@ -741,6 +758,7 @@ fn paint_face_icon(p: &egui::Painter, c: Pos2, fill: Color32, outline: Color32) 
 pub(super) fn section_icon(id: &str) -> &str {
     match id {
         "time_estimates_joinery" => "connections/wood_joinery",
+        "time_estimates_router" => "router",
         "settings/treatment/sanding" | "entity/treatment/sanding" => "time_estimates_sanding",
         "settings/treatment/finishing" | "entity/treatment/finishing" => "time_estimates_finishing",
         "settings/treatment/pre_stain" | "entity/treatment/pre_stain" => "time_estimates_pre_stain",
@@ -811,6 +829,11 @@ fn paint_line_icon(p: &egui::Painter, c: Pos2, kind: &str, color: Color32) {
     let s = Stroke::new(1.5, color);
     let at = |x: f32, y: f32| c + egui::vec2(x, y);
     match kind {
+        "router" => tool_vectors(
+            p,
+            Rect::from_center_size(c, egui::Vec2::splat(26.)),
+            Tool::Router,
+        ),
         "clean_aligned" => {
             // Aligned endpoints, a redundant middle vertex, and a cleanup sparkle.
             for (start, end) in [(-5., -2.), (2., 5.)] {

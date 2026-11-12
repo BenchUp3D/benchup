@@ -178,6 +178,7 @@ impl BenchUpApp {
         ctx: &egui::Context,
     ) {
         self.reset_image_project();
+        self.router_editor = Default::default();
         self.fasteners.open=false;
         self.fastener_dialog=Default::default();
         self.release_shared_selection(ctx);
@@ -189,6 +190,7 @@ impl BenchUpApp {
         }
         doc.display.group_emphasis = self.doc.display.group_emphasis;
         doc.display.grain_direction = self.doc.display.grain_direction;
+        doc.display.router_preview = self.doc.display.router_preview;
         // Snapping targets are app preferences, including when an older project
         // carries the former geometry master switch in its document.
         doc.snap_to_geometry =
@@ -315,7 +317,14 @@ impl BenchUpApp {
         }
         let geometry=self.doc.model.evaluate_joinery();
         if !geometry.errors.is_empty() {
-            self.project.error=Some(geometry.errors.into_iter().map(|(id,error)|tr!("projects.wood_joint", id = id, error = error)).collect::<Vec<_>>().join(tr!("projects.joint_error_separator")));
+            let errors = geometry.errors.into_iter().map(|(id, error)| {
+                if self.doc.model.routes.contains_key(&id) {
+                    tr!("router.suspended", id = id, error = error)
+                } else {
+                    tr!("projects.wood_joint", id = id, error = error)
+                }
+            }).collect::<Vec<_>>();
+            self.project.error = Some(errors.join(tr!("projects.joint_error_separator")));
             return;
         }
         match if self.project.export_stl {

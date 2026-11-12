@@ -635,6 +635,7 @@ impl EvaluationCache {
             .and_then(|n| source.next_id.checked_add(n)).is_none()
         { return source.evaluate_joinery(); }
         let mut model = source.clone();
+        model.routes.clear();
         let context = model.edit_context.take();
         let mut errors = Vec::new();
         let mut slot = 0;
@@ -668,6 +669,12 @@ impl EvaluationCache {
                 change: crate::history::ModelChange::between(&before, &model), error,
             });
         }
+        if !source.routes.is_empty() {
+            // Route IDs are keyed to original stock. Allocate after all joint
+            // ranges so routing cannot collide with derived joinery geometry.
+            model.next_id = model.next_id.max(source.next_id + slot * STRIDE);
+            crate::router::evaluate(source, &mut model, &mut errors);
+        }
         model.edit_context = context;
         model.connections.retain(|_, c| matches!(c.operation, ConnectionOperation::Fasteners(_)));
         GeometryEvaluation { model, errors }
@@ -677,6 +684,7 @@ impl Model {
     pub fn evaluate_joinery(&self) -> GeometryEvaluation {
         use crate::connections::ConnectionOperation;
         let mut model = self.clone();
+        model.routes.clear();
         let context = model.edit_context.take();
         let mut errors = Vec::new();
         for (id, connection) in &self.connections {
@@ -685,6 +693,9 @@ impl Model {
                     errors.push((*id, error.into()));
                 }
             }
+        }
+        if !self.routes.is_empty() {
+            crate::router::evaluate(self, &mut model, &mut errors);
         }
         model.edit_context = context;
         // An evaluated mesh is a terminal product, not another source model.

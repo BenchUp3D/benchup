@@ -368,6 +368,7 @@ impl Model {
                 })
     }
     pub(crate) fn clean_entity_state(&mut self) {
+        self.routes.retain(|edge, _| self.edges.contains_key(edge));
         self.sync_dimensions();
         self.clean_wood_glue();
         self.face_colors.retain(|id, _| self.faces.contains_key(id));
@@ -403,6 +404,13 @@ impl Model {
             connections: self.connections.iter()
                 .filter(|(_, c)| c.members.iter().all(|id| ids.contains(id)))
                 .map(|(id, c)| (*id, c.clone())).collect(),
+            routes: self.routes.iter()
+                .filter(|(edge, _)| ids.contains(edge) && self.route_board(**edge).is_none_or(|board| {
+                    self.objects[&board].entities.is_subset(&ids)
+                }))
+                .map(|(&edge, &settings)| (edge, settings))
+                .collect(),
+            routing_appearance: self.routing_appearance.subset(&ids),
             edges: subset(&self.edges, &ids),
             faces: subset(&self.faces, &ids),
             objects: subset(&self.objects, &ids),
@@ -611,6 +619,11 @@ impl Model {
                 .map(|(key, id)| (*key, ids[id]))
                 .collect();
             self.objects.insert(o.id, o);
+        }
+        for (&edge, &settings) in &source.routes {
+            if let Some(&id) = ids.get(&edge) {
+                self.routes.insert(id, settings);
+            }
         }
         for connection in source.connections.values() {
             if let (Some(a), Some(b)) = (

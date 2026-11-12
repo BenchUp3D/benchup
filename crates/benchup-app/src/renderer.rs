@@ -378,6 +378,7 @@ pub(crate) struct EdgeDraw {
 pub(crate) struct FaceDraw<'a> {
     pub face: &'a Face,
     pub cached: &'a CachedFace,
+    pub smooth: Option<(&'a Model, &'a crate::app::display_scene::FaceLighting)>,
     pub color: Color32,
     pub surface: Option<FaceMaterial>,
     pub shadow: Option<(&'a crate::shadows::FaceShadow, Color32)>,
@@ -951,6 +952,29 @@ impl Mesh {
     }
 
     fn draw_face(&mut self, face: &FaceDraw<'_>) {
+        let start = self.vertices.len();
+        self.draw_face_flat(face);
+        let Some((model, lighting)) = face.smooth else { return };
+        // The precision path already projects/clips faces on the CPU. Adjust
+        // only the routed vertices it produced; the retained path interpolates
+        // cached normals on the GPU and needs no per-frame geometry work.
+        let inverse = self.view.matrix().inverse();
+        for vertex in &mut self.vertices[start..] {
+            let world = inverse * DVec3::from_array(vertex.position.map(f64::from)).extend(1.);
+            let point = world.truncate() / world.w;
+            let normal = model.routing_appearance.normal_at(model, face.face.id, point, face.cached.normal);
+            let flat = lighting.shade(Color32::WHITE, face.cached.normal, point).r() as f32;
+            let smooth = lighting.shade(Color32::WHITE, normal, point).r() as f32;
+            let factor = smooth / flat.max(1.);
+            for color in [&mut vertex.color, &mut vertex.shadow_color] {
+                for channel in &mut color[..3] {
+                    *channel = (f32::from(*channel) * factor).round().clamp(0., 255.) as u8;
+                }
+            }
+        }
+    }
+
+    fn draw_face_flat(&mut self, face: &FaceDraw<'_>) {
         self.set_entity(Some(face.face.id));
         self.face_edges(face.face, face.cached);
         if self.display.face_style != benchup_core::FaceStyle::HiddenLine
@@ -4217,6 +4241,7 @@ mod tests {
                 let faces: Vec<_> = model.faces.values().zip(&shadows).enumerate().map(|(i, (face, shadow))| FaceDraw {
                     face, cached: cache.get(face.id), color: Color32::from_rgb(100, 160, 200),
                     surface: None,
+                    smooth: None,
                     shadow: (i % 3 != 0).then_some((shadow, Color32::DARK_GRAY)),
                 }).collect();
                 if parallel { mesh.draw_faces(&faces); }

@@ -166,6 +166,10 @@ impl Model {
             }) {
                 continue;
             }
+            // Merging a routed segment would change the span of its cut.
+            if self.routes.contains_key(&first) || self.routes.contains_key(&second) {
+                continue;
+            }
             let glue: BTreeMap<_, _> = faces.iter().filter_map(|id| {
                 let coverage = self.wood_glue.get(id)?;
                 if let crate::wood_glue::Coverage::Partial { anchors, .. } = coverage

@@ -218,6 +218,9 @@ fn edge_vertex(@location(0) world_a: vec3<f32>, @location(1) world_b: vec3<f32>,
     output.faces = faces;
     output.lateral = 0.0;
     output.position = vec4<f32>(2.0,2.0,2.0,1.0);
+    // -2 marks an original routed path. Only its own explicit selection or
+    // direct hover can reveal it; selecting the containing object cannot.
+    if width == -2.0 && (slot_state(interaction.y)&1u)==0u && camera.interaction.x!=interaction.y {return output;}
     if (state&64u)!=0u && (camera.interaction.w&4u)==0u {return output;}
     // Negative widths mark annotations, independent of the Edges option.
     if width>=0.0 && camera.interaction.z==0u && camera.interaction.y==0u && !stroke_active {return output;}

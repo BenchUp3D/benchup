@@ -1,8 +1,8 @@
-//! Stock, finishing, and whole-project joinery estimates.
+//! Stock, finishing, whole-project joinery and routing estimates.
 use benchup_core::tr;
 use super::*;
 use crate::inspector_table::{Column, InspectorTable, product_cell_text};
-use benchup_core::{Model, surface_treatment::Task};
+use benchup_core::{Model, router::Profile, surface_treatment::Task};
 use benchup_core::{connections::ConnectionOperation, joinery::JointKind};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -73,6 +73,81 @@ impl JoineryRates {
     }
 }
 
+pub(super) const ROUTER_SECTION_KEY: &str = "time_estimates_router";
+
+/// Editable planning allowances, rather than a machine feed-rate guarantee.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(super) struct RouterRates {
+    pub setup_minutes: f64,
+    pub minutes_per_meter: f64,
+}
+
+impl Default for RouterRates {
+    fn default() -> Self {
+        Self {
+            setup_minutes: 5.,
+            minutes_per_meter: 1.,
+        }
+    }
+}
+
+impl RouterRates {
+    pub(super) fn sanitize(&mut self) {
+        let defaults = Self::default();
+        if !self.setup_minutes.is_finite() || self.setup_minutes < 0. {
+            self.setup_minutes = defaults.setup_minutes;
+        }
+        if !self.minutes_per_meter.is_finite() || self.minutes_per_meter < 0. {
+            self.minutes_per_meter = defaults.minutes_per_meter;
+        }
+    }
+}
+
+struct RouterRow {
+    profile: Profile,
+    count: usize,
+    meters: f64,
+}
+
+impl RouterRow {
+    fn work_minutes(&self, rates: &RouterRates) -> f64 {
+        rates.setup_minutes + self.meters * rates.minutes_per_meter
+    }
+}
+
+fn router_rows(model: &Model) -> Vec<RouterRow> {
+    let mut totals = BTreeMap::<u8, (usize, f64)>::new();
+    // Count source paths once. Tessellation, copies used for rendering and
+    // selection must never multiply the machining allowance.
+    for (&id, settings) in &model.routes {
+        if settings.profile == Profile::None {
+            continue;
+        }
+        let Some(edge) = model.edges.get(&id) else {
+            continue;
+        };
+        let meters = model.edge_length(edge);
+        if !meters.is_finite() || meters <= 0. {
+            continue;
+        }
+        let total = totals.entry(settings.profile as u8).or_default();
+        total.0 += 1;
+        total.1 += meters;
+    }
+    Profile::ALL
+        .into_iter()
+        .filter_map(|profile| {
+            let &(count, meters) = totals.get(&(profile as u8))?;
+            Some(RouterRow {
+                profile,
+                count,
+                meters,
+            })
+        })
+        .collect()
+}
+
 struct JoineryRow {
     kind: JointKind,
     count: usize,
@@ -89,10 +164,14 @@ struct TimeBreakdown {
     finishing: Vec<(Task, Duration, usize)>,
     joinery: [JoineryRow; JointKind::ALL.len()],
     joinery_work: f64,
+    router: Vec<RouterRow>,
+    router_work: f64,
     duration: Duration,
 }
 
 impl TimeBreakdown {
+    fn has_routes(&self) -> bool { !self.router.is_empty() }
+
     fn has_joints(&self) -> bool {
         self.joinery.iter().any(|row| row.count > 0)
     }
@@ -162,7 +241,7 @@ impl EstimateCache {
             if model.wood_glue.is_empty() {
                 return 0.;
             }
-            let machined = model.connections.values().any(|connection| {
+            let machined = !model.routes.is_empty() || model.connections.values().any(|connection| {
                 matches!(connection.operation, benchup_core::connections::ConnectionOperation::Joinery(_))
             });
             if machined {
@@ -347,6 +426,7 @@ fn time_breakdown(
     areas: &BTreeMap<u64, f64>,
     settings: &Settings,
     rates: &JoineryRates,
+    router_rates: &RouterRates,
 ) -> TimeBreakdown {
     let mut counts = BTreeMap::new();
     // The persisted relation is the unit of work, even if it has multiple cuts
@@ -362,10 +442,12 @@ fn time_breakdown(
         minutes_per_joint: rates.minutes(kind),
     });
     let joinery_work = joinery.iter().map(JoineryRow::work_minutes).sum();
+    let router = router_rows(model);
+    let router_work = router.iter().map(|row| row.work_minutes(router_rates)).sum::<f64>();
     let finishing = object_tasks(model, areas, settings);
     let duration = finishing.iter().fold(
         Duration {
-            work: joinery_work,
+            work: joinery_work + router_work,
             wait: 0.,
         },
         |total, (_, task, _)| Duration {
@@ -377,6 +459,8 @@ fn time_breakdown(
         finishing,
         joinery,
         joinery_work,
+        router,
+        router_work,
         duration,
     }
 }
@@ -612,6 +696,89 @@ fn joinery_controls(ui: &mut egui::Ui, rows: &[JoineryRow], rates: &mut JoineryR
                 });
             }
             ui.text_weak(joinery_allowance_note());
+        },
+    );
+}
+
+fn router_controls(
+    ui: &mut egui::Ui,
+    rows: &[RouterRow],
+    rates: &mut RouterRates,
+    units: &benchup_core::UnitSettings,
+) {
+    sidebar::inspector_section(
+        ui,
+        tr!("time_estimates.router_whole_project"),
+        ROUTER_SECTION_KEY,
+        false,
+        |ui| {
+            ui.text_weak(tr!("time_estimates.router_scope"));
+            for (id, label, minutes) in [
+                (
+                    "router_setup",
+                    tr!("time_estimates.router_setup"),
+                    &mut rates.setup_minutes,
+                ),
+                (
+                    "router_rate",
+                    tr!("time_estimates.router_rate"),
+                    &mut rates.minutes_per_meter,
+                ),
+            ] {
+                if crate::inspector_table::inspector_field(ui, id, label, |ui| {
+                    ui.add_sized(
+                        [ui.available_width(), ui.spacing().interact_size.y],
+                        egui::DragValue::new(minutes)
+                            .range(0. ..=f64::MAX)
+                            .speed(0.1),
+                    )
+                })
+                .changed()
+                {
+                    ui.ctx().request_repaint();
+                }
+            }
+            let mut table = InspectorTable::new(
+                ui.available_width(),
+                [
+                    Column::flex(0.32),
+                    Column::flex(0.14),
+                    Column::flex(0.27),
+                    Column::flex(0.27),
+                ],
+            )
+            .striped();
+            table.header(
+                ui,
+                [
+                    tr!("router.profile"),
+                    tr!("time_estimates.count"),
+                    tr!("app.length"),
+                    tr!("time_estimates.hands_on"),
+                ],
+            );
+            for row in rows {
+                table.row(ui, row.profile as u8, |column, ui| {
+                    ui.text_label(match column {
+                        0 => row.profile.label().to_owned(),
+                        1 => row.count.to_string(),
+                        2 => units.format_length(row.meters),
+                        _ => format_minutes(row.work_minutes(rates)),
+                    });
+                });
+            }
+            let work = rows.iter().map(|row| row.work_minutes(rates)).sum::<f64>();
+            table.row(ui, "router_total", |column, ui| {
+                ui.text_label(match column {
+                    0 => tr!("time_estimates.total").to_owned(),
+                    3 => format_minutes(work),
+                    _ => String::new(),
+                });
+            });
+            if rows.is_empty() {
+                ui.text_weak(tr!("time_estimates.router_empty"));
+            }
+            ui.text_weak(tr!("time_estimates.router_allowance"));
         },
     );
 }
@@ -877,6 +1044,8 @@ pub(super) struct PdfInput {
     display: benchup_core::DisplaySettings,
     settings: Settings,
     joinery_rates: JoineryRates,
+    #[serde(default)]
+    router_rates: RouterRates,
     stock: stock_settings::Settings,
     layout: crate::cutting_layout::Settings,
 }
@@ -889,6 +1058,7 @@ impl PdfInput {
         app.selected = self.selected;
         app.time_estimates = self.settings;
         app.joinery_rates = self.joinery_rates;
+        app.router_rates = self.router_rates;
         app.general_settings.stock = self.stock;
         app.project.cutting_plan_layout = self.layout;
         crate::estimate_pdf::render(&app.time_estimate_report())
@@ -909,6 +1079,7 @@ impl BenchUpApp {
             name: self.doc.name.clone(), model: self.document_model.shared(),
             selected: self.selected.clone(), display: self.doc.display.clone(),
             settings: self.time_estimates.clone(), joinery_rates: self.joinery_rates.clone(),
+            router_rates: self.router_rates,
             stock: self.general_settings.stock.clone(), layout: self.project.cutting_plan_layout,
         }
     }
@@ -926,6 +1097,7 @@ impl BenchUpApp {
             areas,
             &self.time_estimates,
             &self.joinery_rates,
+            &self.router_rates,
         );
         let finishes = finishing_costs(
             &self.doc.model,
@@ -950,6 +1122,9 @@ impl BenchUpApp {
                     ]
                 })
                 .into_iter()
+                .chain(time.has_routes().then(|| [
+                    tr!("time_estimates.router_task").into(), format_minutes(time.router_work), format_minutes(0.),
+                ]))
                 .chain(time.finishing.iter().map(|(task, duration, count)| {
                     [
                         tr!("time_estimates.objects", count = *count, title = task.label()),
@@ -980,6 +1155,10 @@ impl BenchUpApp {
         };
         report.notes.push(tr!("time_estimates.wood_surfaces_finishing_applies_only_to_objects_assigned",
             self.doc.display.units.format_area(area), if self.selected.is_empty() { tr!("time_estimates.visible") } else { tr!("time_estimates.selected") }));
+        if time.has_routes() {
+            report.notes.push(tr!("time_estimates.router_report_note",
+                setup = self.router_rates.setup_minutes, rate = self.router_rates.minutes_per_meter));
+        }
         report.notes.push(tr!(
             "time_estimates.joinery_whole_project_3",
             JOINERY_SCOPE = joinery_scope(),
@@ -1457,6 +1636,7 @@ impl BenchUpApp {
             &self.estimate_cache.area.as_ref().unwrap().1,
             &self.time_estimates,
             &self.joinery_rates,
+            &self.router_rates,
         );
         if self.doc.model.connections.is_empty()
             && self.doc.model.edges.is_empty()
@@ -1467,6 +1647,7 @@ impl BenchUpApp {
                 tr!("time_estimates.draw_or_import_parts_to_estimate_time_and")).show(ui);
             ui.add_space(8.);
             joinery_controls(ui, &time.joinery, &mut self.joinery_rates);
+            router_controls(ui, &time.router, &mut self.router_rates, &self.doc.display.units);
             return;
         }
         let finish_costs = finishing_costs(
@@ -1609,15 +1790,15 @@ impl BenchUpApp {
             .inner_margin(10)
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                if area <= 0. {
+                if area <= 0. && !time.has_joints() && !time.has_routes() {
                     crate::empty_state::EmptyState::new(tr!("time_estimates.no_surfaces_to_estimate"),
                         if self.selected.is_empty() { tr!("time_estimates.no_visible_surfaces_with_assigned_wood_materials") }
                         else { tr!("time_estimates.select_faces_or_groups_with_assigned_wood_materials") }).show(ui);
-                } else if time.finishing.is_empty() {
+                } else if time.finishing.is_empty() && !time.has_joints() && !time.has_routes() {
                     crate::empty_state::EmptyState::new(tr!("time_estimates.no_finishing_tasks"),
                         tr!("time_estimates.choose_sanding_grits_or_finishes_for_objects_in")).show(ui);
                 }
-                if time.has_joints() || !time.finishing.is_empty() {
+                if time.has_joints() || time.has_routes() || !time.finishing.is_empty() {
                     ui.text_label(
                         RichText::new(tr!("time_estimates.sequential_total"))
                             .small()
@@ -1643,6 +1824,12 @@ impl BenchUpApp {
                             "-".into(),
                         ];
                         table.row(ui, "joinery_total", |column, ui| {
+                            ui.text_label(RichText::new(&values[column]).small());
+                        });
+                    }
+                    if time.has_routes() {
+                        let values = [tr!("time_estimates.router_task").to_owned(), format_minutes(time.router_work), "-".into()];
+                        table.row(ui, "router_total", |column, ui| {
                             ui.text_label(RichText::new(&values[column]).small());
                         });
                     }
@@ -1697,6 +1884,7 @@ impl BenchUpApp {
         self.material_cost_estimate_contents(ui);
         ui.add_space(8.);
         joinery_controls(ui, &time.joinery, &mut self.joinery_rates);
+        router_controls(ui, &time.router, &mut self.router_rates, &self.doc.display.units);
     }
 }
 

@@ -268,6 +268,8 @@ impl Model {
         self.texts.retain(|id, _| !ids.contains(id));
         self.guides.retain(|id, _| !ids.contains(id));
         self.edges.retain(|id, _| !ids.contains(id));
+        self.routes.retain(|id, _| !ids.contains(id));
+        self.routing_appearance.remove(&ids);
         self.faces.retain(|id, _| !ids.contains(id));
         self.wood_glue.retain(|id, _| !ids.contains(id));
         self.objects.retain(|id, _| !ids.contains(id));
@@ -285,6 +287,8 @@ impl Model {
         self.remove_contents(id)?;
         self.vertices.extend(contents.vertices.clone());
         self.edges.extend(contents.edges.clone());
+        self.routes.extend(contents.routes.clone());
+        self.routing_appearance.extend(&contents.routing_appearance);
         self.faces.extend(contents.faces.clone());
         self.dimensions.extend(contents.dimensions.clone());
         self.texts.extend(contents.texts.clone());
@@ -477,6 +481,12 @@ impl Model {
                 // from outside the component continue to track its geometry.
                 let mut stable_vertices = BTreeMap::new();
                 let peer_instance = self.objects[&peer].clone();
+                // Routing belongs to the instance. Keep each peer's cuts on
+                // the definition edges that survive a stock edit.
+                contents.routes = instance.definition_entities.iter().filter_map(|(key, source_edge)| {
+                    let old_edge = peer_instance.definition_entities.get(key)?;
+                    Some((*source_edge, *self.routes.get(old_edge)?))
+                }).collect();
                 for (key, source_id) in &instance.definition_entities {
                     let Some(old_id) = peer_instance.definition_entities.get(key) else {
                         continue;
@@ -595,6 +605,12 @@ impl Model {
                 .ok_or(tr!("core.edit_context.missing_component_definition"))?;
             let linear = to.linear() * from.linear().inverse();
             contents.transform_contents(linear, to.translation - linear * from.translation);
+            // A clipboard snapshot can use updated stock from a different
+            // instance of the same definition. Keep the copied instance's cuts.
+            contents.routes = reference.definition_entities.iter().filter_map(|(key, source_edge)| {
+                let copied_edge = instance.definition_entities.get(key)?;
+                Some((*source_edge, *copy.routes.get(copied_edge)?))
+            }).collect();
             let mut copied_to_source = BTreeMap::new();
             for (key, source_id) in &reference.definition_entities {
                 if let Some((source, old)) = contents.edges.get(source_id).zip(

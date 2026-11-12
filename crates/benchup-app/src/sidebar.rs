@@ -50,6 +50,7 @@ impl OrbitOrigin {
 #[serde(default)]
 pub(super) struct InspectorPreferences {
     joinery: joinery::Preferences,
+    router: router::Preferences,
     fasteners: fasteners::Preferences,
     sharing: sharing::Preferences,
     account_open: bool,
@@ -70,6 +71,7 @@ pub(super) struct InspectorPreferences {
     cutting_plan: CuttingPlanPreferences,
     time_estimates: time_estimates::Settings,
     joinery_rates: time_estimates::JoineryRates,
+    router_rates: time_estimates::RouterRates,
     finish_product_filters: std::collections::BTreeMap<String, String>,
     stock_material_filter: String,
     wood_type_filters: std::collections::BTreeMap<String, String>,
@@ -91,6 +93,7 @@ impl Default for InspectorPreferences {
     fn default() -> Self {
         Self {
             joinery: Default::default(),
+            router: Default::default(),
             fasteners: Default::default(),
             sharing: Default::default(),
             account_open: false,
@@ -111,6 +114,7 @@ impl Default for InspectorPreferences {
             cutting_plan: CuttingPlanPreferences::default(),
             time_estimates: Default::default(),
             joinery_rates: Default::default(),
+            router_rates: Default::default(),
             finish_product_filters: Default::default(),
             stock_material_filter: String::new(),
             wood_type_filters: Default::default(),
@@ -713,6 +717,12 @@ impl BenchUpApp {
             };
         self.joinery = preferences.joinery.clone();
         self.joinery.sanitize();
+        self.router = preferences.router;
+        // Tool restoration must honor the saved Properties/Router disclosures.
+        self.router_editor.reveal = false;
+        if !self.router.settings.valid() {
+            self.router.settings = Default::default();
+        }
         self.fasteners = preferences.fasteners.clone();
         self.fasteners.sanitize();
         self.project.export_stl = preferences.export_stl;
@@ -720,6 +730,8 @@ impl BenchUpApp {
         self.time_estimates.sanitize();
         self.joinery_rates = preferences.joinery_rates.clone();
         self.joinery_rates.sanitize();
+        self.router_rates = preferences.router_rates;
+        self.router_rates.sanitize();
         self.finish_product_filters = preferences.finish_product_filters.clone();
         self.stock_material_filter = preferences.stock_material_filter.clone();
         self.wood_type_filters = preferences.wood_type_filters.clone();
@@ -803,6 +815,7 @@ impl BenchUpApp {
     fn current_inspector_preferences(&self, ctx: &egui::Context) -> InspectorPreferences {
         InspectorPreferences {
             joinery: self.joinery.clone(),
+            router: self.router,
             fasteners: self.fasteners.clone(),
             sharing: self.sharing.preferences.clone(),
             account_open: self.account.open,
@@ -839,6 +852,7 @@ impl BenchUpApp {
             },
             time_estimates: self.time_estimates.clone(),
             joinery_rates: self.joinery_rates.clone(),
+            router_rates: self.router_rates,
             finish_product_filters: self.finish_product_filters.clone(),
             stock_material_filter: self.stock_material_filter.clone(),
             wood_type_filters: self.wood_type_filters.clone(),
@@ -1004,6 +1018,150 @@ mod preference_tests {
         let mut old=InspectorSection::ALL.to_vec();old.insert(2,InspectorSection::Fasteners);
         eframe::set_value(&mut storage,ORDER_PREFERENCE_KEY,&old);
         assert_eq!(restore_order(Some(&storage)),InspectorSection::ALL);
+    }
+
+    #[test]
+    fn router_preferences_save_without_model_edits_and_default_for_older_projects() {
+        let old: InspectorPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.router, router::Preferences::default());
+        let old_display: DisplaySettings = serde_json::from_str("{}").unwrap();
+        assert!(old_display.router_preview);
+        let ctx = egui::Context::default();
+        let mut storage = SavedPreferences::default();
+        let mut model = Model::default();
+        let edge = model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+        let mut app = BenchUpApp::with_document(Document { model, ..Default::default() }, None, true);
+        app.selected.insert(edge);
+        app.set_tool(Tool::Router);
+        app.router.settings = benchup_core::router::Settings {
+            profile: benchup_core::router::Profile::Chamfer,
+            width: 0.008,
+            depth: 0.004,
+            offset: 0.003,
+            angle_degrees: 26.,
+            reverse: true,
+        };
+        // Select the new profile card through the UI, then save immediately
+        // without any model edit or framework autosave.
+        use crate::test_ui::ContextExt as _;
+        app.reveal_router_properties(&ctx);
+        let input = |events| egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(640., 1200.))),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_test_ui(input(vec![]), |ui| app.router_properties(ui));
+        let output = ctx.run_test_ui(input(vec![]), |ui| app.router_properties(ui));
+        fn find_text(shape: &egui::Shape, label: &str) -> Option<Pos2> {
+            match shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| find_text(shape, label)),
+                _ => None,
+            }
+        }
+        for retired in [
+            "Close Router",
+            "Apply routing",
+            "Live preview",
+            "Use selected edges",
+        ] {
+            assert!(
+                output
+                    .shapes
+                    .iter()
+                    .all(|shape| find_text(&shape.shape, retired).is_none())
+            );
+        }
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| find_text(&shape.shape, benchup_core::router::Profile::None.label()))
+            .expect("None profile card");
+        for pressed in [true, false] {
+            let _ = ctx.run_test_ui(
+                input(vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]),
+                |ui| app.router_properties(ui),
+            );
+        }
+        assert_eq!(
+            app.router.settings.profile,
+            benchup_core::router::Profile::None
+        );
+        app.doc.display.router_preview = false;
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        assert_eq!(restored.router, app.router);
+        assert_eq!(restored.tool, Tool::Router);
+        assert!(!restored.doc.display.router_preview);
+        assert!(restored.doc.model.routes.is_empty());
+        assert!(!restored.project.modified);
+    }
+
+    #[test]
+    fn router_first_launch_is_collapsed_with_none_selected() {
+        let ctx = egui::Context::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        app.restore_inspector_preferences(&ctx, None);
+        assert_eq!(
+            app.router.settings.profile,
+            benchup_core::router::Profile::None
+        );
+        let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
+            inspector_section(ui, "Properties", "entity_info", true, |ui| {
+                app.router_properties(ui)
+            });
+        });
+        assert!(!app.current_inspector_preferences(&ctx).sections.get("router").copied().unwrap_or(false));
+        let edge = app.doc.model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+        app.selected.insert(edge);
+        let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| app.router_properties(ui));
+        assert!(!app.current_inspector_preferences(&ctx).sections["router"]);
+        assert!(app.doc.model.routes.is_empty());
+        assert!(!app.project.modified);
+    }
+
+    #[test]
+    fn nested_router_disclosure_restores_without_model_edits_or_reopening_on_startup() {
+        let legacy: InspectorPreferences = serde_json::from_str(r#"{"router":{"open":true}}"#).unwrap();
+        assert_eq!(legacy.router, router::Preferences::default());
+        for (properties_open, router_open) in [(true, false), (true, true), (false, false)] {
+            let ctx = egui::Context::default();
+            let mut storage = SavedPreferences::default();
+            let mut app = BenchUpApp::with_document(Document::default(), None, true);
+            app.set_tool(Tool::Router);
+            app.reveal_router_properties(&ctx);
+            set_section_open(&ctx, "entity_info", properties_open);
+            set_section_open(&ctx, "router", router_open);
+            let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
+                inspector_section(ui, "Properties", "entity_info", true, |ui| {
+                    app.router_properties(ui)
+                });
+            });
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(!app.project.modified);
+            assert!(app.doc.history.is_empty());
+            let restored_ctx = egui::Context::default();
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&restored_ctx, Some(&storage));
+            // Rendering the normal inspector cannot force saved disclosures open.
+            restored.reveal_router_properties(&restored_ctx);
+            let preferences = restored.current_inspector_preferences(&restored_ctx);
+            assert_eq!(preferences.sections["entity_info"], properties_open);
+            assert_eq!(preferences.sections["router"], router_open);
+            assert_eq!(restored.tool, Tool::Router);
+            assert!(!restored.project.modified);
+        }
     }
 
     #[test]
@@ -3564,6 +3722,7 @@ mod preference_tests {
             step.minutes_per_m2 = 7. + i as f64;
         }
         app.time_estimates.sanding_after_varnish = vec![false, true, false, true, false, true];
+        app.router_rates = time_estimates::RouterRates { setup_minutes: 3.5, minutes_per_meter: 2.25 };
         app.joinery_rates.set_minutes(JointKind::Dovetail, 31.5);
         app.joinery_rates.set_minutes(JointKind::Rabbet, 0.);
         for (step, product) in [
@@ -3592,6 +3751,7 @@ mod preference_tests {
             ("time_estimates_varnish", false),
             ("time_estimates_material_cost", true),
             (time_estimates::JOINERY_SECTION_KEY, false),
+            (time_estimates::ROUTER_SECTION_KEY, true),
         ];
         for (key, open) in subsections {
             set_section_open(&ctx, key, open);
@@ -3606,6 +3766,7 @@ mod preference_tests {
         let mut restored = BenchUpApp::with_document(Document::default(), None, true);
         restored.restore_inspector_preferences(&restored_ctx, Some(&storage));
         assert_eq!(restored.time_estimates, app.time_estimates);
+        assert_eq!(restored.router_rates, app.router_rates);
         assert_eq!(restored.joinery_rates.minutes(JointKind::Dovetail), 31.5);
         assert_eq!(restored.joinery_rates.minutes(JointKind::Rabbet), 0.);
         assert_eq!(restored.joinery_rates.minutes(JointKind::HalfLap), 8.);
@@ -3633,6 +3794,7 @@ mod preference_tests {
         });
         let old: InspectorPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(old.time_estimates, time_estimates::Settings::default());
+        assert_eq!(old.router_rates, time_estimates::RouterRates::default());
         assert_eq!(
             JointKind::ALL.map(|kind| old.joinery_rates.minutes(kind)),
             [15., 8., 8., 5., 25., 15.],

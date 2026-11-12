@@ -82,6 +82,7 @@ impl BenchUpApp {
         } else {
             hits
         };
+        self.router_selection_click(ctx, position, hit);
         self.selection_click = Some(Click {
             hit,
             position,

@@ -109,6 +109,8 @@ pub(crate) struct ModelChange {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     connections: Changes<u64, crate::connections::Connection>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    routes: Changes<u64, crate::router::Settings>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     vertices: Changes<u64, crate::Vertex>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     edges: Changes<u64, crate::Edge>,
@@ -149,6 +151,7 @@ impl ModelChange {
     pub(crate) fn between(before: &Model, after: &Model) -> Self {
         Self {
             connections: difference(&before.connections, &after.connections),
+            routes: difference(&before.routes, &after.routes),
             vertices: difference(&before.vertices, &after.vertices),
             edges: difference(&before.edges, &after.edges),
             faces: difference(&before.faces, &after.faces),
@@ -172,6 +175,7 @@ impl ModelChange {
     }
     fn is_empty(&self) -> bool {
         self.connections.is_empty()
+            && self.routes.is_empty()
             && self.vertices.is_empty()
             && self.edges.is_empty()
             && self.faces.is_empty()
@@ -193,6 +197,7 @@ impl ModelChange {
     }
     pub(crate) fn apply_checked(&self, model: &mut Model, forward: bool) -> bool {
         if !(matches(&self.connections, &model.connections, forward)
+            && matches(&self.routes, &model.routes, forward)
             && matches(&self.vertices, &model.vertices, forward)
             && matches(&self.edges, &model.edges, forward)
             && matches(&self.faces, &model.faces, forward)
@@ -216,6 +221,7 @@ impl ModelChange {
             return false;
         }
         apply(&self.connections, &mut model.connections, forward);
+        apply(&self.routes, &mut model.routes, forward);
         apply(&self.vertices, &mut model.vertices, forward);
         apply(&self.edges, &mut model.edges, forward);
         apply(&self.faces, &mut model.faces, forward);

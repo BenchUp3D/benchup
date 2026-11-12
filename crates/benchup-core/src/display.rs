@@ -32,6 +32,8 @@ impl FaceStyle {
 #[serde(default)]
 pub struct DisplaySettings {
     pub joinery_preview: bool,
+    /// Legacy saved preference; Router profiles now apply only on activation.
+    pub router_preview: bool,
     /// Show clickable markers at saved wood joints.
     pub wood_joinery: bool,
     pub fasteners: bool,
@@ -97,6 +99,7 @@ impl Default for DisplaySettings {
     fn default() -> Self {
         Self {
             joinery_preview: true,
+            router_preview: true,
             wood_joinery: true,
             fasteners: true,
             fastener_preview: false,

@@ -24,7 +24,7 @@ pub(super) fn effective_display(display: &DisplaySettings, model: &Model, dark: 
 
 /// A soft upper-left key light travels with the view, keeping depth legible as
 /// the camera orbits. Prepare its basis once per frame rather than per face.
-pub(super) struct FaceLighting {
+pub(crate) struct FaceLighting {
     eye: DVec3,
     direction: DVec3,
     parallel: Option<DVec3>,
@@ -44,7 +44,7 @@ impl FaceLighting {
         }
     }
 
-    pub(super) fn shade(&self, color: Color32, normal: DVec3, point: DVec3) -> Color32 {
+    pub(crate) fn shade(&self, color: Color32, normal: DVec3, point: DVec3) -> Color32 {
         // Light the visible side of open faces and imported geometry, even
         // when their winding differs. Monochrome keeps its distinct back color.
         let normal = if normal.dot(self.parallel.unwrap_or(self.eye - point)) < 0. {

@@ -264,6 +264,10 @@ pub(crate) fn edited_geometry(
     source: &Model,
     model: &Model,
 ) -> Option<std::collections::BTreeSet<u64>> {
+    if source.routing_appearance.edge_controls != model.routing_appearance.edge_controls
+        || source.routing_appearance.stock_edge_controls != model.routing_appearance.stock_edge_controls
+    { return None; }
+
     use std::collections::{BTreeSet, HashSet};
     fn changed<T: PartialEq>(before: &BTreeMap<u64, T>, after: &BTreeMap<u64, T>) -> BTreeSet<u64> {
         let mut old = before.iter().peekable();
@@ -635,7 +639,8 @@ impl SceneCache {
         }
         let callback = Draw {
             shadows: shadows.clone(),
-            markers: key.selected.iter().any(|id| model.edges.contains_key(id)),
+            markers: key.selected.iter().any(|id| model.edges.contains_key(id)
+                || model.routing_appearance.endpoint_control(*id).is_some()),
             appearance,
             geometry: Arc::clone(&geometry),
             overlay: self.resident.overlay.clone(),
@@ -676,7 +681,7 @@ impl SceneCache {
                 face_hovered: rgba(face_palette.hovered),
                 face_inactive: rgba(face_palette.inactive),
                 edge_selected: rgba(crate::theme::ACCENT),
-                edge_hovered: rgba(palette.green),
+                edge_hovered: rgba(if key.tool == benchup_core::Tool::Router { palette.accent } else { palette.green }),
                 edge_inactive: rgba(if key.dark {
                     palette.border
                 } else {
@@ -777,6 +782,9 @@ impl Geometry {
             } else {
                 None
             };
+            let material = if model.routing_appearance.faces.contains(&face.id) {
+                Some(&benchup_core::router::CUT_COLOR)
+            } else { material };
             let material = material.map_or(face_palette.front, |rgb| {
                 Color32::from_rgb(rgb[0], rgb[1], rgb[2])
             });
@@ -799,7 +807,7 @@ impl Geometry {
                     }
                     vertices.push(FaceVertex {
                         position: point(p),
-                        normal: cached.normal.as_vec3().to_array(),
+                        normal: model.routing_appearance.normal_at(model, face.id, p, cached.normal).as_vec3().to_array(),
                         anchor: point(anchor),
                         color: color.to_array(),
                         face_id,
@@ -859,12 +867,20 @@ impl Geometry {
         for edge in model.edges.values().filter(|e| {
             dirty.is_none_or(|dirty| dirty.contains(&e.id))
                 && entities.get(e.id).displayed(&key.display)
+                && (!model.routing_appearance.smooth_edges.contains(&e.id) || key.display.hidden_geometry)
         }) {
-            for vertex in [edge.a, edge.b] {
-                endpoints.entry(vertex).or_default().push(hierarchy.slot(edge.id));
+            // Evaluated machining vertices describe tessellation, not editable
+            // drawing endpoints. Their controls are retained from the stock.
+            if !model.routing_appearance.sources.contains_key(&edge.id) {
+                for vertex in [edge.a, edge.b] {
+                    endpoints.entry(vertex).or_default().push(hierarchy.slot(edge.id));
+                }
             }
             let state = entities.get(edge.id);
-            let color = if key.display.color_by_tag {
+            let color = if model.routing_appearance.edges.contains(&edge.id) {
+                let [r, g, b] = benchup_core::router::EDGE_COLOR;
+                Color32::from_rgb(r, g, b)
+            } else if key.display.color_by_tag {
                 state
                     .tag_color
                     .map_or(palette.ink, |rgb| Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
@@ -901,6 +917,27 @@ impl Geometry {
                 interaction: hierarchy.pair(edge.id),
             });
         }
+        // Original routed paths are interaction-only instances. The shader
+        // reveals them for explicit edge selection/hover, never group selection.
+        let mut route_markers = Vec::new();
+        for (&id, control) in &model.routing_appearance.edge_controls {
+            if dirty.is_some_and(|dirty| !dirty.contains(&id)) || control.hidden
+                || control.parent.is_some_and(|parent| !entities.get(parent).displayed(&key.display))
+            { continue; }
+            edges.push(EdgeInstance {
+                a: point(control.points[0]), b: point(control.points[1]),
+                color: palette.ink.to_array(), width: -2., interaction: hierarchy.pair(id),
+                ..bytemuck::Zeroable::zeroed()
+            });
+        }
+        for (&id, control) in model.routing_appearance.endpoint_controls() {
+            if dirty.is_some_and(|dirty| !dirty.contains(&id)) || control.hidden
+                || control.parent.is_some_and(|parent| !entities.get(parent).displayed(&key.display))
+            { continue; }
+            for p in control.points {
+                route_markers.push(MarkerInstance { position: point(p), edges: [hierarchy.slot(id), 0, 0, 0] });
+            }
+        }
         // Angular strokes share the retained edge buffers, camera uniforms,
         // interaction texture and fragment depth clipping. Tessellate only
         // when their geometry changes, never during camera movement.
@@ -917,7 +954,7 @@ impl Geometry {
                 });
             }
         }
-        let markers = endpoints.into_iter().flat_map(|(id, edges)| {
+        let mut markers: Vec<_> = endpoints.into_iter().flat_map(|(id, edges)| {
             let position = point(model.vertices[&id].position);
             edges.chunks(4).map(|chunk| {
                 let mut edges = [0; 4];
@@ -925,6 +962,7 @@ impl Geometry {
                 MarkerInstance { position, edges }
             }).collect::<Vec<_>>()
         }).collect();
+        markers.extend(route_markers);
         if !material_vertices.is_empty() {
             material_vertices.resize(vertices.len(), SurfaceVertex::default());
         }
@@ -1695,6 +1733,153 @@ mod tests {
             (cache.resident.geometry.as_ref().unwrap().origin.x - previous_origin.x - 1000.).abs()
                 < 1e-9
         );
+    }
+
+    #[test]
+    fn routed_selection_retains_original_gpu_line_and_exactly_two_original_handles() {
+        use std::collections::BTreeSet;
+        let mut stock = Model::default();
+        let points = [DVec3::ZERO, DVec3::X, DVec3::X + DVec3::Y, DVec3::Y];
+        for i in 0..4 { stock.add_edge(points[i], points[(i + 1) % 4]).unwrap(); }
+        let face = *stock.faces.keys().next().unwrap();
+        stock.push_pull(face, 0.1).unwrap();
+        let board = stock.make_object(&stock.root_entities(), false, "Board").unwrap();
+        let edge = *stock.edges.keys().next().unwrap();
+        stock.routes.insert(edge, benchup_core::router::Settings {
+            profile: benchup_core::router::Profile::Roundover, ..Default::default()
+        });
+        stock.paste_entities(&model(1024), DVec3::splat(10.));
+        let evaluated = stock.evaluate_joinery();
+        assert!(evaluated.errors.is_empty(), "{:?}", evaluated.errors);
+        let model = evaluated.model;
+        let mut faces = FaceCache::default(); faces.update(&model);
+        let mut entities = EntityCache::default(); entities.update(&model);
+        let mut key = key();
+        key.selected = model.routing_appearance.selection_entities(&BTreeSet::from([edge]));
+        let ctx = egui::Context::default();
+        let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
+            assert!(supported(&key, &model, &faces));
+            let mut cache = SceneCache::default();
+            cache.prepare_resident(&key, &model, &faces, &entities, ui);
+            let geometry = cache.resident.geometry.as_ref().unwrap();
+            let hierarchy = cache.resident.hierarchy.as_ref().unwrap();
+            let control_slot = hierarchy.slot(edge);
+            assert_ne!(control_slot, 0);
+            let mut appearance = appearance::Cache::default();
+            let state = hierarchy.update(&mut appearance, &key, &BTreeSet::new());
+            let controls: Vec<_> = geometry.edges.iter().filter(|e| e.width == -2.).collect();
+            assert_eq!(controls.len(), 1);
+            assert_eq!(controls[0].interaction[1], control_slot);
+            let markers: Vec<_> = geometry.markers.iter().filter(|marker| marker.edges.iter().any(|&slot|
+                slot != 0 && state[slot as usize] & appearance::SELECTED != 0)).collect();
+            assert_eq!(markers.len(), 2, "generated profile endpoints must not become handles");
+            for (marker, point) in markers.iter().zip(model.routing_appearance.edge_controls[&edge].points) {
+                let world = DVec3::from_array(marker.position.map(f64::from)) + geometry.origin;
+                assert!(world.distance(point) < 1e-5);
+            }
+            let builds = cache.resident.builds;
+            key.selected.clear();
+            cache.prepare_resident(&key, &model, &faces, &entities, ui);
+            key.selected.insert(board);
+            cache.prepare_resident(&key, &model, &faces, &entities, ui);
+            assert_eq!(cache.resident.builds, builds, "selection must reuse the GPU buffers");
+            let state = cache.resident.hierarchy.as_ref().unwrap()
+                .update(&mut appearance, &key, &BTreeSet::new());
+            assert_eq!(state[control_slot as usize] & appearance::SELECTED, 0,
+                "selecting the board must not reveal the source edge controls");
+            assert!(!cache.resident.geometry.as_ref().unwrap().markers.iter().any(|marker|
+                marker.edges.iter().any(|&slot| slot != 0 && state[slot as usize] & appearance::SELECTED != 0)));
+        });
+    }
+
+    #[test]
+    fn routed_loose_and_grouped_stock_show_only_editable_gpu_endpoints() {
+        use std::collections::BTreeSet;
+        for grouped in [false, true] {
+            let mut stock: Model = serde_json::from_str(include_str!(
+                "../../benchup-core/tests/fixtures/cove-split-box.json"
+            ))
+            .unwrap();
+            if grouped {
+                let group = stock
+                    .make_object(&stock.root_entities(), false, "Routed box")
+                    .unwrap();
+                stock.edit_context = Some(group);
+            }
+            let selected = stock.selectable_entities();
+            let evaluated = stock.evaluate_joinery();
+            assert!(evaluated.errors.is_empty(), "{:?}", evaluated.errors);
+            let filler = model(1024);
+            let mut model = evaluated.model;
+            model.edit_context = None;
+            model.paste_entities(&filler, DVec3::splat(30.));
+            model.edit_context = stock.edit_context;
+            let mut faces = FaceCache::default();
+            faces.update(&model);
+            let mut entities = EntityCache::default();
+            entities.update(&model);
+            let mut key = key();
+            key.edit_context = stock.edit_context;
+            key.selected = model.routing_appearance.selection_entities(&selected);
+            let ctx = egui::Context::default();
+            let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
+                assert!(supported(&key, &model, &faces));
+                let mut cache = SceneCache::default();
+                cache.prepare_resident(&key, &model, &faces, &entities, ui);
+                let geometry = cache.resident.geometry.as_ref().unwrap();
+                let hierarchy = cache.resident.hierarchy.as_ref().unwrap();
+                let mut appearance = appearance::Cache::default();
+                let state = hierarchy.update(&mut appearance, &key, &BTreeSet::new());
+                let visible = |marker: &&MarkerInstance, state: &[u32]| {
+                    marker
+                        .edges
+                        .iter()
+                        .any(|&slot| slot != 0 && state[slot as usize] & appearance::SELECTED != 0)
+                };
+                let handles: Vec<_> = geometry
+                    .markers
+                    .iter()
+                    .filter(|m| visible(m, &state))
+                    .collect();
+                assert_eq!(handles.len(), stock.edges.len() * 2);
+                for marker in handles {
+                    let world = DVec3::from_array(marker.position.map(f64::from)) + geometry.origin;
+                    assert!(
+                        stock
+                            .vertices
+                            .values()
+                            .any(|v| v.position.distance(world) < 1e-5),
+                        "a generated cutter vertex must not become an editable handle: {world:?}"
+                    );
+                }
+                let edge = *model
+                    .routing_appearance
+                    .stock_edge_controls
+                    .keys()
+                    .next()
+                    .unwrap();
+                key.selected = model
+                    .routing_appearance
+                    .selection_entities(&BTreeSet::from([edge]));
+                let builds = cache.resident.builds;
+                cache.prepare_resident(&key, &model, &faces, &entities, ui);
+                assert_eq!(
+                    cache.resident.builds, builds,
+                    "selection must reuse GPU buffers"
+                );
+                let hierarchy = cache.resident.hierarchy.as_ref().unwrap();
+                let state = hierarchy.update(&mut appearance, &key, &BTreeSet::new());
+                let geometry = cache.resident.geometry.as_ref().unwrap();
+                assert_eq!(
+                    geometry
+                        .markers
+                        .iter()
+                        .filter(|m| visible(m, &state))
+                        .count(),
+                    2
+                );
+            });
+        }
     }
 
     #[test]

@@ -71,6 +71,10 @@ pub struct Model {
     #[serde(default)]
     #[serde(deserialize_with = "deserialize_map_or_empty_sequence")]
     pub connections: BTreeMap<u64, crate::connections::Connection>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "deserialize_map_or_empty_sequence")]
+    pub routes: BTreeMap<u64, crate::router::Settings>,
+    #[serde(skip)]
+    pub routing_appearance: crate::router::Appearance,
     #[serde(deserialize_with = "deserialize_map_or_empty_sequence")]
     pub vertices: BTreeMap<u64, Vertex>,
     #[serde(deserialize_with = "deserialize_map_or_empty_sequence")]
@@ -125,6 +129,8 @@ impl Model {
     pub fn same_scene_geometry(&self, other: &Self) -> bool {
         self.guides == other.guides
             && self.connections == other.connections
+            && self.routes == other.routes
+            && self.routing_appearance == other.routing_appearance
             && self.vertices == other.vertices
             && self.edges == other.edges
             && self.faces == other.faces
@@ -216,8 +222,13 @@ impl Model {
             }
             self.edges.remove(&edge.id);
             drawing_edges.remove(&edge.id);
-            drawing_edges.insert(self.insert_edge(edge.a, vertex));
-            drawing_edges.insert(self.insert_edge(vertex, edge.b));
+            let first = self.insert_edge(edge.a, vertex);
+            let second = self.insert_edge(vertex, edge.b);
+            drawing_edges.extend([first, second]);
+            if let Some(settings) = self.routes.remove(&edge.id) {
+                self.routes.insert(first, settings);
+                self.routes.insert(second, settings);
+            }
         }
     }
     pub fn add_edge(&mut self, start: DVec3, end: DVec3) -> Result<u64, &'static str> {
@@ -369,6 +380,7 @@ impl Model {
         self.face_colors.retain(|id, _| self.faces.contains_key(id));
         self.reference_images.retain(|id, _| self.faces.contains_key(id));
         self.edges.retain(|id, _| !ids.contains(id));
+        self.routes.retain(|id, _| !ids.contains(id));
         let used: std::collections::HashSet<_> = self
             .edges
             .values()
@@ -460,6 +472,7 @@ impl Model {
         }) {
             return Err(tr!("core.document.invalid_connection_parameters"));
         }
+        self.validate_routes()?;
         let max_id = self
             .vertices
             .keys()

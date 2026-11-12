@@ -4,8 +4,9 @@ pub mod reference_images;
 pub use reference_images::{ImageAsset, ImageFit, ImageSettings, ReferenceImage};
 
 pub mod connections;
-pub mod wood_glue;
 pub mod joinery;
+pub mod router;
+pub mod wood_glue;
 mod cleanup;
 pub mod annotations;
 pub mod camera;
@@ -98,8 +99,9 @@ pub enum Tool {
     Erase,
     Orbit,
     GrainDirection,
-    WoodGlue,
     Walk,
+    WoodGlue,
+    Router,
 }
 
 impl Tool {
@@ -143,7 +145,7 @@ impl Tool {
     pub fn is_drawing(self) -> bool {
         self == Self::Image || Self::DRAWING.contains(&self)
     }
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::Select,
         Self::Line,
         Self::Rectangle,
@@ -172,8 +174,9 @@ impl Tool {
         Self::GrainDirection,
         Self::Walk,
         Self::WoodGlue,
+        Self::Router,
     ];
-    pub const RAIL: [Self; 13] = [
+    pub const RAIL: [Self; 14] = [
         Self::Select,
         Self::Line,
         Self::Erase,
@@ -186,6 +189,7 @@ impl Tool {
         Self::Paint,
         Self::Dimensions,
         Self::Union,
+        Self::Router,
         Self::WoodGlue,
     ];
     pub fn label(self) -> &'static str {
@@ -216,8 +220,9 @@ impl Tool {
             Self::Erase => tr!("tools.erase"),
             Self::Orbit => tr!("tools.orbit"),
             Self::GrainDirection => tr!("tools.grain_direction"),
-            Self::WoodGlue => tr!("wood_glue.tool"),
             Self::Walk => "Walk",
+            Self::WoodGlue => tr!("wood_glue.tool"),
+            Self::Router => tr!("router.router"),
         }
     }
     pub fn shortcut(self) -> &'static str {
@@ -244,7 +249,7 @@ impl Tool {
             Self::TapeMeasure => "T",
             Self::Protractor => "A",
             Self::Dimensions => "I",
-            Self::Text | Self::GrainDirection | Self::Walk | Self::WoodGlue => "",
+            Self::Text | Self::GrainDirection | Self::Walk | Self::WoodGlue | Self::Router => "",
             Self::Erase => "E",
             Self::Orbit => "O",
         }
@@ -304,6 +309,7 @@ impl Tool {
             Self::Orbit => tr!("tools.drag_to_orbit_hold_shift_to_pan_scroll"),
             Self::GrainDirection => tr!("tools.place_the_grain_anchor"),
             Self::WoodGlue => tr!("wood_glue.instructions"),
+            Self::Router => tr!("router.click_edges"),
             Self::Walk => "Click a floor face to start walking at eye level. Escape exits Walk.",
         }
     }

@@ -46,7 +46,7 @@ mod context_menu;
 #[path = "currency.rs"]
 mod currency;
 #[path = "display_scene.rs"]
-mod display_scene;
+pub(crate) mod display_scene;
 #[path = "construction_guides.rs"]
 mod construction_guides;
 #[path = "drawing_inference.rs"]
@@ -81,6 +81,8 @@ mod projects;
 mod drawing_groups;
 #[path = "joinery.rs"]
 mod joinery;
+#[path = "router.rs"]
+mod router;
 #[path = "wood_glue.rs"]
 mod wood_glue;
 #[cfg(not(target_arch = "wasm32"))]
@@ -205,6 +207,7 @@ enum GestureKind {
     Modeling,
     GrainDirection,
     WoodGlue,
+    Router,
     Solid,
     Measure,
     Paste,
@@ -347,6 +350,8 @@ pub struct BenchUpApp {
     joinery_geometry: joinery::GeometryCache,
     joinery: joinery::Preferences,
     joinery_dialog: joinery::Dialog,
+    router: router::Preferences,
+    router_editor: router::Editor,
     fasteners: fasteners::Preferences,
     fastener_dialog: fasteners::Dialog,
     sharing: sharing::Sharing,
@@ -420,6 +425,7 @@ pub struct BenchUpApp {
     inspector_preferences: sidebar::InspectorPreferences,
     time_estimates: time_estimates::Settings,
     joinery_rates: time_estimates::JoineryRates,
+    router_rates: time_estimates::RouterRates,
     finish_product_filters: std::collections::BTreeMap<String, String>,
     stock_material_filter: String,
     wood_type_filters: std::collections::BTreeMap<String, String>,
@@ -534,6 +540,8 @@ impl BenchUpApp {
             joinery_geometry: Default::default(),
             joinery: Default::default(),
             joinery_dialog: Default::default(),
+            router: Default::default(),
+            router_editor: Default::default(),
             fasteners: Default::default(),
             fastener_dialog: Default::default(),
             sharing: Default::default(),
@@ -608,6 +616,7 @@ impl BenchUpApp {
             inspector_preferences: sidebar::InspectorPreferences::default(),
             time_estimates: Default::default(),
             joinery_rates: Default::default(),
+            router_rates: Default::default(),
             finish_product_filters: Default::default(),
             stock_material_filter: String::new(),
             wood_type_filters: Default::default(),
@@ -735,6 +744,14 @@ impl BenchUpApp {
         self.last_move_copy = None;
         self.measurement = None;
         self.text_editor = None;
+        if tool == Tool::Router {
+            self.inspector = true;
+            self.router_editor.reveal = true;
+            self.fasteners.open = false;
+            self.joinery.open = false;
+        } else if self.tool == Tool::Router {
+            self.router_editor = Default::default();
+        }
         self.tool = tool;
         if Tool::DRAWING.contains(&tool) {
             self.drawing_tool = tool;
@@ -2411,6 +2428,14 @@ impl BenchUpApp {
                 ctx.request_repaint();
                 return;
             }
+            if self.tool == Tool::Router && self.inspector && self.object_creation.is_none()
+                && self.object_rename.is_none() && self.viewports.renaming.is_none()
+                && self.text_editor.is_none()
+            {
+                self.close_router();
+                ctx.request_repaint();
+                return;
+            }
             let solid_operation = self.solid_first.take().is_some();
             self.flip_hover = None;
             let measurement_operation = self.measurement.take().is_some();
@@ -3418,6 +3443,13 @@ impl BenchUpApp {
                     // after clicks and nested menus have activated their tool this frame.
                     let selection_shape = ui.painter().add(egui::Shape::Noop);
                     let content_top = ui.cursor().top();
+                    let regular_height = (55. + 5. + ui.spacing().item_spacing.y)
+                        * Tool::RAIL.len() as f32;
+                    let compact = ui.available_height() < regular_height;
+                    let (button_height, gap) = if compact { (48., 2.) } else { (55., 5.) };
+                    if compact {
+                        ui.spacing_mut().item_spacing.y = 4.;
+                    }
                     let mut tool_rects = Vec::with_capacity(Tool::RAIL.len());
                     for rail_tool in Tool::RAIL {
                         let tool = if rail_tool == Tool::Line {
@@ -3439,7 +3471,7 @@ impl BenchUpApp {
                             tr!("app.tool_with_shortcut", tool = tool.label(), shortcut = shortcut)
                         };
                         let (rect, response) =
-                            ui.allocate_exact_size(egui::vec2(56., 55.), Sense::click());
+                            ui.allocate_exact_size(egui::vec2(56., button_height), Sense::click());
                         tool_rects.push((rail_tool, rect));
                         response.widget_info(|| {
                             egui::WidgetInfo::selected(
@@ -3470,7 +3502,7 @@ impl BenchUpApp {
                             tool,
                         );
                         ui.painter().text(
-                            rect.center() + egui::vec2(0., 17.),
+                            egui::pos2(rect.center().x, rect.bottom() - 10.),
                             Align2::CENTER_CENTER,
                             if tool == Tool::TapeMeasure {
                                 tr!("app.tape")
@@ -3534,7 +3566,7 @@ impl BenchUpApp {
                         if self.tool_tooltip(response, tool).clicked() && !nested {
                             self.set_tool(tool);
                         }
-                        ui.add_space(5.);
+                        ui.add_space(gap);
                     }
                     let selected_rail_tool = if self.tool.is_solid() {
                         Tool::Union
@@ -3918,6 +3950,7 @@ impl BenchUpApp {
             }
         }
         if self.selected.is_empty() {
+            self.router_properties(ui);
             return;
         }
         ui.add_space(8.);
@@ -3943,6 +3976,7 @@ impl BenchUpApp {
             }
             ui.text_label(self.paint_instructions());
         });
+        self.router_properties(ui);
     }
     fn property(ui: &mut egui::Ui, label: &str, value: &str) {
         Self::property_row(ui, label, value);
@@ -4057,6 +4091,7 @@ impl BenchUpApp {
 
     fn inspector_panel(&mut self, ui: &mut egui::Ui) {
         self.connection_sidebar_selection(ui.ctx());
+        self.reveal_router_properties(ui.ctx());
         let fasteners_open = fasteners::AVAILABLE && self.fasteners.open;
         let colors = Palette::for_ui(ui);
         if !self.inspector {
@@ -4251,7 +4286,7 @@ impl BenchUpApp {
         // Select and move the visible machined boards, retaining their source
         // object IDs. The cache restores stock geometry in the active edit scope.
         if matches!(self.tool,Tool::Select|Tool::Move|Tool::Rotate|Tool::Scale)
-            && self.doc.model.connections.values().any(|c| matches!(c.operation,benchup_core::connections::ConnectionOperation::Joinery(_)))
+            && self.doc.model.has_machining()
             {
             return self.joinery_geometry.pick(&self.doc.model,&self.doc.camera,&self.doc.display,size,pixel,include_faces);
         }
@@ -4335,6 +4370,11 @@ impl BenchUpApp {
             self.update_grain_pointer(pos);
             return;
         }
+        if self.tool == Tool::Router && self.paste_preview.is_none() {
+            self.hover = self.router_edge_at(pos);
+            self.snap = None;
+            return;
+        }
         if self.tool == Tool::WoodGlue && self.paste_preview.is_none() {
             self.hover = self.wood_glue_face_at(pos);
             self.snap = None;
@@ -4368,6 +4408,11 @@ impl BenchUpApp {
         } else {
             self.pick_at(local, size, false)
         };
+        if self.tool == Tool::Select && !self.doc.model.routes.is_empty()
+            && let Some(edge) = self.selected_route_at(pos)
+        {
+            self.hover = Some(edge);
+        }
         if self.tool == Tool::Flip {
             self.flip_hover = self.flip_plane_at(pos);
         }
@@ -4806,6 +4851,7 @@ impl BenchUpApp {
                                 | Tool::Text => GestureKind::Measure,
                                 Tool::GrainDirection => GestureKind::GrainDirection,
                                 Tool::WoodGlue => GestureKind::WoodGlue,
+                                Tool::Router => GestureKind::Router,
                                 Tool::Flip
                                 | Tool::OuterShell
                                 | Tool::Union
@@ -5003,6 +5049,11 @@ impl BenchUpApp {
                                     && gesture.start.distance(pos) < 5. =>
                             {
                                 self.measurement_click(pos, ctx);
+                            }
+                            GestureKind::Router
+                                if self.viewport.contains(pos) && gesture.start.distance(pos) < 5. =>
+                            {
+                                self.router_click(pos, ctx);
                             }
                             GestureKind::WoodGlue
                                 if self.viewport.contains(pos) && gesture.start.distance(pos) < 5. =>
@@ -5203,6 +5254,7 @@ impl BenchUpApp {
                 .as_ref()
                 .is_some_and(|edit| edit.preview.is_some())
             || !self.doc.model.connections.is_empty()
+            || !self.doc.model.routes.is_empty()
             || self.joint_highlight_preview_key().is_some();
         // Prepare picking while the scene is being prepared, not on its first
         // click. Plain source and render geometry can start from the same data.
@@ -5210,6 +5262,7 @@ impl BenchUpApp {
             && self.doc.model.faces.len() >= 1024
             && self.face_cache.revision() == 0
             && self.doc.model.connections.is_empty()
+            && self.doc.model.routes.is_empty()
         {
             self.prepare_picking();
             self.picking_cache.prepare_view(
@@ -5240,6 +5293,14 @@ impl BenchUpApp {
 
     fn add_drawing_preview(&self, mesh: &mut renderer::Mesh, camera: &Camera, ui: &egui::Ui) {
         let colors = Palette::for_ui(ui);
+        if self.tool == Tool::Router && self.history_preview.is_none()
+            && let Some(edge) = self.hover.and_then(|id| self.doc.model.edges.get(&id))
+        {
+            let (a, b) = self.doc.model.points(edge);
+            if let Some((a, b)) = self.doc.display.section_segment(a, b) {
+                mesh.world_line(camera, a, b, 4., colors.accent);
+            }
+        }
         if let (Some(start), Some(snap)) = (self.trace_start(), self.line_preview_snap()) {
             let color = self
                 .preview_alignment()
@@ -5274,9 +5335,11 @@ impl BenchUpApp {
             .and_then(|edit| edit.gpu_scale.map(|factors| renderer::ScaleTransform { pivot: edit.center, factors }));
         let colors = Palette::for_ui(ui);
         let faces = FacePalette::for_ui(ui);
-        let source_revision = (self.history_preview.is_none()
-            && self.modeling.as_ref().is_none_or(|edit| edit.preview.is_none())
-            && self.doc.model.connections.is_empty())
+        let committed = self.history_preview.is_none()
+            && self.modeling.as_ref().is_none_or(|edit| edit.preview.is_none());
+        let source_revision = (committed && self.doc.model.connections.is_empty()
+            && self.doc.model.routes.is_empty()).then(|| self.document_revision(ui.ctx()));
+        let routing_revision = (committed && !self.doc.model.routes.is_empty())
             .then(|| self.document_revision(ui.ctx()));
         // History previews affect rendering only; editing, saving and picking
         // continue to use the committed document.
@@ -5286,23 +5349,25 @@ impl BenchUpApp {
                 .and_then(|edit| edit.preview.as_ref())
                 .unwrap_or(&self.doc.model)
         });
-        if !model.connections.is_empty() {
+        let evaluated = !model.connections.is_empty() || !model.routes.is_empty();
+        if evaluated {
             #[cfg(not(target_arch = "wasm32"))]
             let _profile = viewport_benchmark::scope("geometry_update");
             self.joinery_geometry.update_render(model,
                 self.history_preview.is_none() && self.modeling.as_ref().is_some_and(|edit| edit.preview.is_some()),
-                ui.ctx(), &self.doc.display, &self.shadow_cache);
+                ui.ctx(), &self.doc.display, &self.shadow_cache, routing_revision,
+                self.tool == Tool::Router && self.history_preview.is_none());
         } else {
             self.joinery_geometry.clear_removed_connections();
         }
         let joint_preview = self.joint_highlight_preview_key();
         let prepared_shadows = self.joinery_geometry.prepared_shadows.take()
-            .filter(|_| joint_preview.is_none() && !model.connections.is_empty());
+            .filter(|_| joint_preview.is_none() && evaluated);
         let model = joint_preview
             .as_ref()
             .and_then(|_| self.joinery_dialog.preview_model())
             .unwrap_or_else(|| {
-                if model.connections.is_empty() {
+                if !evaluated {
                     model
                 } else {
                     &self.joinery_geometry.result.as_ref().unwrap().model
@@ -5321,6 +5386,19 @@ impl BenchUpApp {
         } else {
             &self.selected
         };
+        // Translate stock selection through cached machining provenance. The
+        // document keeps its original IDs. Faces resolve to the machined solid;
+        // routed edges retain their original path and endpoint controls.
+        let rendered_selection = model.routing_appearance.selection_entities(selected);
+        let selected = &rendered_selection;
+        let mut rendered_hover = model.routing_appearance.render_entities(&self.outliner_hover);
+        if self.history_preview.is_none() && self.tool != Tool::Router
+            && let Some(hover) = self.hover
+            && !model.routing_appearance.edge_controls.contains_key(&hover)
+            && let Some(derived) = model.routing_appearance.by_source.get(&hover)
+        {
+            rendered_hover.extend(derived);
+        }
         let hover = if self.history_preview.is_some() {
             None
         } else {
@@ -5385,7 +5463,7 @@ impl BenchUpApp {
             tool: self.tool,
             selected: selected.clone(),
             hover,
-            outliner_hover: self.outliner_hover.clone(),
+            outliner_hover: rendered_hover.clone(),
             erasing: match &self.gesture {
                 Some(Gesture {
                     kind: GestureKind::Erase { ids },
@@ -5591,12 +5669,15 @@ impl BenchUpApp {
                         < 0.
                 {
                     faces.back
+                } else if model.routing_appearance.faces.contains(&face.id) {
+                    let [r, g, b] = benchup_core::router::CUT_COLOR;
+                    Color32::from_rgb(r, g, b)
                 } else if let Some(rgb) = rgb {
                     Color32::from_rgb(rgb[0], rgb[1], rgb[2])
                 } else {
                     faces.front
                 };
-                let outliner_hover = entities.in_set(face.id,&self.outliner_hover);
+                let outliner_hover = entities.in_set(face.id,&rendered_hover);
                 let color = if entity.context.is_none() && !outliner_hover {
                     faces.inactive
                 } else if erasing.is_some_and(|ids| {
@@ -5642,6 +5723,7 @@ impl BenchUpApp {
                 face_draws.push(renderer::FaceDraw {
                     surface: None,
                     face, cached, color,
+                    smooth: model.routing_appearance.faces.contains(&face.id).then_some((model, &lighting)),
                     shadow: self.shadow_cache.get(face.id).map(|shadow|
                         (shadow, display_scene::shadow_color(color, display.shadow_darkness))),
                 });
@@ -5694,14 +5776,16 @@ impl BenchUpApp {
                     .edges
                     .values()
                     .filter(|e| entities.get(e.id).displayed(display))
+                    .filter(|e| !model.routing_appearance.smooth_edges.contains(&e.id) || display.hidden_geometry)
                     .filter(|e| selected_entities.contains(&e.id) == selected_pass)
                 {
                     let entity = entities.get(e.id);
                     let selected = selected_entities.contains(&e.id);
                     let emphasized = emphasized_entities.contains(&e.id);
                     let root = entity.context;
-                    let outliner_hover = entities.in_set(e.id,&self.outliner_hover);
-                    let hover = outliner_hover || hover.is_some() && hover == root;
+                    let outliner_hover = entities.in_set(e.id,&rendered_hover);
+                    let hover = outliner_hover || hover.is_some() &&
+                        (hover == root || self.tool == Tool::Router && hover == Some(e.id));
                     let pending =
                         erasing.is_some_and(|ids| root.is_some_and(|id| ids.contains(&id)));
                     let color = if emphasize_group && !emphasized {
@@ -5720,10 +5804,13 @@ impl BenchUpApp {
                         color
                     } else if selected {
                         ACCENT
-                    } else if hover && self.tool == Tool::Erase && !outliner_hover {
+                    } else if hover && matches!(self.tool, Tool::Erase | Tool::Router) && !outliner_hover {
                         ACCENT
                     } else if hover {
                         colors.green
+                    } else if model.routing_appearance.edges.contains(&e.id) {
+                        let [r, g, b] = benchup_core::router::EDGE_COLOR;
+                        Color32::from_rgb(r, g, b)
                     } else {
                         colors.ink
                     };
@@ -5771,6 +5858,7 @@ impl BenchUpApp {
                 drop(style_profile);
                 mesh.draw_edges(&edge_draws, display.extensions, display.endpoints);
             }
+            self.add_route_selection(&mut mesh, camera, model, colors.accent, colors.green);
             self.add_drawing_preview(&mut mesh, camera, ui);
             if let Some(preview) = &self.paste_preview {
                 self.paste_face_cache.update(&preview.clipboard.model);
@@ -5964,9 +6052,14 @@ impl BenchUpApp {
         // Retained scenes draw endpoint handles directly from the GPU edge
         // buffer. Dense selections must not generate millions of egui vertices.
         for id in selected.iter().filter(|_| !resident_active) {
-            if let Some(e) = model.edges.get(id) {
-                let (a, b) = model.points(e);
-                for pt in [a, b] {
+            let points = model.routing_appearance.endpoint_control(*id)
+                .filter(|control| !control.hidden && control.parent.is_none_or(|parent| !model.is_hidden(parent)))
+                .map(|control| control.points)
+                .or_else(|| model.edges.get(id)
+                    .filter(|_| !model.routing_appearance.sources.contains_key(id))
+                    .map(|edge| { let (a, b) = model.points(edge); [a, b] }));
+            if let Some(points) = points {
+                for pt in points {
                     if let Some(point) = screen(pt) {
                         p.circle_filled(point, 3., colors.paper);
                         p.circle_stroke(point, 3., Stroke::new(1.3, colors.accent));

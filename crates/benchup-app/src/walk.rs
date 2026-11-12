@@ -196,7 +196,7 @@ impl BenchUpApp {
         // Use the same evaluated faces as the viewport, including holes,
         // transformed groups, and joinery. Visibility affects placement and
         // obstacles consistently; locked geometry still blocks walking.
-        let (faces, entities) = if self.doc.model.connections.is_empty() {
+        let (faces, entities) = if !self.doc.model.has_machining() && self.doc.model.connections.is_empty() {
             self.prepare_picking();
             (&self.face_cache, &self.entity_cache)
         } else {
@@ -227,7 +227,7 @@ impl BenchUpApp {
             .doc
             .camera
             .ray(dv(pos - self.viewport.min), dv(self.viewport.size()));
-        let (faces, entities, picking) = if self.doc.model.connections.is_empty() {
+        let (faces, entities, picking) = if !self.doc.model.has_machining() && self.doc.model.connections.is_empty() {
             self.prepare_picking();
             (&self.face_cache, &self.entity_cache, &self.picking_cache)
         } else {
