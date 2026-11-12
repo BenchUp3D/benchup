@@ -310,6 +310,8 @@ mod tests {
         let second = model
             .make_object(&BTreeSet::from([inner]), false, "Assembly")
             .unwrap();
+        // Grouping remaps the nested object along with its contents.
+        let inner = *model.objects[&second].entities.first().unwrap();
         let mut selected = model.paste_entities(&source, DVec3::Y * 4.);
         selected.extend([first, second]);
         let untouched = model.paste_entities(&source, DVec3::Y * 6.);
