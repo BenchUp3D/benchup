@@ -10,6 +10,8 @@ pub const SCENE_BUDGET: usize = 24_000;
 const MAX_FACES: usize = 80;
 const MAX_LISTED_SELECTION: usize = 200;
 const MAX_LISTED_TAGS: usize = 100;
+const MAX_LISTED_LOOSE: usize = 100;
+const MAX_LISTED_ANNOTATIONS: usize = 50;
 
 /// Metres to millimetres, rounded to 0.1 mm.
 pub fn mm(metres: f64) -> f64 {
@@ -86,6 +88,10 @@ pub fn object_entry(model: &Model, id: u64) -> Option<Value> {
         map.insert("bounds_mm".into(), json!({"min": bounds["min"], "max": bounds["max"]}));
         map.insert("size_mm".into(), bounds["size"].clone());
     }
+    if let ObjectKind::Component { definition } = object.kind {
+        // Instances of one component share this id.
+        map.insert("definition".into(), json!(definition.to_string()[..8]));
+    }
     if let Some(material) = material_json(model, object) {
         map.insert("material".into(), material);
     }
@@ -115,6 +121,48 @@ pub fn stock_list(
         .collect()
 }
 
+/// Joints the core cannot cut, keyed by joint id, with its reason.
+pub fn joint_errors(model: &Model) -> BTreeMap<u64, String> {
+    if !model.connections.values().any(|c| matches!(c.operation, ConnectionOperation::Joinery(_))) {
+        return BTreeMap::new();
+    }
+    model.evaluate_joinery().errors.into_iter().collect()
+}
+
+/// A joint in full: which board carries which part, its settings and whether it cuts.
+pub fn joint_detail(model: &Model, id: u64) -> Option<Value> {
+    let mut joint = joint_json(model, id)?;
+    let connection = &model.connections[&id];
+    if let ConnectionOperation::Joinery(s) = &connection.operation {
+        let axes = ["x", "y", "z"];
+        joint["roles"] = json!({
+            "a": "carries the tenon, tongue, tails, fingers or lap (the board that goes into the other)",
+            "b": "receives the mortise, groove, sockets or lap",
+        });
+        joint["params"] = json!({
+            "depth_axis": s.depth_axis, "width_axis": s.width_axis,
+            "depth_axis_name": axes[s.depth_axis.min(2)], "width_axis_name": axes[s.width_axis.min(2)],
+            "width_ratio": s.width_ratio, "height_ratio": s.height_ratio,
+            "fingers": s.fingers, "dovetails": s.dovetails, "taper_degrees": s.taper_degrees,
+            "clearance_mm": mm(s.clearance),
+        });
+        let supported: Vec<Value> = model
+            .supported_joinery_axes(connection.members, s)
+            .into_iter()
+            .map(|(d, w)| json!({"depth_axis": d, "width_axis": w}))
+            .collect();
+        joint["supported_orientations"] = json!(supported);
+        if let Some(overlap) = model.joinery_options(connection.members, s).0 {
+            joint["overlap_mm"] = point_mm(overlap.bounds.1 - overlap.bounds.0);
+        }
+    }
+    match joint_errors(model).get(&id) {
+        Some(error) => joint["status"] = json!(error),
+        None => joint["status"] = json!("ok"),
+    }
+    Some(joint)
+}
+
 fn joint_json(model: &Model, id: u64) -> Option<Value> {
     let connection = model.connections.get(&id)?;
     let kind = match &connection.operation {
@@ -139,19 +187,39 @@ pub fn summary(
     budget: usize,
 ) -> Value {
     let stock = stock_list(model, catalog);
-    let joints: Vec<_> = model.connections.keys().take(100).filter_map(|id| joint_json(model, *id)).collect();
+    let errors = joint_errors(model);
+    let joints: Vec<_> = model
+        .connections
+        .keys()
+        .take(100)
+        .filter_map(|id| {
+            let mut joint = joint_json(model, *id)?;
+            if let Some(error) = errors.get(id) {
+                joint["status"] = json!(error);
+            }
+            Some(joint)
+        })
+        .collect();
+    let root = model.root_entities();
+    let loose = |pick: &dyn Fn(&u64) -> bool| -> Vec<u64> { root.iter().copied().filter(|id| pick(id)).collect() };
+    let (loose_edges, loose_faces) = (loose(&|id| model.edges.contains_key(id)), loose(&|id| model.faces.contains_key(id)));
     let mut out = json!({
         "units": "mm",
         "up_axis": "z",
+        "axes": {"x": "width, left to right", "y": "depth; the front of a piece faces -y", "z": "height, up"},
         "edit_path": model.edit_path(),
         "selection": selection.iter().take(MAX_LISTED_SELECTION).collect::<Vec<_>>(),
         "tags": model.tags.values().take(MAX_LISTED_TAGS).map(|t| json!({"id": t.id, "name": t.name, "visible": t.visible})).collect::<Vec<_>>(),
         "stock_catalog": stock.iter().take(40).collect::<Vec<_>>(),
         "joints": joints,
         "loose_geometry": {
-            "edges": model.root_entities().iter().filter(|id| model.edges.contains_key(id)).count(),
-            "faces": model.root_entities().iter().filter(|id| model.faces.contains_key(id)).count(),
+            "edges": loose_edges.len(),
+            "faces": loose_faces.len(),
+            "edge_ids": loose_edges.iter().take(MAX_LISTED_LOOSE).collect::<Vec<_>>(),
+            "face_ids": loose_faces.iter().take(MAX_LISTED_LOOSE).collect::<Vec<_>>(),
         },
+        "dimensions": model.dimensions.keys().take(MAX_LISTED_ANNOTATIONS).filter_map(|id| annotation_json(model, *id)).collect::<Vec<_>>(),
+        "texts": model.texts.keys().take(MAX_LISTED_ANNOTATIONS).filter_map(|id| annotation_json(model, *id)).collect::<Vec<_>>(),
         "object_count": model.objects.len(),
     });
     let in_scope: BTreeSet<u64> = model.selectable_entities();
@@ -183,19 +251,60 @@ pub fn summary(
 }
 
 /// Face normals follow drawing winding, so a closed part can have inward ones.
-/// Report and extrude along the outward direction: away from the owning
-/// part's center. Returns the factor (1 or -1) that maps the stored normal to
-/// the outward one.
+/// Report and extrude along the outward direction. A ray from inside the face
+/// along its stored normal crosses the part's other faces an odd number of
+/// times when that normal points into the part. Returns the factor (1 or -1)
+/// that maps the stored normal to the outward one. Open shapes and loose faces
+/// keep their stored normal.
 pub fn outward_sign(model: &Model, face_id: u64) -> f64 {
     let outward = || -> Option<f64> {
         let face = model.faces.get(&face_id)?;
         let normal = faces::plane(model, &face.vertices)?.normal;
         let owner = model.parent(face_id)?;
-        let center = model.selection_center(&BTreeSet::from([owner]))?;
-        let toward_face = model.face_center(face)? - center;
-        Some(if toward_face.dot(normal) < -1e-9 { -1. } else { 1. })
+        // Start inside the face (its largest triangle), not at a concave face's centroid.
+        let start = model
+            .face_triangles(face)
+            .into_iter()
+            .max_by(|a, b| triangle_area(a).total_cmp(&triangle_area(b)))
+            .map(|[a, b, c]| (a + b + c) / 3.)?;
+        // A slight skew keeps the ray off edges and vertices of axis-aligned parts.
+        let direction = (normal + DVec3::new(0.000_137, 0.000_291, 0.000_173)).normalize();
+        let crossings: usize = model
+            .expand_entities(&BTreeSet::from([owner]))
+            .iter()
+            .filter(|id| **id != face_id)
+            .filter_map(|id| model.faces.get(id))
+            .map(|other| model.face_triangles(other).iter().filter(|t| ray_hits(start, direction, t)).count())
+            .sum();
+        Some(if crossings % 2 == 1 { -1. } else { 1. })
     };
     outward().unwrap_or(1.)
+}
+
+fn triangle_area([a, b, c]: &[DVec3; 3]) -> f64 {
+    (*b - *a).cross(*c - *a).length()
+}
+
+/// Möller–Trumbore: does the ray from `origin` along `direction` cross the triangle ahead of it?
+fn ray_hits(origin: DVec3, direction: DVec3, [a, b, c]: &[DVec3; 3]) -> bool {
+    const EPS: f64 = 1e-12;
+    let (e1, e2) = (*b - *a, *c - *a);
+    let p = direction.cross(e2);
+    let det = e1.dot(p);
+    if det.abs() < EPS {
+        return false;
+    }
+    let t0 = origin - *a;
+    let u = t0.dot(p) / det;
+    if !(0. ..=1.).contains(&u) {
+        return false;
+    }
+    let q = t0.cross(e1);
+    let v = direction.dot(q) / det;
+    if v < 0. || u + v > 1. {
+        return false;
+    }
+    e2.dot(q) / det > 1e-9
 }
 
 fn face_json(model: &Model, id: u64) -> Option<Value> {
@@ -210,9 +319,14 @@ fn face_json(model: &Model, id: u64) -> Option<Value> {
         "normal": unit(n),
         "area_mm2": (model.face_area(face) * 1.0e6).round(),
     });
-    if let Some(center) = model.face_center(face) {
+    // The core has no centroid for some concave faces; any interior point will do.
+    let center = model.face_center(face).or_else(|| {
+        model.face_triangles(face).into_iter().max_by(|a, b| triangle_area(a).total_cmp(&triangle_area(b))).map(|[a, b, c]| (a + b + c) / 3.)
+    });
+    if let Some(center) = center {
         entry["center_mm"] = point_mm(center);
     }
+    entry["facing"] = Value::Null;
     if let Some(facing) = facing {
         entry["facing"] = json!(facing);
     }
@@ -245,8 +359,11 @@ pub fn describe(model: &Model, id: u64) -> Option<Value> {
         }
         return Some(face);
     }
-    if let Some(joint) = joint_json(model, id) {
+    if let Some(joint) = joint_detail(model, id) {
         return Some(joint);
+    }
+    if let Some(annotation) = annotation_json(model, id) {
+        return Some(annotation);
     }
     if model.contains_entity(&id) {
         let mut entry = json!({"id": id, "kind": kind_of(model, id)});
@@ -256,6 +373,22 @@ pub fn describe(model: &Model, id: u64) -> Option<Value> {
         return Some(entry);
     }
     None
+}
+
+/// A dimension (its points and measured length) or a text note (its anchor and text).
+pub fn annotation_json(model: &Model, id: u64) -> Option<Value> {
+    if let Some(dimension) = model.dimensions.get(&id) {
+        let (a, b) = dimension.points(model);
+        return Some(json!({
+            "id": id, "kind": "dimension", "start_mm": point_mm(a), "end_mm": point_mm(b),
+            "offset_mm": point_mm(dimension.offset), "length_mm": mm(a.distance(b)),
+        }));
+    }
+    let text = model.texts.get(&id)?;
+    Some(json!({
+        "id": id, "kind": "text", "point_mm": point_mm(text.anchor.position(model)),
+        "offset_mm": point_mm(text.offset), "text": text.text,
+    }))
 }
 
 /// Details for entities the prompt names, keyed by id, within `budget`

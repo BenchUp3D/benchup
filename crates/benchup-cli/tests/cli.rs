@@ -288,3 +288,58 @@ fn an_open_group_lasts_for_one_command() {
     assert_eq!(doc.model.edit_context, None);
 }
 
+
+#[test]
+fn batch_calls_can_use_earlier_results() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = new_project(dir.path());
+    let batch = [
+        json!({"tool": "create_board", "arguments": board("Side", [0., 0., 0.], [18., 300., 900.])}),
+        json!({"tool": "create_board", "arguments": board("Shelf", [9., 0., 400.], [500., 300., 18.])}),
+        json!({"tool": "add_joint", "arguments": {"a": "$2.created[0]", "b": "$1.created[0]", "kind": "tongue_groove"}}),
+        json!({"tool": "group", "arguments": {"ids": ["$1.created", "$2.created"], "name": "Pair", "component": false}}),
+    ];
+    let input: String = batch.iter().map(|c| format!("{c}\n")).collect();
+    let output = benchup(&["call", &path, "--batch", "-"], Some(&input));
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
+    let doc = files::decode(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(doc.model.connections.len(), 1);
+    assert_eq!(doc.history.labels().last().unwrap(), "Agent: 4 changes", "one undo step");
+
+    // A reference to a call that has not run fails the batch and changes nothing.
+    let bad = format!("{}\n", json!({"tool": "move", "arguments": {"ids": ["$3.created[0]"], "delta_mm": [1, 0, 0]}}));
+    let before = std::fs::read(&path).unwrap();
+    let output = benchup(&["call", &path, "--batch", "-"], Some(&format!("{}\n{bad}", batch[0])));
+    assert_eq!(output.status.code(), Some(1));
+    assert!(json_out(&output)["result"]["error"].as_str().unwrap().contains("only 1 earlier"));
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+#[test]
+fn dry_run_and_brief_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = new_project(dir.path());
+    let before = std::fs::read(&path).unwrap();
+    let args = board("Side", [0., 0., 0.], [18., 300., 900.]).to_string();
+    let output = benchup(&["call", &path, "create_board", &args, "--dry-run"], None);
+    assert!(output.status.success());
+    let result = json_out(&output);
+    assert_eq!(result["dry_run"], true);
+    assert!(result["objects"].is_array(), "a dry run reports the full result");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "and leaves the file alone");
+
+    let result = json_out(&benchup(&["call", &path, "create_board", &args, "--brief"], None));
+    assert!(result["objects"].is_null() && result["bounds_mm"].is_null());
+    assert_eq!(result["created"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn the_scene_names_the_project_and_the_guide_prints() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = new_project(dir.path());
+    let scene = json_out(&benchup(&["scene", &path], None));
+    assert_eq!(scene["project"]["name"], "Shelf");
+    let guide = benchup(&["guide"], None);
+    assert!(guide.status.success());
+    assert!(String::from_utf8_lossy(&guide.stdout).contains("## Joints"));
+}

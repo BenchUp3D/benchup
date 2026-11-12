@@ -15,15 +15,18 @@ use std::process::ExitCode;
 
 const USAGE: &str = "\
 benchup: read and edit BenchUp (.bup) projects. Lengths are millimetres, Z is up.
+New here? Run `benchup guide` first: conventions, workflow and woodworking recipes.
 
 usage:
   benchup new <file.bup> [--name NAME] [--force]   create an empty project
+  benchup guide                                    how to model furniture with these tools
   benchup tools [NAME] [--json]                    list tools, or show one tool's JSON schema
   benchup scene <file.bup>                         scene summary (objects, stock, joints)
   benchup get <file.bup> <id>                      one entity in detail, with its faces
   benchup call <file.bup> <tool> [ARGS|-]          run a tool; ARGS is a JSON object (- reads stdin)
   benchup call <file.bup> --batch <FILE|->         run JSON lines {\"tool\": .., \"arguments\": {..}}
-                                                   as one all-or-nothing undo step
+                                                   as one all-or-nothing undo step; \"$N.created[0]\"
+                                                   in arguments is a value from call N (from 1)
   benchup undo <file.bup>                          undo the last change
   benchup redo <file.bup>                          redo the last undone change
   benchup mcp <file.bup>                           serve the tools over MCP (stdio)
@@ -31,6 +34,8 @@ usage:
                                                    (or in EXECUTABLE, default $BENCHUP_APP)
 
 options:
+  --dry-run        (call) report the results without changing the file
+  --brief          (call) leave out object summaries and bounds from results
   --allow-shared   edit the local copy of a shared project
 
 Every change is one undo step in BenchUp and the file is saved atomically.
@@ -135,8 +140,12 @@ fn parse_batch(text: &str) -> Result<Vec<(String, Value)>, String> {
 }
 
 fn apply(project: &mut Project, calls: &[(String, Value)]) -> Result<Output, String> {
+    run_calls(project, calls, true)
+}
+
+fn run_calls(project: &mut Project, calls: &[(String, Value)], save: bool) -> Result<Output, String> {
     let batch = calls.len() > 1;
-    Ok(match project.apply(calls)? {
+    Ok(match project.run(calls, save)? {
         Applied::Ok(mut results) if !batch => ok(results.pop().unwrap_or(Value::Null)),
         Applied::Ok(results) => ok(json!({"ok": true, "results": results})),
         Applied::Failed { result, .. } if !batch => Output { value: result, ok: false },
@@ -151,6 +160,21 @@ fn apply(project: &mut Project, calls: &[(String, Value)]) -> Result<Output, Str
             ok: false,
         },
     })
+}
+
+/// Drops the bulky parts of tool results, keeping ids, errors and answers.
+fn brief(value: &mut Value) {
+    if let Some(map) = value.as_object_mut() {
+        map.remove("objects");
+        map.remove("bounds_mm");
+        for key in ["results", "result"] {
+            match map.get_mut(key) {
+                Some(Value::Array(items)) => items.iter_mut().for_each(brief),
+                Some(item @ Value::Object(_)) => brief(item),
+                _ => {}
+            }
+        }
+    }
 }
 
 fn tools(args: Args) -> Result<Output, String> {
@@ -197,8 +221,12 @@ fn run(mut argv: Vec<String>) -> Result<Output, String> {
             let id: u64 = args.expect(2)?[1].parse().map_err(|_| "the id must be a number".to_owned())?;
             apply(&mut open(&args)?, &[("get_object".into(), json!({"id": id}))])
         }
+        "guide" => {
+            println!("{}", benchup_tools::GUIDE);
+            std::process::exit(0);
+        }
         "call" => {
-            let args = parse_args(argv, &["--allow-shared"], &["--batch"])?;
+            let args = parse_args(argv, &["--allow-shared", "--dry-run", "--brief"], &["--batch"])?;
             let calls = match (args.value("--batch"), args.positional.as_slice()) {
                 (Some(source), [_]) => parse_batch(&read_input(source)?)?,
                 (None, [_, tool]) => vec![(tool.clone(), json!({}))],
@@ -208,7 +236,14 @@ fn run(mut argv: Vec<String>) -> Result<Output, String> {
                 }
                 _ => return Err(USAGE.into()),
             };
-            apply(&mut open(&args)?, &calls)
+            let mut output = run_calls(&mut open(&args)?, &calls, !args.flag("--dry-run"))?;
+            if args.flag("--dry-run") {
+                output.value["dry_run"] = json!(true);
+            }
+            if args.flag("--brief") {
+                brief(&mut output.value);
+            }
+            Ok(output)
         }
         "undo" | "redo" => {
             let args = parse_args(argv, &["--allow-shared"], &[])?;

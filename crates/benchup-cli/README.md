@@ -11,6 +11,7 @@ The tools come from [`benchup-tools`](../benchup-tools), the same operation laye
 ## Commands
 
 ```sh
+benchup guide                               # conventions, workflow and woodworking recipes
 benchup new shelf.bup --name "Shelf"        # create an empty project
 benchup tools                               # list the tools
 benchup tools create_board                  # one tool's JSON schema
@@ -21,6 +22,9 @@ benchup call shelf.bup create_board '{"name":"Side","origin_mm":[0,0,0],"size_mm
 echo '{"ids":[79],"delta_mm":[0,0,10]}' | benchup call shelf.bup move -
 
 benchup call shelf.bup --batch ops.jsonl    # several calls as ONE undo step, all-or-nothing
+benchup call shelf.bup --batch ops.jsonl --dry-run --brief   # try it without saving, compact output
+benchup call shelf.bup check_model          # overlaps without joints, joints that cannot be cut, ...
+benchup call shelf.bup get_cut_list         # boards by material and size
 benchup undo shelf.bup
 benchup redo shelf.bup
 
@@ -38,6 +42,14 @@ A batch file has one call per line. Blank lines and lines starting with `#` are 
 {"tool": "create_board", "arguments": {"name": "Shelf", "origin_mm": [18, 0, 400], "size_mm": [764, 300, 18]}}
 ```
 
+In a batch, `"$N.field"` is a value from the result of call N (counting from 1): `"$1.created[0]"`, `"$3.joint_id"`, `"$2.face_id"`. A reference to a list inside a list is spliced in, so `"ids": ["$1.created", "$2.created"]` joins both:
+
+```jsonl
+{"tool": "create_board", "arguments": {"name": "Side",  "origin_mm": [0, 0, 0],   "size_mm": [18, 300, 900]}}
+{"tool": "create_board", "arguments": {"name": "Shelf", "origin_mm": [9, 0, 400], "size_mm": [500, 300, 18]}}
+{"tool": "add_joint", "arguments": {"a": "$2.created[0]", "b": "$1.created[0]", "kind": "tongue_groove"}}
+```
+
 ## Behaviour
 
 - **Output:** JSON on stdout. Exit status is `0` on success, `1` when a tool reported an error (`{"ok": false, "error", "hint"}`, file unchanged), and `2` for a usage or I/O error (message on stderr).
@@ -48,6 +60,14 @@ A batch file has one call per line. Blank lines and lines starting with `#` are 
 - **Not live:** the CLI edits the file, not a running BenchUp window. Run `benchup open` again after a change to reload it; if the project has unsaved changes in the app, BenchUp asks first. Saving in BenchUp overwrites the file without checking for outside changes, so save or discard your app edits before editing with the CLI. Live editing through a local bridge is planned (see #13).
 
 ## Using it from an agent
+
+Agents should read `benchup guide` first (over MCP, the `get_guide` tool). It explains the conventions (the front faces -Y), which board is `a` in a joint, the batch workflow, woodworking recipes and current limitations.
+
+To make Claude Code reach for the CLI on its own, install the skill:
+
+```sh
+cp -r crates/benchup-cli/skill/benchup ~/.claude/skills/
+```
 
 With Claude Code, either let it call the CLI directly ("use `benchup` to add a shelf to shelf.bup"), or register the MCP server:
 

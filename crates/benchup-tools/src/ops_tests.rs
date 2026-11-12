@@ -666,3 +666,130 @@ fn find_objects_lists_everything_without_a_query() {
     assert_eq!(ok(&mut model, &mut env, "find_objects", json!({"query": "shel"})).result["total"], 1);
     assert_eq!(ok(&mut model, &mut env, "find_objects", json!({"query": "group"})).result["total"], 2);
 }
+
+fn axes_of(outcome: &ToolOutcome) -> (u64, u64) {
+    let o = &outcome.result["orientation"];
+    (o["depth_axis"].as_u64().unwrap(), o["width_axis"].as_u64().unwrap())
+}
+
+#[test]
+fn joints_pick_the_woodworking_orientation_and_report_status() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let side = board(&mut model, &mut env, "Side", [0., 0., 0.], [18., 300., 900.]);
+    let shelf = board(&mut model, &mut env, "Shelf", [9., 0., 400.], [500., 300., 18.]);
+    // The tongue runs across the shelf's thickness, along its whole depth.
+    let joint = ok(&mut model, &mut env, "add_joint", json!({"a": shelf, "b": side, "kind": "tongue_groove"}));
+    assert_eq!(axes_of(&joint), (0, 2));
+    let detail = ok(&mut model, &mut env, "get_object", json!({"id": joint.joints[0]})).result;
+    assert_eq!(detail["status"], "ok");
+    assert_eq!(detail["params"]["width_axis_name"], "z");
+    assert!(detail["roles"]["a"].as_str().unwrap().contains("tenon"));
+    assert!(!detail["supported_orientations"].as_array().unwrap().is_empty());
+    // A drawer side enters the front along y; its tails spread over its height.
+    let front = board(&mut model, &mut env, "Front", [1000., 0., 0.], [460., 20., 216.]);
+    let drawer_side = board(&mut model, &mut env, "Drawer side", [1002., 6., 8.], [12., 420., 200.]);
+    let dovetail = ok(&mut model, &mut env, "add_joint", json!({"a": drawer_side, "b": front, "kind": "dovetail", "params": {"dovetails": 4}}));
+    assert_eq!(axes_of(&dovetail), (1, 2));
+    // Clear errors instead of silent clamping or a later failure.
+    let leg = board(&mut model, &mut env, "Leg", [2000., 0., 0.], [70., 70., 720.]);
+    let apron = board(&mut model, &mut env, "Apron", [2040., 24., 620.], [600., 22., 100.]);
+    assert!(err(&mut model, &mut env, "add_joint", json!({"a": apron, "b": leg, "kind": "mortise_tenon", "params": {"width_ratio": 0.95}})).contains("0.1 and 0.9"));
+    assert!(err(&mut model, &mut env, "add_joint", json!({"a": apron, "b": leg, "kind": "finger", "params": {"fingers": 40}})).contains("between 2 and 16"));
+    assert!(err(&mut model, &mut env, "add_joint", json!({"a": apron, "b": leg, "kind": "mortise_tenon", "params": {"depth_axis": 1, "width_axis": 1}})).contains("must differ"));
+    let apart = board(&mut model, &mut env, "Apart", [5000., 0., 0.], [100., 100., 100.]);
+    assert!(err(&mut model, &mut env, "add_joint", json!({"a": apart, "b": leg, "kind": "half_lap"})).contains("do not overlap"));
+}
+
+#[test]
+fn stock_materials_can_be_created_and_assigned() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let listed = ok(&mut model, &mut env, "list_stock_materials", json!({})).result;
+    assert!(listed["note"].as_str().unwrap().contains("create_stock_material"));
+    let created = ok(&mut model, &mut env, "create_stock_material", json!({"name": "Oak 19", "thickness_mm": 19, "width_mm": 1220, "length_mm": 2440}));
+    assert!(created.mutated, "a new material is saved with the project");
+    let id = created.result["material_id"].as_str().unwrap().to_owned();
+    assert_eq!(model.stock_materials.values().next().unwrap().dimensions, [190, 12200, 24400]);
+    let again = ok(&mut model, &mut env, "create_stock_material", json!({"name": "Oak 19", "thickness_mm": 19, "width_mm": 1220, "length_mm": 2440}));
+    assert_eq!(again.result["material_id"], id.as_str(), "the same material is reused");
+    let shelf = board(&mut model, &mut env, "Shelf", [0., 0., 0.], [500., 300., 19.]);
+    ok(&mut model, &mut env, "set_material", json!({"ids": [shelf], "material_id": id}));
+    assert!(model.objects[&shelf].stock_material_id.is_some());
+    let cut = ok(&mut model, &mut env, "get_cut_list", json!({})).result;
+    assert_eq!(cut["pieces"][0]["material"], "Oak 19");
+    assert_eq!(cut["pieces"][0]["length_mm"], 500.0);
+    assert_eq!(cut["materials"][0]["minimum_stock_pieces"], 1);
+}
+
+#[test]
+fn shaped_boards_from_an_outline_report_outward_faces() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    // An L-shaped part: concave, so "away from the centre" is not outward everywhere.
+    let drawn = ok(&mut model, &mut env, "draw_polyline", json!({
+        "points_mm": [[0, 0, 0], [400, 0, 0], [400, 100, 0], [100, 100, 0], [100, 400, 0], [0, 400, 0]], "close": true}));
+    let face = drawn.result["face_id"].as_u64().unwrap();
+    let pushed = ok(&mut model, &mut env, "push_pull", json!({"face_id": face, "distance_mm": 18}));
+    assert!(!pushed.created.is_empty(), "push_pull lists what it created");
+    let mut ids: Vec<u64> = drawn.created.clone();
+    ids.extend(pushed.created.iter().copied().filter(|id| model.contains_entity(id)));
+    let part = ok(&mut model, &mut env, "group", json!({"ids": ids, "name": "L", "component": false})).created[0];
+    let scene = ok(&mut model, &mut env, "get_scene", json!({})).result;
+    assert_eq!(scene["loose_geometry"]["edges"], 0, "faces bring their edges into the group");
+    let detail = ok(&mut model, &mut env, "get_object", json!({"id": part})).result;
+    // The inner corner faces point into the notch, not away from the part's centre.
+    let facing = |x: f64, y: f64| -> String {
+        detail["faces"].as_array().unwrap().iter()
+            .find(|f| (f["center_mm"][0].as_f64().unwrap() - x).abs() < 1. && (f["center_mm"][1].as_f64().unwrap() - y).abs() < 1.)
+            .map(|f| f["facing"].as_str().unwrap().to_owned()).unwrap()
+    };
+    assert_eq!(facing(250., 100.), "+y");
+    assert_eq!(facing(100., 250.), "+x");
+    assert_eq!(facing(200., 0.), "-y");
+    assert!(detail["faces"].as_array().unwrap().iter().all(|f| f["center_mm"].is_array()), "concave faces get a center too");
+    let check = ok(&mut model, &mut env, "check_model", json!({})).result;
+    assert!(check["issues"].as_array().unwrap().iter().all(|i| i["kind"] != "open_solid"), "{check}");
+}
+
+#[test]
+fn resize_anchor_and_move_to() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let divider = board(&mut model, &mut env, "Divider", [491., 0., 0.], [18., 300., 1800.]);
+    ok(&mut model, &mut env, "resize_board", json!({"id": divider, "size_mm": [19, 300, 1800], "anchor": "center"}));
+    near(bounds(&model, divider).0, [0.4905, 0., 0.]);
+    ok(&mut model, &mut env, "resize_board", json!({"id": divider, "size_mm": [19, 294, 1800], "anchor": ["min", "max", "min"]}));
+    near(bounds(&model, divider).0, [0.4905, 0.006, 0.]);
+    ok(&mut model, &mut env, "move_to", json!({"id": divider, "origin_mm": [0, 0, 100]}));
+    near(bounds(&model, divider).0, [0., 0., 0.1]);
+}
+
+#[test]
+fn check_model_finds_unjoined_overlaps() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let side = board(&mut model, &mut env, "Side", [0., 0., 0.], [18., 300., 900.]);
+    let shelf = board(&mut model, &mut env, "Shelf", [9., 0., 400.], [500., 300., 18.]);
+    let check = ok(&mut model, &mut env, "check_model", json!({})).result;
+    assert_eq!(check["warnings"], 1);
+    assert_eq!(check["issues"][0]["kind"], "overlap_without_joint");
+    ok(&mut model, &mut env, "add_joint", json!({"a": shelf, "b": side, "kind": "tongue_groove"}));
+    let check = ok(&mut model, &mut env, "check_model", json!({})).result;
+    assert_eq!(check["warnings"], 0, "{check}");
+    assert_eq!(check["errors"], 0, "{check}");
+}
+
+#[test]
+fn the_scene_lists_annotations_axes_and_component_definitions() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "Shelf", [0., 0., 0.], [500., 300., 18.]);
+    let component = ok(&mut model, &mut env, "group", json!({"ids": [a], "name": "Shelf", "component": true})).created[0];
+    let copy = ok(&mut model, &mut env, "create_copy", json!({"id": component, "offset_mm": [0, 0, 300]})).created[0];
+    ok(&mut model, &mut env, "add_dimension", json!({"start_mm": [0, 0, 0], "end_mm": [500, 0, 0], "offset_mm": [0, -100, 0]}));
+    ok(&mut model, &mut env, "add_text", json!({"point_mm": [0, 0, 18], "offset_mm": [0, 0, 0], "text": "Bookcase"}));
+    let scene = ok(&mut model, &mut env, "get_scene", json!({})).result;
+    assert!(scene["axes"]["y"].as_str().unwrap().contains("-y"));
+    assert_eq!(scene["dimensions"][0]["length_mm"], 500.0);
+    assert_eq!(scene["texts"][0]["text"], "Bookcase");
+    let definition = |id: u64| scene["objects"].as_array().unwrap().iter().find(|o| o["id"] == id).unwrap()["definition"].clone();
+    assert!(definition(component).is_string());
+    assert_eq!(definition(component), definition(copy));
+    let guide = ok(&mut model, &mut env, "get_guide", json!({})).result;
+    assert!(guide["guide"].as_str().unwrap().contains("front of a piece faces -Y"));
+}

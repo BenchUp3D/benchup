@@ -5,7 +5,8 @@ use std::io::{BufRead, Write};
 const SUPPORTED: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const INSTRUCTIONS: &str = "Edits a BenchUp 3D woodworking project. Lengths are millimetres, Z is up. \
 Call get_scene first to see the model. Each mutating call is one undo step in BenchUp. \
-The session starts at the top level; a group opened with enter_object stays open until exit_to_root.";
+The session starts at the top level; a group opened with enter_object stays open until exit_to_root. \
+Call get_guide once for conventions (front is -y), joint roles and woodworking recipes.";
 
 /// Where tool calls go. Returns the tool result and whether it succeeded.
 pub trait Backend {
