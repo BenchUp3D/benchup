@@ -787,9 +787,20 @@ impl BenchUpApp {
                     .show(&ctx, |ui| {
                         egui::Frame::NONE.show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                ui.label("Origin");
+                                let colors = Palette::for_ui(ui);
+                                let widgets = &mut ui.style_mut().visuals.widgets;
+                                for (visuals, opacity) in [
+                                    (&mut widgets.inactive, 0.75),
+                                    (&mut widgets.hovered, 0.80),
+                                    (&mut widgets.active, 0.80),
+                                ] {
+                                    let fill = colors.paper.gamma_multiply(opacity);
+                                    visuals.bg_fill = fill;
+                                    visuals.weak_bg_fill = fill;
+                                }
+                                let icon = crate::icons::origin_atom(colors.ink);
                                 egui::ComboBox::from_id_salt("orbit-origin")
-                                    .selected_text(self.orbit_origin.label())
+                                    .selected_text((icon, self.orbit_origin.label()))
                                     .show_ui(ui, |ui| {
                                         for origin in sidebar::OrbitOrigin::ALL {
                                             ui.selectable_value(&mut self.orbit_origin, origin, origin.label());
