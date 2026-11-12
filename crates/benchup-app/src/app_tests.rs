@@ -863,6 +863,33 @@ fn drawing_menu_switches_tools_and_remembers_the_choice() {
 }
 
 #[test]
+fn tool_rail_flyouts_close_after_leaving_parent_and_menu() {
+    let mut h = Harness::new();
+    for (label, option) in [
+        ("Line", Tool::Rectangle),
+        ("Dimensions", Tool::TapeMeasure),
+        ("Union", Tool::Intersect),
+    ] {
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        let rail = text_position(&output, label);
+        h.click(rail);
+        let menu = h.frame(vec![], egui::Modifiers::NONE);
+        let item = menu_text_position(&menu, option.label());
+        h.frame(vec![egui::Event::PointerMoved(item)], egui::Modifiers::NONE);
+        assert!(egui::Popup::is_any_open(&h.ctx));
+        h.frame(vec![egui::Event::PointerMoved(rail)], egui::Modifiers::NONE);
+        assert!(egui::Popup::is_any_open(&h.ctx));
+        h.frame(vec![egui::Event::PointerMoved(egui::pos2(500., 400.))], egui::Modifiers::NONE);
+        assert!(!egui::Popup::is_any_open(&h.ctx));
+        h.click(rail);
+        assert!(egui::Popup::is_any_open(&h.ctx));
+        h.frame(vec![egui::Event::PointerGone], egui::Modifiers::NONE);
+        assert!(!egui::Popup::is_any_open(&h.ctx));
+        assert_eq!(h.app.tool, Tool::Select);
+    }
+}
+
+#[test]
 fn toolbar_order_and_measurement_flyout_defaults_and_remembers_the_choice() {
     let mut h = Harness::new();
     let output = h.frame(vec![], egui::Modifiers::NONE);

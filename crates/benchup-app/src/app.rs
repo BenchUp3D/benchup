@@ -3471,7 +3471,7 @@ impl BenchUpApp {
                                 vec![tip + egui::vec2(-4., -4.), tip, tip + egui::vec2(-4., 4.)],
                                 Stroke::new(1.8, color),
                             ));
-                            egui::Popup::menu(&response)
+                            let popup = egui::Popup::menu(&response)
                                 .align(egui::RectAlign::RIGHT_START)
                                 .width(190.)
                                 .show(|ui| {
@@ -3494,6 +3494,18 @@ impl BenchUpApp {
                                         }
                                     }
                                 });
+                            if let Some(popup) = popup {
+                                let hovering = ui.input(|i| i.pointer.hover_pos()).is_some_and(|pos| {
+                                    response.rect.contains(pos) || popup.response.rect.contains(pos)
+                                });
+                                if !hovering {
+                                    egui::Popup::close_id(
+                                        ui.ctx(),
+                                        egui::Popup::default_response_id(&response),
+                                    );
+                                    ui.ctx().request_repaint();
+                                }
+                            }
                         }
                         if self.tool_tooltip(response, tool).clicked() && !nested {
                             self.set_tool(tool);
