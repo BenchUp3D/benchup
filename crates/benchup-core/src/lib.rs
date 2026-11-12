@@ -80,6 +80,7 @@ pub enum Tool {
     Circle,
     Polygon,
     Freehand,
+    Arc,
     PushPull,
     Flip,
     OuterShell,
@@ -135,23 +136,25 @@ impl Tool {
         Self::Text,
         Self::Image,
     ];
-    pub const DRAWING: [Self; 5] = [
+    pub const DRAWING: [Self; 6] = [
         Self::Line,
         Self::Rectangle,
         Self::Circle,
         Self::Polygon,
+        Self::Arc,
         Self::Freehand,
     ];
     pub fn is_drawing(self) -> bool {
         self == Self::Image || Self::DRAWING.contains(&self)
     }
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 30] = [
         Self::Select,
         Self::Line,
         Self::Rectangle,
         Self::Circle,
         Self::Polygon,
         Self::Freehand,
+        Self::Arc,
         Self::PushPull,
         Self::Flip,
         Self::OuterShell,
@@ -201,6 +204,7 @@ impl Tool {
             Self::Circle => tr!("tools.circle"),
             Self::Polygon => tr!("tools.polygon"),
             Self::Freehand => tr!("tools.freehand"),
+            Self::Arc => tr!("tools.arc"),
             Self::PushPull => tr!("tools.push_pull"),
             Self::Flip => tr!("tools.flip"),
             Self::OuterShell => tr!("tools.combine"),
@@ -249,7 +253,7 @@ impl Tool {
             Self::TapeMeasure => "T",
             Self::Protractor => "A",
             Self::Dimensions => "I",
-            Self::Text | Self::GrainDirection | Self::Walk | Self::WoodGlue | Self::Router => "",
+            Self::Arc | Self::Text | Self::GrainDirection | Self::Walk | Self::WoodGlue | Self::Router => "",
             Self::Erase => "E",
             Self::Orbit => "O",
         }
@@ -269,6 +273,7 @@ impl Tool {
             Self::Freehand => {
                 tr!("tools.drag_to_draw_release_to_finish_arrow_keys")
             }
+            Self::Arc => tr!("tools.arc_instructions"),
             Self::Erase => tr!("tools.click_or_drag_across_edges_or_faces_to"),
             Self::Flip => {
                 tr!("tools.select_geometry_choose_a_red_green_or_blue")

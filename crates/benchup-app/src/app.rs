@@ -41,6 +41,8 @@ fn dot(ui: &mut egui::Ui, color: Color32) {
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "app_updates.rs"]
 mod app_updates;
+#[path = "arc_tool.rs"]
+mod arc_tool;
 #[path = "context_menu.rs"]
 mod context_menu;
 #[path = "currency.rs"]
@@ -274,6 +276,7 @@ struct Drawing {
     u: DVec3,
     v: DVec3,
     points: Vec<DVec3>,
+    arc_end: Option<DVec3>,
 }
 
 impl Drawing {
@@ -1174,6 +1177,7 @@ impl BenchUpApp {
             u,
             v: normal.cross(u),
             points: vec![snap.point],
+            arc_end: None,
         };
         drawing.set_lock(self.shape_lock());
         self.drawing = Some(drawing);
@@ -1218,6 +1222,7 @@ impl BenchUpApp {
     }
 
     fn toggle_axis_lock(&mut self, axis: Axis, ctx: &egui::Context) {
+        let previous = (self.lock, self.second_lock);
         if self.lock == Some(axis) {
             self.lock = self.second_lock.take();
         } else if self.second_lock == Some(axis) {
@@ -1228,6 +1233,15 @@ impl BenchUpApp {
             self.second_lock = Some(axis);
         } else {
             self.say(ctx, tr!("app.unlock_an_axis_before_locking_another_maximum_two"));
+            return;
+        }
+        if let Some(normal) = self.shape_lock().map(Axis::vector)
+            && let Some(drawing) = &self.drawing
+            && let Some(end) = drawing.arc_end
+            && (end - drawing.origin).dot(normal).abs() > 1e-6
+        {
+            (self.lock, self.second_lock) = previous;
+            self.say(ctx, tr!("app.arc_lock_must_contain_endpoints"));
             return;
         }
         self.refresh_axis_lock(ctx);
@@ -1313,7 +1327,16 @@ impl BenchUpApp {
             && let Some(snap) = self.snap.filter(|snap| snap.kind != Inference::Plane)
             && let Some(drawing) = &mut self.drawing
         {
-            drawing.align_to(snap.point, self.doc.camera.eye());
+            if let Some(end) = drawing.arc_end {
+                let offset = snap.point - drawing.origin;
+                if offset.dot(drawing.normal).abs() > 1e-6
+                    && let Some(normal) = (end - drawing.origin).cross(offset).try_normalize()
+                {
+                    drawing.set_normal(normal);
+                }
+            } else {
+                drawing.align_to(snap.point, self.doc.camera.eye());
+            }
         }
     }
     fn drawing_points(&self) -> Vec<DVec3> {
@@ -1325,6 +1348,13 @@ impl BenchUpApp {
         points
     }
     fn raw_drawing_points(&self) -> Vec<DVec3> {
+        if self.tool == Tool::Arc {
+            return self.arc_points(false).unwrap_or_else(|_| {
+                self.drawing.as_ref()
+                    .and_then(|drawing| Some(vec![drawing.origin, drawing.arc_end?]))
+                    .unwrap_or_default()
+            });
+        }
         let Some(drawing) = &self.drawing else {
             return vec![];
         };
@@ -1389,6 +1419,12 @@ impl BenchUpApp {
                 self.update_pointer(pos);
             }
         }
+        if self.tool == Tool::Arc
+            && self.drawing.as_ref().is_some_and(|drawing| drawing.arc_end.is_none())
+        {
+            self.set_arc_end(ctx);
+            return;
+        }
         let points = match self.precise_drawing_points() {
             Ok(points) => points,
             Err(message) => {
@@ -1434,6 +1470,7 @@ impl BenchUpApp {
             Tool::Circle => tr!("app.draw_circle"),
             Tool::Polygon => tr!("app.draw_polygon"),
             Tool::Freehand => tr!("app.draw_freehand"),
+            Tool::Arc => tr!("app.draw_arc"),
             _ => tr!("app.draw_line"),
         };
         self.finish_edit(action, before, ctx);
@@ -3232,6 +3269,12 @@ impl BenchUpApp {
                         tr!("app.click_to_set_the_radius_type_a_radius")
                     } else if self.drawing.is_some() && self.tool == Tool::Freehand {
                         tr!("app.release_to_finish_type_total_length_enter_esc")
+                    } else if let Some(drawing) = self.drawing.as_ref().filter(|_| self.tool == Tool::Arc) {
+                        if drawing.arc_end.is_some() {
+                            tr!("app.arc_choose_through_point")
+                        } else {
+                            tr!("app.arc_choose_end")
+                        }
                     } else {
                         self.tool.instructions()
                     };
@@ -3321,6 +3364,8 @@ impl BenchUpApp {
                                 Tool::Move => tr!("app.distance"),
                                 Tool::Rectangle | Tool::Image => tr!("app.width_height"),
                                 Tool::Circle | Tool::Polygon => tr!("app.radius"),
+                                Tool::Arc if self.drawing.as_ref().is_some_and(|drawing| drawing.arc_end.is_some()) => tr!("app.arc_height"),
+                                Tool::Arc => tr!("app.arc_chord"),
                                 _ => tr!("app.length"),
                             })
                             .size(12.)
@@ -4872,7 +4917,7 @@ impl BenchUpApp {
                                     if started { self.begin_drawing(pos); }
                                     GestureKind::Image { started }
                                 }
-                                Tool::Rectangle | Tool::Circle | Tool::Polygon => {
+                                Tool::Rectangle | Tool::Circle | Tool::Polygon | Tool::Arc => {
                                     GestureKind::Shape
                                 }
                                 Tool::Freehand => {
@@ -5226,7 +5271,7 @@ impl BenchUpApp {
             Tool::Orbit
         } else {
             match self.tool {
-                Tool::Rectangle | Tool::Circle | Tool::Polygon => Tool::Line,
+                Tool::Rectangle | Tool::Circle | Tool::Polygon | Tool::Arc => Tool::Line,
                 tool => tool,
             }
         };
@@ -6237,13 +6282,13 @@ impl BenchUpApp {
         if self.tool.is_drawing() || matches!(self.tool, Tool::Text | Tool::GrainDirection)
             || modeling_anchor || modeling_start.is_some()
         {
-            if let Some(start) = self.trace_start().or(self.drawing.as_ref().map(|d| d.origin)).or_else(|| {
+            let start = self.trace_start().or(self.drawing.as_ref().map(|d| d.origin)).or_else(|| {
                 (self.tool == Tool::Text).then(|| self.measurement.as_ref()?.points.first().copied()).flatten()
-            }).or(modeling_start).filter(|_| !modeling_anchor) {
-                if let Some(point) = screen(start) {
-                    p.circle_filled(point, 3.5, colors.paper);
-                    p.circle_stroke(point, 3.5, Stroke::new(1.5, colors.ink));
-                }
+            }).or(modeling_start).filter(|_| !modeling_anchor);
+            let arc_end = self.drawing.as_ref().and_then(|drawing| drawing.arc_end);
+            for point in start.into_iter().chain(arc_end).filter_map(screen) {
+                p.circle_filled(point, 3.5, colors.paper);
+                p.circle_stroke(point, 3.5, Stroke::new(1.5, colors.ink));
             }
             let live_snap = if modeling_start.is_some() {
                 self.modeling_preview_snap()

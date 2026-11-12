@@ -295,6 +295,17 @@ fn paint_tool(p: &egui::Painter, rect: Rect, tool: Tool, colors: ToolPalette) {
             p.circle_filled(c, r, face);
             p.circle_stroke(c, r, stroke);
         }
+        Tool::Arc => {
+            p.add(egui::Shape::line(
+                (0..=16)
+                    .map(|i| {
+                        let angle = std::f32::consts::PI * i as f32 / 16.;
+                        xy(angle.cos(), 0.55 - angle.sin())
+                    })
+                    .collect(),
+                stroke,
+            ));
+        }
         Tool::Polygon => {
             p.add(egui::Shape::convex_polygon(
                 (0..6)

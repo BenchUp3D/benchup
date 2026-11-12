@@ -501,6 +501,9 @@ struct Harness {
     size: Vec2,
     maximized: bool,
 }
+
+#[path = "arc_tool_tests.rs"]
+mod arc_tool_tests;
 impl Harness {
     fn new() -> Self {
         let ctx = egui::Context::default();
@@ -1275,6 +1278,10 @@ fn drawing_modifier_orbits_without_mouse_buttons_and_preserves_pending_points() 
             let start = h.at(DVec3::ZERO);
             if tool != Tool::Freehand {
                 h.click(start);
+            }
+            if tool == Tool::Arc {
+                h.click(h.at(DVec3::X));
+                assert!(h.app.drawing.as_ref().unwrap().arc_end.is_some());
             }
             h.frame(
                 vec![egui::Event::PointerMoved(start)],

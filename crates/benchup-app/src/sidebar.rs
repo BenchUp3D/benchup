@@ -2671,6 +2671,22 @@ mod preference_tests {
     }
 
     #[test]
+    fn arc_tool_choice_saves_immediately_without_a_model_edit() {
+        let ctx = egui::Context::default();
+        let mut storage = SavedPreferences::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        app.set_tool(Tool::Arc);
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        assert!(storage.flushed);
+        assert!(!app.project.modified);
+        let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        assert_eq!(restored.tool, Tool::Arc);
+        assert_eq!(restored.drawing_tool, Tool::Arc);
+        assert!(restored.drawing.is_none());
+    }
+
+    #[test]
     fn tool_menu_choices_and_options_restore_without_transient_state() {
         let ctx = egui::Context::default();
         let mut storage = SavedPreferences::default();

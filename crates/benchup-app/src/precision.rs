@@ -307,6 +307,9 @@ impl BenchUpApp {
     }
 
     pub(super) fn precise_drawing_points(&self) -> Result<Vec<DVec3>, &'static str> {
+        if self.tool == Tool::Arc {
+            return self.arc_points(true);
+        }
         let points = self.raw_drawing_points();
         let Some(drawing) = &self.drawing else {
             return Ok(points);
