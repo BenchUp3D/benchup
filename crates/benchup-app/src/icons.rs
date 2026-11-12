@@ -461,6 +461,16 @@ fn paint_tool(p: &egui::Painter, rect: Rect, tool: Tool, colors: ToolPalette) {
             ));
             p.circle_filled(c, 2., red);
         }
+        Tool::WoodGlue => {
+            p.add(egui::Shape::line(
+                vec![xy(-0.85, 0.45), xy(-0.45, 0.05), xy(-0.05, 0.45), xy(0.35, 0.05), xy(0.8, 0.45)],
+                Stroke::new(2., gold),
+            ));
+            p.add(egui::Shape::convex_polygon(
+                vec![xy(-0.23, -0.7), xy(0., -1.), xy(0.23, -0.7), xy(0., -0.36)],
+                gold, Stroke::NONE,
+            ));
+        }
         Tool::Paint => {
             let bucket = |x: f32, y: f32| {
                 let diagonal = std::f32::consts::FRAC_1_SQRT_2;
@@ -731,6 +741,10 @@ pub fn line_icon(p: &egui::Painter, c: Pos2, kind: &str, color: Color32) {
 
 /// Compact, action-colored icons shared by the main menu and context menus.
 pub fn menu_icon(p: &egui::Painter, c: Pos2, kind: &str) {
+    if kind == "wood_glue" {
+        ui_tool(p, Rect::from_center_size(c, egui::Vec2::splat(26.)), Tool::WoodGlue);
+        return;
+    }
     let colors = ToolPalette::for_painter(p);
     let color = match kind {
         "new" => {

@@ -57,6 +57,8 @@ mod entity_gizmo;
 mod section_gizmo;
 #[path = "finish_settings.rs"]
 mod finish_settings;
+#[path = "surface_appearance.rs"]
+pub(crate) mod surface_appearance;
 #[path = "grid.rs"]
 mod grid;
 #[path = "grain_direction.rs"]
@@ -79,6 +81,8 @@ mod projects;
 mod drawing_groups;
 #[path = "joinery.rs"]
 mod joinery;
+#[path = "wood_glue.rs"]
+mod wood_glue;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "viewport_benchmark.rs"]
 pub(crate) mod viewport_benchmark;
@@ -200,6 +204,7 @@ enum GestureKind {
     },
     Modeling,
     GrainDirection,
+    WoodGlue,
     Solid,
     Measure,
     Paste,
@@ -2983,6 +2988,15 @@ impl BenchUpApp {
                                 self.context_action(&ctx, context_menu::ContextAction::WoodJoinery);
                                 ui.close();
                             }
+                            let glue_enabled = !self.project.blocked()
+                                && self.history_preview.is_none()
+                                && self.selected.len() >= 2;
+                            if ui.add_enabled(glue_enabled, Self::menu_item_button(ui, tr!("wood_glue.automatic"), Some("wood_glue")))
+                                .on_hover_text(tr!("wood_glue.automatic_hint"))
+                                .clicked() {
+                                self.glue_selection(&ctx);
+                                ui.close();
+                            }
                             ui.separator();
                             let editable = !self.selected.is_empty()
                                 && !self.doc.model.selection_protected(&self.selected);
@@ -4317,6 +4331,11 @@ impl BenchUpApp {
             self.update_grain_pointer(pos);
             return;
         }
+        if self.tool == Tool::WoodGlue && self.paste_preview.is_none() {
+            self.hover = self.wood_glue_face_at(pos);
+            self.snap = None;
+            return;
+        }
         self.hover = if self.tool == Tool::Erase {
             self.erase_target(pos)
         } else if self.tool == Tool::Paint {
@@ -4755,6 +4774,7 @@ impl BenchUpApp {
                                 | Tool::Dimensions
                                 | Tool::Text => GestureKind::Measure,
                                 Tool::GrainDirection => GestureKind::GrainDirection,
+                                Tool::WoodGlue => GestureKind::WoodGlue,
                                 Tool::Flip
                                 | Tool::OuterShell
                                 | Tool::Union
@@ -4952,6 +4972,11 @@ impl BenchUpApp {
                                     && gesture.start.distance(pos) < 5. =>
                             {
                                 self.measurement_click(pos, ctx);
+                            }
+                            GestureKind::WoodGlue
+                                if self.viewport.contains(pos) && gesture.start.distance(pos) < 5. =>
+                            {
+                                self.wood_glue_click(pos, ctx);
                             }
                             GestureKind::GrainDirection
                                 if self.viewport.contains(pos)
@@ -5584,6 +5609,7 @@ impl BenchUpApp {
                     color
                 };
                 face_draws.push(renderer::FaceDraw {
+                    surface: None,
                     face, cached, color,
                     shadow: self.shadow_cache.get(face.id).map(|shadow|
                         (shadow, display_scene::shadow_color(color, display.shadow_darkness))),

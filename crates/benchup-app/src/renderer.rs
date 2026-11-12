@@ -1,5 +1,6 @@
 use eframe::{egui, egui_wgpu, wgpu};
 use egui::{Color32, Rect};
+use crate::app::surface_appearance::FaceMaterial;
 use benchup_core::{Camera, CameraView, DVec2, DVec3, Face, Model};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -59,6 +60,15 @@ struct Vertex {
     lateral: f32,
     shadow_color: [u8; 4],
     dash_phase: f32,
+}
+
+/// Optional stream for the projected face path. Untextured scenes and all
+/// stroke pipelines keep their original compact vertex format.
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+struct MaterialVertex {
+    grain: [f32; 4],
+    finish: [u8; 4],
 }
 
 pub(crate) fn changed_ids<'a, T: PartialEq + 'a>(
@@ -332,6 +342,8 @@ pub struct Mesh {
     joint_guide_bounds: BTreeMap<u64, (DVec2, DVec2)>,
     visible_joint_surfaces: BTreeMap<u64, (Arc<JointSurface>, Arc<JointSurface>, (u64, u64))>,
     joint_surfaces: JointSurfaceCache,
+    face_material: Option<FaceMaterial>,
+    material_vertices: Vec<MaterialVertex>,
     record_annotation_occluders: bool,
     gpu_edge_occlusion: bool,
     shadow_vertices: Vec<Vertex>,
@@ -367,6 +379,7 @@ pub(crate) struct FaceDraw<'a> {
     pub face: &'a Face,
     pub cached: &'a CachedFace,
     pub color: Color32,
+    pub surface: Option<FaceMaterial>,
     pub shadow: Option<(&'a crate::shadows::FaceShadow, Color32)>,
 }
 pub(crate) struct JointSurfaceRequest {
@@ -389,6 +402,8 @@ impl Mesh {
                 size,
                 ..Default::default()
             },
+            face_material: None,
+            material_vertices: Vec::new(),
             record_annotation_occluders: true,
             gpu_edge_occlusion: false,
             shadow_vertices: Vec::new(),
@@ -938,6 +953,14 @@ impl Mesh {
     fn draw_face(&mut self, face: &FaceDraw<'_>) {
         self.set_entity(Some(face.face.id));
         self.face_edges(face.face, face.cached);
+        if self.display.face_style != benchup_core::FaceStyle::HiddenLine
+            && let Some(glue) = &face.cached.glue
+        {
+            self.draw_glued_face(face, glue);
+            self.face_material = None;
+            return;
+        }
+        self.face_material = face.surface;
         if let Some((shadow, shaded)) = face.shadow {
             if self.display.shadow_antialiasing {
                 self.shadow_receiver(&face.cached.triangles, face.color, shaded);
@@ -948,6 +971,43 @@ impl Mesh {
             for &triangle in &face.cached.triangles {
                 self.face_triangle(triangle, face.color, true, true);
             }
+        }
+        self.face_material = None;
+    }
+
+    fn draw_glued_face(&mut self, face: &FaceDraw<'_>, glue: &GlueMesh) {
+        if let Some((shadow, shaded)) = face.shadow {
+            if self.display.shadow_antialiasing {
+                self.face_material = face.surface;
+                self.shadow_receiver(&glue.bare, face.color, shaded);
+                self.face_material = Some(glue.material);
+                self.shadow_receiver(&glue.coated, face.color, shaded);
+            } else {
+                // Section and annotation views already use projected shadow
+                // receivers. Only split the shadow triangles of coated faces.
+                for &t in &face.cached.triangles {
+                    self.face_triangle(t, face.color, false, true);
+                }
+                for (triangles, color) in [(&shadow.lit, face.color), (&shadow.shaded, shaded)] {
+                    if glue.bare.is_empty() {
+                        self.face_material = Some(glue.material);
+                        for &t in triangles { self.face_triangle(t, color, true, false); }
+                        continue;
+                    }
+                    let (bare, coated) = benchup_core::wood_glue::split_mesh(
+                        face.cached.plane.unwrap(), triangles, glue.coated.iter().map(|t| t.as_slice()),
+                    );
+                    self.face_material = face.surface;
+                    for t in bare { self.face_triangle(t, color, true, false); }
+                    self.face_material = Some(glue.material);
+                    for t in coated { self.face_triangle(t, color, true, false); }
+                }
+            }
+        } else {
+            self.face_material = face.surface;
+            for &t in &glue.bare { self.face_triangle(t, face.color, true, true); }
+            self.face_material = Some(glue.material);
+            for &t in &glue.coated { self.face_triangle(t, face.color, true, true); }
         }
     }
 
@@ -981,6 +1041,10 @@ impl Mesh {
                     crate::app::viewport_benchmark::absorb_worker(timings);
                     let base = self.vertices.len() as u32;
                     let index_base = self.indices.len() as u32;
+                    if !mesh.material_vertices.is_empty() {
+                        self.material_vertices.resize(base as usize, MaterialVertex::default());
+                        self.material_vertices.append(&mut mesh.material_vertices);
+                    }
                     self.vertices.append(&mut mesh.vertices);
                     self.indices.extend(mesh.indices.iter().map(|i| base + i));
                     for range in &mesh.triangle_ranges {
@@ -2018,6 +2082,9 @@ impl Mesh {
                 .fog_color(color, triangle.iter().sum::<DVec3>() / 3.)
                 .to_array();
             let size = self.size;
+            let view = &self.view;
+            let material = self.face_material;
+            let material_vertices = &mut self.material_vertices;
             let vertices = &mut self.vertices;
             let indices = &mut self.indices;
             let occlusion = &mut self.occlusion;
@@ -2031,6 +2098,16 @@ impl Mesh {
                 let base = vertices.len() as u32;
                 indices.extend([base, base + 1, base + 2]);
                 for p in triangle {
+                    if let Some(material) = material {
+                        let (world, inv_w) = view.unproject_depth(p);
+                        let [x, y, z] = material.coordinates(world);
+                        let w = inv_w as f32;
+                        material_vertices.resize(vertices.len(), MaterialVertex::default());
+                        material_vertices.push(MaterialVertex {
+                            grain: [x * w, y * w, z * w, w],
+                            finish: material.params,
+                        });
+                    }
                     vertices.push(Vertex {
                         dash_phase: -1.,
                         position: [
@@ -2092,6 +2169,8 @@ impl Mesh {
         if let Some(previous) = &cache.retained {
             if bytemuck::cast_slice::<Vertex, u8>(&previous.vertices)
                 == bytemuck::cast_slice::<Vertex, u8>(&candidate.vertices)
+                && bytemuck::cast_slice::<MaterialVertex, u8>(&previous.material_vertices)
+                    == bytemuck::cast_slice::<MaterialVertex, u8>(&candidate.material_vertices)
                 && previous.indices == candidate.indices
                 && previous.triangle_ranges == candidate.triangle_ranges
                 && previous.antialiasing == candidate.antialiasing
@@ -2156,7 +2235,11 @@ impl Mesh {
         self.indices.extend(vertex_start..vertex_start + self.shadow_vertices.len() as u32);
         self.vertices.append(&mut self.shadow_vertices);
         let shadow_range = shadow_start..self.indices.len() as u32;
+        if !self.material_vertices.is_empty() {
+            self.material_vertices.resize(self.vertices.len(), MaterialVertex::default());
+        }
         SceneCallback {
+            material_vertices: self.material_vertices,
             shadow_range,
             vertices: self.vertices,
             indices: self.indices,
@@ -3193,6 +3276,8 @@ fn stroke_depth(depth: f64, offset: DVec2, surfaces: &[EdgeSurface]) -> f32 {
 
 struct Resources {
     face_pipeline: wgpu::RenderPipeline,
+    material_faces: wgpu::RenderPipeline,
+    material_shadow_faces: wgpu::RenderPipeline,
     edge_pipeline: wgpu::RenderPipeline,
     edge_depth_pipeline: wgpu::RenderPipeline,
     mask_base: wgpu::RenderPipeline,
@@ -3215,7 +3300,7 @@ pub(crate) fn install_resources(
 ) {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("BenchUp edges"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("edges.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(concat!(include_str!("surface_appearance.wgsl"), "\n", include_str!("edges.wgsl")).into()),
     });
     let face_pipeline = create_pipeline(device, &shader, format, PipelinePass::Faces);
     let edge_pipeline = create_pipeline(device, &shader, format, PipelinePass::Edges);
@@ -3235,8 +3320,12 @@ pub(crate) fn install_resources(
         4,
     );
     let shadow_faces = create_pipeline(device, &shader, format, PipelinePass::ShadowFaces);
+    let material_faces = create_pipeline(device, &shader, format, PipelinePass::MaterialFaces);
+    let material_shadow_faces = create_pipeline(device, &shader, format, PipelinePass::MaterialShadowFaces);
     renderer.callback_resources.insert(Resources {
         face_pipeline,
+        material_faces,
+        material_shadow_faces,
         edge_pipeline,
         edge_depth_pipeline,
         mask_base,
@@ -3250,6 +3339,8 @@ pub(crate) fn install_resources(
 #[derive(Clone, Copy, PartialEq)]
 enum PipelinePass {
     Faces,
+    MaterialFaces,
+    MaterialShadowFaces,
     EdgeDepth,
     Edges,
     MaskBase,
@@ -3273,9 +3364,26 @@ fn create_pipeline_with_samples(
     pass: PipelinePass,
     samples: u32,
 ) -> wgpu::RenderPipeline {
+    let material = matches!(pass, PipelinePass::MaterialFaces | PipelinePass::MaterialShadowFaces);
+    let attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Unorm8x4,2=>Float32,3=>Unorm8x4,4=>Float32];
+    let material_attributes = wgpu::vertex_attr_array![5=>Float32x4,6=>Unorm8x4];
+    let mut layouts = vec![Some(wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<Vertex>() as u64,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &attributes,
+    })];
+    if material {
+        layouts.push(Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<MaterialVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &material_attributes,
+        }));
+    }
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(match pass {
             PipelinePass::Faces => "BenchUp filled faces",
+            PipelinePass::MaterialFaces => "BenchUp procedural materials",
+            PipelinePass::MaterialShadowFaces => "BenchUp procedural materials with antialiased shadows",
             PipelinePass::EdgeDepth => "BenchUp opaque edge depth",
             PipelinePass::Edges => "BenchUp antialiased edges",
             PipelinePass::MaskBase => "BenchUp shadow receiver depth",
@@ -3285,16 +3393,13 @@ fn create_pipeline_with_samples(
         layout: None,
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some(if format.is_srgb() {
-                "vertex_main_srgb"
-            } else {
-                "vertex_main"
+            entry_point: Some(match (material, format.is_srgb()) {
+                (true, true) => "vertex_material_srgb",
+                (true, false) => "vertex_material",
+                (false, true) => "vertex_main_srgb",
+                (false, false) => "vertex_main",
             }),
-            buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: std::mem::size_of::<Vertex>() as u64,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![0=>Float32x3,1=>Unorm8x4,2=>Float32,3=>Unorm8x4,4=>Float32],
-            })],
+            buffers: &layouts,
             compilation_options: Default::default(),
         },
         fragment: Some(wgpu::FragmentState {
@@ -3304,6 +3409,8 @@ fn create_pipeline_with_samples(
                 PipelinePass::MaskBase => "fragment_mask_base",
                 PipelinePass::MaskShadow => "fragment_mask_shadow",
                 PipelinePass::ShadowFaces => "fragment_shadow_faces",
+                PipelinePass::MaterialFaces => "fragment_material_faces",
+                PipelinePass::MaterialShadowFaces => "fragment_material_shadow_faces",
                 _ => "fragment_main",
             }),
             targets: &[Some(wgpu::ColorTargetState {
@@ -3340,6 +3447,7 @@ struct AntialiasedScene {
 }
 
 struct SceneCallback {
+    material_vertices: Vec<MaterialVertex>,
     shadow_range: std::ops::Range<u32>,
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
@@ -3418,7 +3526,7 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
         // the last camera in every pane. Pool allocations between frames.
         self.gpu_buffers.get_or_init(|| {
             let cached = self.gpu_pool.lock().ok().and_then(|mut pool| pool.pop());
-            GpuBuffers::upload(device, queue, &self.vertices, &self.indices, cached)
+            GpuBuffers::upload(device, queue, &self.vertices, &self.material_vertices, &self.indices, cached)
         });
         if self.antialiasing && !self.shadow_range.is_empty() {
             // Render once per retained scene. Each pane owns its resolve texture,
@@ -3526,12 +3634,18 @@ impl egui_wgpu::CallbackTrait for SceneCallback {
             pass.set_bind_group(0, &scene.bind_group, &[]);
             self.draw(
                 pass,
-                [&r.shadow_faces, &r.edge_depth_pipeline, &r.edge_pipeline],
+                [
+                    if self.material_vertices.is_empty() { &r.shadow_faces } else { &r.material_shadow_faces },
+                    &r.edge_depth_pipeline, &r.edge_pipeline,
+                ],
             );
         } else {
             self.draw(
                 pass,
-                [&r.face_pipeline, &r.edge_depth_pipeline, &r.edge_pipeline],
+                [
+                    if self.material_vertices.is_empty() { &r.face_pipeline } else { &r.material_faces },
+                    &r.edge_depth_pipeline, &r.edge_pipeline,
+                ],
             );
         }
     }
@@ -3574,6 +3688,7 @@ pub struct FaceCache {
     source_revision: Option<u64>,
     faces: BTreeMap<u64, CachedFace>,
     source_vertices: Vec<(u64, DVec3)>,
+    glue_source: BTreeMap<u64, benchup_core::wood_glue::Coverage>,
     adjacent_faces: BTreeMap<(u64, u64), Vec<u64>>,
     vertex_faces: std::collections::HashMap<u64, Vec<u64>>,
     max_edge_faces: usize,
@@ -3594,6 +3709,14 @@ pub struct CachedFace {
     pub bounds: (DVec3, DVec3),
     plane: Option<benchup_core::faces::Plane>,
     rings: Vec<Vec<DVec2>>,
+    pub(crate) glue: Option<GlueMesh>,
+}
+
+#[derive(Clone)]
+pub(crate) struct GlueMesh {
+    pub(crate) material: FaceMaterial,
+    pub(crate) bare: Vec<[DVec3; 3]>,
+    pub(crate) coated: Vec<[DVec3; 3]>,
 }
 impl FaceCache {
     /// Picking also tracks loose edges, which need not change face geometry.
@@ -3636,7 +3759,12 @@ impl FaceCache {
                 dirty.extend(faces);
             }
         }
-        if dirty.is_empty() && vertices.is_empty() {
+        let mut glue_dirty = changed_ids(
+            self.glue_source.iter().map(|(&id, coverage)| (id, coverage)),
+            model.wood_glue.iter().map(|(&id, coverage)| (id, coverage)),
+        );
+        glue_dirty.extend(dirty.iter().filter(|id| model.wood_glue.contains_key(id)).copied());
+        if dirty.is_empty() && vertices.is_empty() && glue_dirty.is_empty() {
             return;
         }
         for id in &dirty {
@@ -3725,9 +3853,27 @@ impl FaceCache {
                     bounds,
                     plane,
                     rings,
+                    glue: None,
                 },
             );
         }
+        for id in glue_dirty {
+            if let Some(cached) = self.faces.get_mut(&id) {
+                cached.glue = cached.plane.filter(|_| model.wood_glue.contains_key(&id)).map(|mut plane| {
+                    let (bare, coated) = model.glue_mesh(id, &cached.triangles);
+                    // Keep a permanent anchor inside the coating, including
+                    // small contact patches and faces with holes.
+                    if let Some(triangle) = coated.iter().max_by(|[a, b, c], [d, e, f]| {
+                        (*b - *a).cross(*c - *a).length_squared()
+                            .total_cmp(&(*e - *d).cross(*f - *d).length_squared())
+                    }) {
+                        plane.origin = triangle.iter().sum::<DVec3>() / 3.;
+                    }
+                    GlueMesh { material: FaceMaterial::wood_glue(plane), bare, coated }
+                }).filter(|mesh| !mesh.coated.is_empty());
+            }
+        }
+        self.glue_source.clone_from(&model.wood_glue);
         self.max_edge_faces = self
             .adjacent_faces
             .values()
@@ -4053,6 +4199,7 @@ mod tests {
                 mesh.world_triangle(&camera, [world(0., 0., 0.8), world(512., 0., 0.8), world(0., 512., 0.8)], Color32::WHITE);
                 let faces: Vec<_> = model.faces.values().zip(&shadows).enumerate().map(|(i, (face, shadow))| FaceDraw {
                     face, cached: cache.get(face.id), color: Color32::from_rgb(100, 160, 200),
+                    surface: None,
                     shadow: (i % 3 != 0).then_some((shadow, Color32::DARK_GRAY)),
                 }).collect();
                 if parallel { mesh.draw_faces(&faces); }
@@ -4126,7 +4273,7 @@ mod tests {
             pollster::block_on(adapter.request_device(&Default::default())).unwrap();
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
-            source: wgpu::ShaderSource::Wgsl(include_str!("edges.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(concat!(include_str!("surface_appearance.wgsl"), "\n", include_str!("edges.wgsl")).into()),
         });
         let pipelines = [
             PipelinePass::Faces,
@@ -5353,6 +5500,7 @@ mod tests {
                     }),
                 );
                 SceneCallback {
+                    material_vertices: Vec::new(),
                     vertices,
                     indices: vec![0, 1, 2, 0, 2, 3, 4, 5, 6],
                     triangle_ranges: vec![0..if enabled { 6 } else { 9 }],
@@ -5821,6 +5969,7 @@ mod tests {
         let vertices = mesh.vertices.as_ptr();
         let indices = mesh.indices.as_ptr();
         let callback = Arc::new(SceneCallback {
+            material_vertices: Vec::new(),
             shadow_range: mesh.indices.len() as u32..mesh.indices.len() as u32,
             vertices: mesh.vertices,
             indices: mesh.indices,
@@ -5868,6 +6017,7 @@ mod tests {
         install_resources(&device, wgpu::TextureFormat::Rgba8Unorm, &mut renderer);
         let gpu_pool = GpuBufferPool::default();
         let callback = || SceneCallback {
+            material_vertices: Vec::new(),
             shadow_range: 1..1,
             vertices: vec![Vertex {
                 dash_phase: -1.,
@@ -5942,7 +6092,7 @@ mod tests {
             pollster::block_on(adapter.request_device(&Default::default())).unwrap();
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
-            source: wgpu::ShaderSource::Wgsl(include_str!("edges.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(concat!(include_str!("surface_appearance.wgsl"), "\n", include_str!("edges.wgsl")).into()),
         });
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let pipelines = [PipelinePass::EdgeDepth, PipelinePass::Edges]
@@ -6117,7 +6267,7 @@ mod tests {
             pollster::block_on(adapter.request_device(&Default::default())).unwrap();
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
-            source: wgpu::ShaderSource::Wgsl(include_str!("edges.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(concat!(include_str!("surface_appearance.wgsl"), "\n", include_str!("edges.wgsl")).into()),
         });
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let pipelines = [PipelinePass::EdgeDepth, PipelinePass::Edges]

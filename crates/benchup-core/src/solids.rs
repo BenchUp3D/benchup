@@ -828,10 +828,14 @@ impl Model {
                 return Err(tr!("core.solids.the_bodies_have_no_shared_surface"));
             }
             let mut next = self.clone();
-            next.erase(&a_ids.union(&b_ids).copied().collect());
+            let removed = a_ids.union(&b_ids).copied().collect();
+            next.erase(&removed);
             let result = output(&mut next, overlap, frame, tr!("core.solids.intersection"), false, false)?
                 .into_iter()
                 .collect();
+            if !self.wood_glue.is_empty() {
+                next.transfer_glue_from(self, &self.expand_entities(&removed), next.expand_entities(&result));
+            }
             next.validate()
                 .map_err(|_| tr!("core.solids.the_result_cannot_be_represented_as_valid_planar"))?;
             *self = next;
@@ -893,6 +897,9 @@ impl Model {
             )? {
                 result.insert(id);
             }
+        }
+        if !self.wood_glue.is_empty() {
+            next.transfer_glue_from(self, &self.expand_entities(&removed), next.expand_entities(&result));
         }
         next.validate()
             .map_err(|_| tr!("core.solids.the_result_cannot_be_represented_as_valid_planar"))?;

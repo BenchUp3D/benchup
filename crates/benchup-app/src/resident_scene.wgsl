@@ -54,15 +54,21 @@ struct Output {
     @location(3) @interpolate(flat) faces: vec4<u32>,
     @location(4) shadow: vec3<f32>,
 }
+struct FaceOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(3) @interpolate(flat) faces: vec4<u32>,
+    @location(4) shadow: vec3<f32>,
+    @location(5) grain: vec3<f32>,
+    @location(6) @interpolate(flat) finish: vec4<f32>,
+}
 fn target_color(color: vec4<f32>) -> vec4<f32> {
     if camera.flags.x == 0.0 { return color; }
-    let linear = select(color.rgb / 12.92,
-        pow((color.rgb + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4)), color.rgb > vec3<f32>(0.04045));
+    let linear = finish_srgb_to_linear(color.rgb);
     return vec4<f32>(linear, color.a);
 }
-@vertex
-fn face_vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
-    @location(2) anchor: vec3<f32>, @location(3) color: vec4<f32>, @location(4) face_id: u32, @location(5) interaction: vec2<u32>) -> Output {
+fn surface_vertex(position: vec3<f32>, normal: vec3<f32>, anchor: vec3<f32>, color: vec4<f32>,
+    face_id: u32, interaction: vec2<u32>, grain: vec3<f32>, finish: vec4<f32>) -> FaceOutput {
     let state=interaction_state(interaction);
     let factors=preview_factors(state);
     var n = normalize(normal / factors);
@@ -73,21 +79,47 @@ fn face_vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
     }
     if dot(n, toward_eye) < 0.0 { n = -n; }
     var material=color;
-    if (state&4u)==0u && (state&8u)==0u {material=camera.face_inactive;}
-    else if (state&32u)!=0u {material=vec4<f32>(220.0/255.0,91.0/255.0,76.0/255.0,1.0);}
-    else if (state&1u)!=0u {material=camera.face_selected;}
-    else if (state&2u)!=0u {material=camera.face_hovered;}
+    var surface=finish;
+    let tint = select(1.0, 0.22, any(finish != vec4<f32>(0.0)));
+    if (state&4u)==0u && (state&8u)==0u {
+        material=camera.face_inactive;
+        surface=vec4<f32>(0.0);
+    } else if (state&32u)!=0u {
+        material=vec4<f32>(220.0/255.0,91.0/255.0,76.0/255.0,1.0);
+        surface=vec4<f32>(0.0);
+    } else if (state&1u)!=0u {
+        material=mix(color, camera.face_selected, tint);
+    } else if (state&2u)!=0u {
+        material=mix(color, camera.face_hovered, tint);
+    }
+    if surface.w > 0.0 {
+        let half_dir = normalize(normalize(toward_eye) + camera.light.xyz);
+        surface.w *= 0.65 * pow(max(0.0, dot(n, half_dir)), 5.0 + 31.0 * surface.w);
+    }
     let brightness = 0.62 + 0.38 * max(dot(n, camera.light.xyz), 0.0);
     let shaded = vec4<f32>(floor(material.rgb * brightness * 255.0 + vec3<f32>(0.5)) / 255.0, material.a);
-    var output: Output;
+    var output: FaceOutput;
     output.position = camera.matrix * vec4<f32>(preview_point(position,state),1.0);
     if ((state&64u)!=0u && (camera.interaction.w&4u)==0u) || (camera.interaction.y!=0u && (state&4u)==0u) {output.position=vec4<f32>(2.0,2.0,2.0,1.0);}
     output.color = shaded;
     output.shadow = (camera.shadow_matrix * vec4<f32>(preview_point(position,state),1.0)).xyz;
-    output.lateral = 0.0;
-    output.center = vec3<f32>(0.0);
+    output.grain = grain;
+    output.finish = surface;
     output.faces = vec4<u32>(face_id,0u,0u,0u);
     return output;
+}
+@vertex
+fn face_vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
+    @location(2) anchor: vec3<f32>, @location(3) color: vec4<f32>, @location(4) face_id: u32,
+    @location(5) interaction: vec2<u32>) -> FaceOutput {
+    return surface_vertex(position, normal, anchor, color, face_id, interaction, vec3<f32>(0.0), vec4<f32>(0.0));
+}
+@vertex
+fn material_vertex(@location(0) position: vec3<f32>, @location(1) normal: vec3<f32>,
+    @location(2) anchor: vec3<f32>, @location(3) color: vec4<f32>, @location(4) face_id: u32,
+    @location(5) interaction: vec2<u32>, @location(6) grain: vec3<f32>,
+    @location(7) finish: vec4<f32>) -> FaceOutput {
+    return surface_vertex(position, normal, anchor, color, face_id, interaction, grain, finish);
 }
 @vertex
 fn shadow_vertex(@location(0) position: vec3<f32>, @location(4) face_id: u32,
@@ -103,7 +135,7 @@ fn shadow_vertex(@location(0) position: vec3<f32>, @location(4) face_id: u32,
 }
 // Evaluate the receiving plane at each shadow texel rather than adding a large
 // slope bias. Coplanar faces stay lit and contact shadows stay attached.
-fn shadow_coverage(input: Output) -> f32 {
+fn shadow_coverage(input: FaceOutput) -> f32 {
     let coord = input.shadow * vec3<f32>(0.5,-0.5,1.0) + vec3<f32>(0.5,0.5,0.0);
     let normal = cross(dpdx(coord),dpdy(coord));
     var slope = vec2<f32>(0.0);
@@ -132,11 +164,19 @@ fn shadow_coverage(input: Output) -> f32 {
     return covered / max(weight,0.0001);
 }
 @fragment
-fn face_color(input: Output) -> @location(0) vec4<f32> {
+fn face_color(input: FaceOutput) -> @location(0) vec4<f32> {
     let amount = shadow_coverage(input);
     let dark = floor(input.color.rgb * (1.0-camera.shadow_params.x) * 255.0 + vec3<f32>(0.5))/255.0;
     let rgb = mix(input.color.rgb,dark,amount);
-    return target_color(vec4<f32>(rgb,input.color.a));
+    return target_color(vec4<f32>(rgb, input.color.a));
+}
+@fragment
+fn material_color(input: FaceOutput) -> @location(0) vec4<f32> {
+    let amount = shadow_coverage(input);
+    let dark = floor(input.color.rgb * (1.0-camera.shadow_params.x) * 255.0 + vec3<f32>(0.5))/255.0;
+    let rgb = mix(input.color.rgb,dark,amount);
+    let finish = vec4<f32>(input.finish.xyz, input.finish.w * (1.0 - amount * camera.shadow_params.x));
+    return target_color(vec4<f32>(finish_color(rgb, input.color.a, input.grain, finish), input.color.a));
 }
 // Offset depth only across the actual incident face, never its extension past
 // a silhouette. Using homogeneous planes also works at near-plane crossings.
@@ -253,8 +293,9 @@ fn hidden_center(input: Output) -> bool {
     return bitcast<f32>(visible.y) < center.z - 0.00000024;
 }
 @fragment
-fn fragment_visibility(input: Output) -> @location(0) vec2<u32> {
-    return vec2<u32>(input.faces.x,bitcast<u32>(input.position.z));
+fn fragment_visibility(@builtin(position) position: vec4<f32>,
+    @location(3) @interpolate(flat) faces: vec4<u32>) -> @location(0) vec2<u32> {
+    return vec2<u32>(faces.x,bitcast<u32>(position.z));
 }
 @fragment
 fn edge_color(input: Output) -> @location(0) vec4<f32> {

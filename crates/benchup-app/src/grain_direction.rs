@@ -458,6 +458,7 @@ mod tests {
                         face,
                         cached: cache.get(face.id),
                         color: Color32::WHITE,
+                        surface: None,
                         shadow: None,
                     })
                     .collect();
@@ -523,6 +524,7 @@ mod tests {
                 face: &model.faces[&id],
                 cached: face,
                 color: Color32::WHITE,
+                surface: None,
                 shadow: None,
             }]);
             mesh.set_entity(None);
@@ -607,6 +609,7 @@ mod tests {
                 face,
                 cached: cache.get(face.id),
                 color: Color32::WHITE,
+                surface: None,
                 shadow: None,
             })
             .collect();

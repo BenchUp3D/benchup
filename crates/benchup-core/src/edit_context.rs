@@ -269,6 +269,7 @@ impl Model {
         self.guides.retain(|id, _| !ids.contains(id));
         self.edges.retain(|id, _| !ids.contains(id));
         self.faces.retain(|id, _| !ids.contains(id));
+        self.wood_glue.retain(|id, _| !ids.contains(id));
         self.objects.retain(|id, _| !ids.contains(id));
         self.entity_tags.retain(|id, _| !ids.contains(id));
         self.hidden.retain(|id| !ids.contains(id));
@@ -289,6 +290,7 @@ impl Model {
         self.texts.extend(contents.texts.clone());
         self.guides.extend(contents.guides.clone());
         self.face_colors.extend(contents.face_colors.clone());
+        self.wood_glue.extend(contents.wood_glue.clone());
         self.reference_images.extend(contents.reference_images.clone());
         self.image_assets.extend(contents.image_assets.clone());
         self.objects.extend(contents.objects.clone());
@@ -486,6 +488,14 @@ impl Model {
                         stable_vertices.insert(source_edge.b, old_edge.b);
                     }
                 }
+                let old_to_source: BTreeMap<_, _> = stable_vertices.iter()
+                    .map(|(&source, &old)| (old, source)).collect();
+                contents.wood_glue = instance.definition_entities.iter().filter_map(|(key, source)| {
+                    let old = peer_instance.definition_entities.get(key)?;
+                    let coverage = self.wood_glue.get(old)?.remap(|id| old_to_source.get(&id).copied())?;
+                    Some((*source, coverage))
+                }).collect();
+                contents.clean_wood_glue();
                 self.remove_contents(peer)?;
                 let (entities, remap) = self.paste_mapped(&contents, DVec3::ZERO, false);
                 let vertex_remap: BTreeMap<_, _> = stable_vertices
@@ -511,6 +521,9 @@ impl Model {
                         {
                             *vertex = vertex_remap.get(vertex).copied().unwrap_or(*vertex);
                         }
+                    }
+                    if let Some(coverage) = self.wood_glue.get_mut(id) {
+                        *coverage = coverage.remap(|id| Some(vertex_remap.get(&id).copied().unwrap_or(id))).unwrap();
                     }
                     if let Some(image) = self.reference_images.get_mut(id) {
                         for vertex in &mut image.vertices {
@@ -582,6 +595,21 @@ impl Model {
                 .ok_or(tr!("core.edit_context.missing_component_definition"))?;
             let linear = to.linear() * from.linear().inverse();
             contents.transform_contents(linear, to.translation - linear * from.translation);
+            let mut copied_to_source = BTreeMap::new();
+            for (key, source_id) in &reference.definition_entities {
+                if let Some((source, old)) = contents.edges.get(source_id).zip(
+                    instance.definition_entities.get(key).and_then(|id| copy.edges.get(id))
+                ) {
+                    copied_to_source.insert(old.a, source.a);
+                    copied_to_source.insert(old.b, source.b);
+                }
+            }
+            contents.wood_glue = reference.definition_entities.iter().filter_map(|(key, source)| {
+                let old = instance.definition_entities.get(key)?;
+                let coverage = copy.wood_glue.get(old)?.remap(|id| copied_to_source.get(&id).copied())?;
+                Some((*source, coverage))
+            }).collect();
+            contents.clean_wood_glue();
             copy.remove_contents(id)?;
             let (entities, remap) = copy.paste_mapped(&contents, DVec3::ZERO, false);
             let object = copy.objects.get_mut(&id).unwrap();

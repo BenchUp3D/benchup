@@ -2000,5 +2000,17 @@
   "walk.there_is_not_enough_space_here_for_the_configured_body_size_and_eye_height": "There is not enough space here for the configured body size and eye height.",
   "walk.walk": "Walk",
   "walk.walk_through_the_model_click_a_floor_face_to_place_yourself_at_eye_level": "Walk through the model. Click a floor face to place yourself at eye level.",
-  "walk.walking_controls": "WASD / arrows: walk · Move mouse to look · Shift: crouch · Space: jump · Alt: sit · Tab: sidebar · Escape: exit Walk"
+  "walk.walking_controls": "WASD / arrows: walk · Move mouse to look · Shift: crouch · Space: jump · Alt: sit · Tab: sidebar · Escape: exit Walk",
+  "wood_glue.tool": "Wood Glue",
+  "wood_glue.instructions": "Click a visible, unlocked face to toggle wood glue on or off.",
+  "wood_glue.automatic": "Glue Selected Contact Surfaces",
+  "wood_glue.automatic_hint": "Coat the touching areas of selected faces and groups on both sides of each joint.",
+  "wood_glue.applied": "Apply wood glue",
+  "wood_glue.removed": "Remove wood glue",
+  "wood_glue.contacts_applied": "Glue contact surfaces",
+  "wood_glue.no_new_contacts": "No uncoated contact surfaces found in the selection.",
+  "wood_glue.invalid_coverage": "Wood glue refers to an invalid face or coating.",
+  "wood_glue.estimate_label": "Wood glue coverage (whole project)",
+  "wood_glue.estimate_note": "Wood glue coverage (whole project): {area}",
+  "wood_glue.area_m2": "{value} m²"
 }

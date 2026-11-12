@@ -81,6 +81,8 @@ pub struct Model {
     #[serde(default)]
     #[serde(deserialize_with = "deserialize_map_or_empty_sequence")]
     pub face_colors: BTreeMap<u64, [u8; 3]>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "deserialize_map_or_empty_sequence")]
+    pub wood_glue: BTreeMap<u64, crate::wood_glue::Coverage>,
     #[serde(default, deserialize_with = "deserialize_map_or_empty_sequence")]
     pub reference_images: BTreeMap<u64, crate::ReferenceImage>,
     #[serde(default, deserialize_with = "deserialize_map_or_empty_sequence")]
@@ -137,6 +139,7 @@ impl Model {
                 })
             })
             && self.face_colors == other.face_colors
+            && self.wood_glue == other.wood_glue
             && self.dimensions == other.dimensions
             && self.texts == other.texts
             && self.objects == other.objects
@@ -361,6 +364,7 @@ impl Model {
         for id in &removed_faces {
             self.faces.remove(id);
             self.face_colors.remove(id);
+            self.wood_glue.remove(id);
         }
         self.face_colors.retain(|id, _| self.faces.contains_key(id));
         self.reference_images.retain(|id, _| self.faces.contains_key(id));
@@ -532,6 +536,12 @@ impl Model {
         self.validate_dimensions()?;
         self.validate_texts()?;
         self.validate_reference_images()?;
+        if self.wood_glue.iter().any(|(id, coverage)| {
+            self.reference_images.contains_key(id)
+                || self.faces.get(id).is_none_or(|face| !coverage.valid(face))
+        }) {
+            return Err(tr!("wood_glue.invalid_coverage"));
+        }
         if self
             .face_colors
             .keys()

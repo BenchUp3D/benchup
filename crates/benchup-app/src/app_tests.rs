@@ -6799,3 +6799,71 @@ fn cancelling_an_unfinished_angle_leaves_no_dimension() {
     assert!(h.app.doc.model.guides.is_empty());
     assert!(!h.app.project.modified);
 }
+
+#[test]
+fn wood_glue_pointer_clicks_and_automatic_selection_record_one_edit_each() {
+    let mut h = Harness::new();
+    h.size.y = 1100.;
+    h.app.doc.model = Model::default();
+    let board = |model: &mut Model, x: f64| {
+        let mut stock = Model::default();
+        let points = [DVec3::ZERO, DVec3::X, DVec3::X + DVec3::Y, DVec3::Y];
+        for i in 0..4 {
+            stock.add_edge(points[i], points[(i + 1) % 4]).unwrap();
+        }
+        let entities = model.paste_entities(&stock, DVec3::X * x);
+        let board = model.make_object(&entities, false, "Stock").unwrap();
+        let face = *model.objects[&board].entities.iter().find(|id| model.faces.contains_key(id)).unwrap();
+        (board, face)
+    };
+    let (a, face) = board(&mut h.app.doc.model, 0.);
+    let (b, contact_face) = board(&mut h.app.doc.model, 0.5);
+    h.app.doc.camera = Camera::default();
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    let button = text_position(&output, Tool::WoodGlue.label());
+    assert!(button.x < 76.);
+    h.click(button);
+    assert_eq!(h.app.tool, Tool::WoodGlue);
+    let pos = h.at(DVec3::new(0.25, 0.5, 0.));
+    let initial = h.app.doc.history.position();
+    h.click(pos);
+    assert!(h.app.doc.model.wood_glue.contains_key(&face));
+    assert_eq!(h.app.doc.model.wood_glue_area(), 1.);
+    assert_eq!(h.app.doc.history.position(), initial + 1);
+    h.click(pos);
+    assert!(!h.app.doc.model.wood_glue.contains_key(&face));
+    assert_eq!(h.app.doc.model.wood_glue_area(), 0.);
+    assert_eq!(h.app.doc.history.position(), initial + 2);
+    assert_eq!(h.app.doc.history.undo_label(), Some("Remove wood glue"));
+    h.app.undo(&h.ctx, false);
+    assert_eq!(h.app.doc.model.wood_glue_area(), 1.);
+    h.app.undo(&h.ctx, true);
+    assert_eq!(h.app.doc.model.wood_glue_area(), 0.);
+    h.click(pos);
+    assert_eq!(h.app.doc.model.wood_glue_area(), 1.);
+    assert_eq!(h.app.doc.history.position(), initial + 3);
+    h.app.set_tool(Tool::Select);
+    h.app.selected = BTreeSet::from([a, b]);
+    let apply_automatic = |h: &mut Harness| {
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        h.click(text_position(&output, tr!("app.tools")));
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        h.click(menu_text_position(&output, tr!("wood_glue.automatic")));
+    };
+    apply_automatic(&mut h);
+    assert_eq!(h.app.tool, Tool::Select);
+    assert!((h.app.doc.model.wood_glue_area() - 1.5).abs() < 1e-9);
+    apply_automatic(&mut h);
+    assert_eq!(h.app.doc.history.position(), initial + 4);
+    // Clicking a face with automatic partial coverage also toggles it off,
+    // even when the pointer is outside the coated contact patch.
+    h.app.set_tool(Tool::WoodGlue);
+    h.click(h.at(DVec3::new(1.25, 0.5, 0.)));
+    assert!(!h.app.doc.model.wood_glue.contains_key(&contact_face));
+    assert_eq!(h.app.doc.model.wood_glue_area(), 1.);
+    assert_eq!(h.app.doc.history.position(), initial + 5);
+    h.app.undo(&h.ctx, false);
+    assert!((h.app.doc.model.wood_glue_area() - 1.5).abs() < 1e-9);
+    h.app.undo(&h.ctx, false);
+    assert_eq!(h.app.doc.model.wood_glue_area(), 1.);
+}

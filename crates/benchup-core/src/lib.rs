@@ -4,6 +4,7 @@ pub mod reference_images;
 pub use reference_images::{ImageAsset, ImageFit, ImageSettings, ReferenceImage};
 
 pub mod connections;
+pub mod wood_glue;
 pub mod joinery;
 mod cleanup;
 pub mod annotations;
@@ -97,6 +98,7 @@ pub enum Tool {
     Erase,
     Orbit,
     GrainDirection,
+    WoodGlue,
     Walk,
 }
 
@@ -141,7 +143,7 @@ impl Tool {
     pub fn is_drawing(self) -> bool {
         self == Self::Image || Self::DRAWING.contains(&self)
     }
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 28] = [
         Self::Select,
         Self::Line,
         Self::Rectangle,
@@ -169,8 +171,9 @@ impl Tool {
         Self::Orbit,
         Self::GrainDirection,
         Self::Walk,
+        Self::WoodGlue,
     ];
-    pub const RAIL: [Self; 12] = [
+    pub const RAIL: [Self; 13] = [
         Self::Select,
         Self::Line,
         Self::Erase,
@@ -183,6 +186,7 @@ impl Tool {
         Self::Paint,
         Self::Dimensions,
         Self::Union,
+        Self::WoodGlue,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -212,6 +216,7 @@ impl Tool {
             Self::Erase => tr!("tools.erase"),
             Self::Orbit => tr!("tools.orbit"),
             Self::GrainDirection => tr!("tools.grain_direction"),
+            Self::WoodGlue => tr!("wood_glue.tool"),
             Self::Walk => "Walk",
         }
     }
@@ -239,7 +244,7 @@ impl Tool {
             Self::TapeMeasure => "T",
             Self::Protractor => "A",
             Self::Dimensions => "I",
-            Self::Text | Self::GrainDirection | Self::Walk => "",
+            Self::Text | Self::GrainDirection | Self::Walk | Self::WoodGlue => "",
             Self::Erase => "E",
             Self::Orbit => "O",
         }
@@ -298,6 +303,7 @@ impl Tool {
             Self::Text => tr!("tools.click_an_object_then_click_to_place_its"),
             Self::Orbit => tr!("tools.drag_to_orbit_hold_shift_to_pan_scroll"),
             Self::GrainDirection => tr!("tools.place_the_grain_anchor"),
+            Self::WoodGlue => tr!("wood_glue.instructions"),
             Self::Walk => "Click a floor face to start walking at eye level. Escape exits Walk.",
         }
     }

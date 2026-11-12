@@ -369,6 +369,7 @@ impl Model {
     }
     pub(crate) fn clean_entity_state(&mut self) {
         self.sync_dimensions();
+        self.clean_wood_glue();
         self.face_colors.retain(|id, _| self.faces.contains_key(id));
         self.reference_images.retain(|id, _| self.faces.contains_key(id));
         let entities: BTreeSet<_> = self
@@ -409,6 +410,7 @@ impl Model {
             texts: subset(&self.texts, &ids),
             guides: subset(&self.guides, &ids),
             face_colors: subset(&self.face_colors, &ids),
+            wood_glue: subset(&self.wood_glue, &ids),
             reference_images: subset(&self.reference_images, &ids),
             entity_tags: subset(&self.entity_tags, &ids),
             hidden: self.hidden.intersection(&ids).copied().collect(),
@@ -561,6 +563,11 @@ impl Model {
         }
         for (id, color) in &source.face_colors {
             self.face_colors.insert(ids[id], *color);
+        }
+        for (id, coverage) in &source.wood_glue {
+            if let Some(coverage) = coverage.remap(|id| ids.get(&id).copied()) {
+                self.wood_glue.insert(ids[id], coverage);
+            }
         }
         // When the definition already exists, its current materials take
         // precedence over an older clipboard snapshot of the same component.

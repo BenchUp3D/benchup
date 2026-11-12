@@ -5,31 +5,61 @@ struct EdgeVertex {
     @location(2) shadow_color: vec4<f32>,
     @location(3) uv: vec2<f32>,
     @location(4) dash_phase: f32,
+    @location(5) grain: vec4<f32>,
+    @location(6) @interpolate(flat) finish: vec4<f32>,
+    @location(7) @interpolate(flat) srgb: u32,
 }
 
-fn edge_vertex(position: vec3<f32>, color: vec4<f32>, lateral: f32, shadow_color: vec4<f32>, dash_phase: f32) -> EdgeVertex {
+fn edge_vertex(position: vec3<f32>, color: vec4<f32>, lateral: f32, shadow_color: vec4<f32>, dash_phase: f32, grain: vec4<f32>, finish: vec4<f32>, srgb: u32) -> EdgeVertex {
     var output: EdgeVertex;
     output.position = vec4<f32>(position, 1.0);
     output.color = color;
     output.lateral = lateral;
     output.dash_phase = dash_phase;
     output.shadow_color = shadow_color;
+    output.grain = grain;
+    output.finish = finish;
+    output.srgb = srgb;
     output.uv = position.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
     return output;
 }
 
-@vertex
-fn vertex_main(@location(0) position: vec3<f32>, @location(1) color: vec4<f32>, @location(2) lateral: f32, @location(3) shadow_color: vec4<f32>, @location(4) dash_phase: f32) -> EdgeVertex {
-    return edge_vertex(position, color, lateral, shadow_color, dash_phase);
+fn edge_vertex_srgb(position: vec3<f32>, color: vec4<f32>, lateral: f32,
+    shadow_color: vec4<f32>, dash_phase: f32) -> EdgeVertex {
+    let linear = finish_srgb_to_linear(color.rgb);
+    let shadow_linear = finish_srgb_to_linear(shadow_color.rgb);
+    return edge_vertex(position, vec4<f32>(linear, color.a), lateral,
+        vec4<f32>(shadow_linear, shadow_color.a), dash_phase, vec4<f32>(0.0), vec4<f32>(0.0), 0u);
 }
 
 @vertex
-fn vertex_main_srgb(@location(0) position: vec3<f32>, @location(1) color: vec4<f32>, @location(2) lateral: f32, @location(3) shadow_color: vec4<f32>, @location(4) dash_phase: f32) -> EdgeVertex {
-    // Unorm8x4 preserves the original Color32 bytes. Convert on the GPU for
-    // sRGB targets instead of copying and converting the entire mesh on CPU.
-    let linear = select(color.rgb / 12.92, pow((color.rgb + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4)), color.rgb > vec3<f32>(0.04045));
-    let shadow_linear = select(shadow_color.rgb / 12.92, pow((shadow_color.rgb + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4)), shadow_color.rgb > vec3<f32>(0.04045));
-    return edge_vertex(position, vec4<f32>(linear, color.a), lateral, vec4<f32>(shadow_linear, shadow_color.a), dash_phase);
+fn vertex_main(@location(0) position: vec3<f32>, @location(1) color: vec4<f32>, @location(2) lateral: f32,
+    @location(3) shadow_color: vec4<f32>, @location(4) dash_phase: f32) -> EdgeVertex {
+    return edge_vertex(position, color, lateral, shadow_color, dash_phase, vec4<f32>(0.0), vec4<f32>(0.0), 0u);
+}
+
+@vertex
+fn vertex_main_srgb(@location(0) position: vec3<f32>, @location(1) color: vec4<f32>, @location(2) lateral: f32,
+    @location(3) shadow_color: vec4<f32>, @location(4) dash_phase: f32) -> EdgeVertex {
+    return edge_vertex_srgb(position, color, lateral, shadow_color, dash_phase);
+}
+
+@vertex
+fn vertex_material(@location(0) position: vec3<f32>, @location(1) color: vec4<f32>, @location(2) lateral: f32,
+    @location(3) shadow_color: vec4<f32>, @location(4) dash_phase: f32,
+    @location(5) grain: vec4<f32>, @location(6) finish: vec4<f32>) -> EdgeVertex {
+    return edge_vertex(position, color, lateral, shadow_color, dash_phase, grain, finish, 0u);
+}
+
+@vertex
+fn vertex_material_srgb(@location(0) position: vec3<f32>, @location(1) color: vec4<f32>, @location(2) lateral: f32,
+    @location(3) shadow_color: vec4<f32>, @location(4) dash_phase: f32,
+    @location(5) grain: vec4<f32>, @location(6) finish: vec4<f32>) -> EdgeVertex {
+    // Finish shading uses the same color space as in the retained shader.
+    if grain.w > 0.0 {
+        return edge_vertex(position, color, lateral, shadow_color, dash_phase, grain, finish, 1u);
+    }
+    return edge_vertex_srgb(position, color, lateral, shadow_color, dash_phase);
 }
 
 fn stroke_coverage(input: EdgeVertex) -> f32 {
@@ -62,6 +92,22 @@ fn fragment_main(input: EdgeVertex) -> @location(0) vec4<f32> {
     return input.color * coverage;
 }
 
+fn shade_finish(input: EdgeVertex, color: vec4<f32>, shadow: f32) -> vec4<f32> {
+    let p = input.grain.xyz / max(input.grain.w, 0.000000001);
+    let rgb = finish_color(color.rgb, color.a, p,
+        vec4<f32>(input.finish.xyz, input.finish.w * (1.0 - shadow * 0.65)));
+    if input.srgb != 0u { return vec4<f32>(finish_srgb_to_linear(rgb), color.a); }
+    return vec4<f32>(rgb, color.a);
+}
+
+@fragment
+fn fragment_material_faces(input: EdgeVertex) -> @location(0) vec4<f32> {
+    let color = shade_finish(input, input.color, 0.0);
+    let coverage = stroke_coverage(input);
+    if coverage < 0.001 { discard; }
+    return color * coverage;
+}
+
 // Multisample a scalar shadow mask, then shade the original single-sample
 // receiving faces. Neither face silhouettes nor viewport strokes are resolved.
 @group(0) @binding(0) var shadow_mask: texture_2d<f32>;
@@ -84,4 +130,11 @@ fn fragment_mask_shadow(input: EdgeVertex) -> @location(0) vec4<f32> {
 fn fragment_shadow_faces(input: EdgeVertex) -> @location(0) vec4<f32> {
     let coverage = textureSample(shadow_mask, shadow_sampler, input.uv).r;
     return mix(input.color, input.shadow_color, coverage * select(0.0, 1.0, input.shadow_color.a > 0.0));
+}
+
+@fragment
+fn fragment_material_shadow_faces(input: EdgeVertex) -> @location(0) vec4<f32> {
+    let coverage = textureSample(shadow_mask, shadow_sampler, input.uv).r;
+    let amount = coverage * select(0.0, 1.0, input.shadow_color.a > 0.0);
+    return shade_finish(input, mix(input.color, input.shadow_color, amount), amount);
 }

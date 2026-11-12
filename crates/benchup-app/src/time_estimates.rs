@@ -105,6 +105,7 @@ impl TimeBreakdown {
 #[derive(Default)]
 pub(super) struct EstimateCache {
     source: Option<(Model, BTreeSet<u64>)>,
+    glue_area: Option<f64>,
     area: Option<(WoodMaterials, std::collections::BTreeMap<u64, f64>)>,
     materials: Option<(
         crate::cutting_layout::Settings,
@@ -121,11 +122,11 @@ struct MaterialEstimate {
 
 impl EstimateCache {
     fn validate(&mut self, model: &Model, selected: &BTreeSet<u64>) {
-        if self
-            .source
-            .as_ref()
-            .is_none_or(|(source, selection)| source != model || selection != selected)
-        {
+        let model_changed = self.source.as_ref().is_none_or(|(source, _)| source != model);
+        if model_changed {
+            self.glue_area = None;
+        }
+        if model_changed || self.source.as_ref().is_some_and(|(_, selection)| selection != selected) {
             self.source = Some((model.clone(), selected.clone()));
             self.area = None;
             self.materials = None;
@@ -153,6 +154,23 @@ impl EstimateCache {
             self.area = Some((wood, area));
         }
         self.area.as_ref().unwrap().1.values().sum()
+    }
+
+    fn glue_area(&mut self, model: &Model, selected: &BTreeSet<u64>) -> f64 {
+        self.validate(model, selected);
+        *self.glue_area.get_or_insert_with(|| {
+            if model.wood_glue.is_empty() {
+                return 0.;
+            }
+            let machined = model.connections.values().any(|connection| {
+                matches!(connection.operation, benchup_core::connections::ConnectionOperation::Joinery(_))
+            });
+            if machined {
+                model.evaluate_joinery().model.wood_glue_area()
+            } else {
+                model.wood_glue_area()
+            }
+        })
     }
 
     fn materials(
@@ -515,6 +533,15 @@ fn finishing_cost_rows(
             });
         }
     }
+}
+
+fn glue_area_value(area: f64) -> String {
+    let value = if area > 0. && area < 0.0001 {
+        format!("{area:.2e}")
+    } else {
+        format!("{area:.4}")
+    };
+    tr!("wood_glue.area_m2", value = value)
 }
 
 fn format_minutes(minutes: f64) -> String {
@@ -1070,6 +1097,9 @@ impl BenchUpApp {
                 report.costs.push(group);
             }
         }
+        report.notes.push(tr!("wood_glue.estimate_note", area = glue_area_value(
+            self.estimate_cache.glue_area(&self.doc.model, &self.selected)
+        )));
         if area <= 0. {
             report.notes.push(
                 tr!("time_estimates.no_visible_surfaces_with_assigned_wood_materials_in").into(),
@@ -1501,6 +1531,12 @@ impl BenchUpApp {
                 "wait",
                 tr!("time_estimates.drying_waiting"),
                 format_minutes(duration.wait),
+                colors.muted,
+            ),
+            (
+                "wood_glue",
+                tr!("wood_glue.estimate_label"),
+                glue_area_value(self.estimate_cache.glue_area(&self.doc.model, &self.selected)),
                 colors.muted,
             ),
         ] {

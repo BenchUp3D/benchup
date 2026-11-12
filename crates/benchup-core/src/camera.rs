@@ -425,6 +425,18 @@ impl CameraView {
             previous = next;
         }
     }
+    /// Recover world position and reciprocal clip w from a projected point.
+    pub fn unproject_depth(&self, point: DVec3) -> (DVec3, f64) {
+        let world = *self.inverse.get_or_init(|| self.matrix.inverse())
+            * DVec4::new(
+                point.x / self.size.x * 2. - 1.,
+                1. - point.y / self.size.y * 2.,
+                point.z,
+                1.,
+            );
+        (world.truncate() / world.w, world.w)
+    }
+
     pub fn ray(&self, point: DVec2) -> Ray {
         let ndc = DVec2::new(
             point.x / self.size.x * 2.0 - 1.0,

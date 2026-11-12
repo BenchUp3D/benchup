@@ -487,9 +487,14 @@ impl Model {
             let temp = solids::output(&mut next, polygons, frame, tr!("core.joinery.joint_result"), false, true)?
                 .ok_or(tr!("core.joinery.the_joint_would_remove_an_entire_board"))?;
             next.solid_volume(temp)?;
-            let contents = next
+            let mut contents = next
                 .object_contents(temp)
                 .ok_or(tr!("core.joinery.cannot_read_joint_result"))?;
+            if !self.wood_glue.is_empty() {
+                let result_faces: Vec<_> = contents.faces.keys().copied().collect();
+                let source_faces = self.expand_entities(&BTreeSet::from([id]));
+                contents.transfer_glue_from(self, &source_faces, result_faces);
+            }
             next.objects.remove(&temp);
             next.replace_contents(id, &contents)?;
             let object = next.objects.get_mut(&id).unwrap();
@@ -580,6 +585,7 @@ pub struct BoardSnapshot {
     faces: Vec<crate::Face>,
     objects: Vec<crate::Object>,
     colors: Vec<(u64, [u8; 3])>,
+    glue: Vec<(u64, crate::wood_glue::Coverage)>,
     connections: Vec<(u64, crate::connections::Connection)>,
     hidden: Vec<u64>,
     locked: Vec<u64>,
@@ -599,6 +605,7 @@ impl BoardSnapshot {
             faces: ids.iter().filter_map(|id| model.faces.get(id).cloned()).collect(),
             objects: ids.iter().filter_map(|id| model.objects.get(id).cloned()).collect(),
             colors: ids.iter().filter_map(|id| model.face_colors.get(id).map(|color| (*id, *color))).collect(),
+            glue: ids.iter().filter_map(|id| model.wood_glue.get(id).map(|coverage| (*id, coverage.clone()))).collect(),
             connections: model.connections.iter().filter(|(_, c)| c.members.iter().any(|id| ids.contains(id)))
                 .map(|(id, c)| (*id, c.clone())).collect(),
             hidden: model.hidden.intersection(&ids).copied().collect(),

@@ -117,6 +117,8 @@ pub(crate) struct ModelChange {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     face_colors: Changes<u64, [u8; 3]>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    wood_glue: Changes<u64, crate::wood_glue::Coverage>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     reference_images: Changes<u64, crate::ReferenceImage>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     image_assets: Changes<crate::reference_images::ImageAssetId, crate::ImageAsset>,
@@ -151,6 +153,7 @@ impl ModelChange {
             edges: difference(&before.edges, &after.edges),
             faces: difference(&before.faces, &after.faces),
             face_colors: difference(&before.face_colors, &after.face_colors),
+            wood_glue: difference(&before.wood_glue, &after.wood_glue),
             reference_images: difference(&before.reference_images, &after.reference_images),
             image_assets: difference(&before.image_assets, &after.image_assets),
             dimensions: difference(&before.dimensions, &after.dimensions),
@@ -175,6 +178,7 @@ impl ModelChange {
             && self.image_assets.is_empty()
             && self.reference_images.is_empty()
             && self.face_colors.is_empty()
+            && self.wood_glue.is_empty()
             && self.dimensions.is_empty()
             && self.texts.is_empty()
             && self.guides.is_empty()
@@ -195,6 +199,7 @@ impl ModelChange {
             && matches(&self.image_assets, &model.image_assets, forward)
             && matches(&self.reference_images, &model.reference_images, forward)
             && matches(&self.face_colors, &model.face_colors, forward)
+            && matches(&self.wood_glue, &model.wood_glue, forward)
             && matches(&self.dimensions, &model.dimensions, forward)
             && matches(&self.texts, &model.texts, forward)
             && matches(&self.guides, &model.guides, forward)
@@ -215,6 +220,7 @@ impl ModelChange {
         apply(&self.edges, &mut model.edges, forward);
         apply(&self.faces, &mut model.faces, forward);
         apply(&self.face_colors, &mut model.face_colors, forward);
+        apply(&self.wood_glue, &mut model.wood_glue, forward);
         apply(&self.reference_images, &mut model.reference_images, forward);
         apply(&self.image_assets, &mut model.image_assets, forward);
         apply(&self.dimensions, &mut model.dimensions, forward);

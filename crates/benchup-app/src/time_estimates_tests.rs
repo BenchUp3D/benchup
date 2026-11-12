@@ -1494,3 +1494,17 @@ fn background_pdf_snapshot_preserves_report_settings_without_editing_the_project
     assert_eq!(restored.render().unwrap(), expected);
     assert_eq!(app.doc, before);
 }
+
+#[test]
+fn wood_glue_area_appears_in_the_estimate_report_independent_of_selection() {
+    let mut model = Model::default();
+    let first = rectangle(&mut model, DVec3::ZERO);
+    let second = rectangle(&mut model, DVec3::X * 3.);
+    assert!(model.glue_face(first));
+    let mut app = BenchUpApp::with_document(
+        benchup_core::Document { model, ..Default::default() }, None, true,
+    );
+    app.selected = BTreeSet::from([second]);
+    let report = app.time_estimate_report();
+    assert!(report.notes.iter().any(|note| note == "Wood glue coverage (whole project): 6.0000 m²"));
+}

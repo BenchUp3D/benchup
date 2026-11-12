@@ -153,6 +153,15 @@ impl Model {
             }) {
                 continue;
             }
+            let glue: BTreeMap<_, _> = faces.iter().filter_map(|id| {
+                let coverage = self.wood_glue.get(id)?;
+                if let crate::wood_glue::Coverage::Partial { anchors, .. } = coverage
+                    && anchors.contains(&vertex)
+                {
+                    return Some((*id, coverage.polygons(self, &self.faces[id])));
+                }
+                None
+            }).collect();
             // Retain one edge identity and the existing face/material identities.
             let edge = self.edges.get_mut(&first).unwrap();
             edge.a = a;
@@ -168,6 +177,10 @@ impl Model {
                 for ring in &mut face.holes {
                     ring.retain(|id| *id != vertex);
                 }
+            }
+            for (id, polygons) in glue {
+                self.wood_glue.remove(&id);
+                self.transfer_glue(id, &polygons);
             }
             for object in self.objects.values_mut() {
                 object.entities.remove(&second);
