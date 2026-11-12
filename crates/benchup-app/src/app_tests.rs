@@ -7000,6 +7000,10 @@ fn router_rail_tool_routes_clicked_edges_and_reopens_existing_cuts() {
         assert_eq!(h.app.doc.history.position(), initial);
         h.click(pos);
         assert!(h.app.doc.model.routes.is_empty());
+        assert_eq!(h.app.doc.model.edit_context, board);
+        assert_eq!(h.app.selected, BTreeSet::from([edges[0]]));
+        assert_eq!(h.app.tool, Tool::Select);
+        assert_eq!(h.app.doc.history.position(), initial);
         let output = h.frame(vec![], egui::Modifiers::NONE);
         h.click(text_position(
             &output,
@@ -7202,7 +7206,6 @@ fn view_menu_toggles_selected_edge_lengths_without_model_edits() {
     assert!(h.app.doc.history.is_empty());
 }
 
-
 #[test]
 fn selected_edge_lengths_appear_in_the_viewport() {
     let mut h = Harness::new();
@@ -7230,7 +7233,6 @@ fn selected_edge_lengths_appear_in_the_viewport() {
             || text.galley.job.text == "5.00 m"
     )));
 }
-
 
 #[test]
 fn selected_edge_length_labels_hide_behind_faces() {
@@ -7275,6 +7277,18 @@ fn orbit_origin_choices_use_current_project_and_selection() {
     assert_eq!(h.app.orbit_center(), DVec3::ZERO);
     h.app.orbit_origin = sidebar::OrbitOrigin::View;
     assert_eq!(h.app.orbit_center(), h.app.doc.camera.target);
+    h.app.orbit_origin = sidebar::OrbitOrigin::Focused;
+    assert_eq!(h.app.orbit_center(), h.app.doc.camera.target);
+    h.app.doc.orbit_focus = Some(DVec3::new(4., 5., 6.));
+    assert_eq!(h.app.orbit_center(), DVec3::new(4., 5., 6.));
+    let saved = serde_json::to_string(&h.app.doc).unwrap();
+    let restored: Document = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored.orbit_focus, h.app.doc.orbit_focus);
+    let mut legacy = serde_json::to_value(&h.app.doc).unwrap();
+    legacy.as_object_mut().unwrap().remove("orbit_focus");
+    let restored: Document = serde_json::from_value(legacy).unwrap();
+    assert_eq!(restored.orbit_focus, None);
+    assert_eq!(Document::default().orbit_focus, None);
     h.app.orbit_origin = sidebar::OrbitOrigin::Selection;
     assert_eq!(h.app.orbit_center(), DVec3::X * 7.);
     h.app.selected.insert(edge);
@@ -7317,18 +7331,6 @@ fn precision_routed_edge_selection_shows_only_original_endpoints() {
     let mut points = Vec::new();
     for shape in &output.shapes { handles(&shape.shape, &mut points); }
     assert_eq!(points.len(), 2);
-    h.app.orbit_origin = sidebar::OrbitOrigin::Focused;
-    assert_eq!(h.app.orbit_center(), h.app.doc.camera.target);
-    h.app.doc.orbit_focus = Some(DVec3::new(4., 5., 6.));
-    assert_eq!(h.app.orbit_center(), DVec3::new(4., 5., 6.));
-    let saved = serde_json::to_string(&h.app.doc).unwrap();
-    let restored: Document = serde_json::from_str(&saved).unwrap();
-    assert_eq!(restored.orbit_focus, h.app.doc.orbit_focus);
-    let mut legacy = serde_json::to_value(&h.app.doc).unwrap();
-    legacy.as_object_mut().unwrap().remove("orbit_focus");
-    let restored: Document = serde_json::from_value(legacy).unwrap();
-    assert_eq!(restored.orbit_focus, None);
-    assert_eq!(Document::default().orbit_focus, None);
     for (actual, source) in points.into_iter().zip([a, b]) {
         let expected = pv(h.app.doc.camera.project(source, dv(rect.size())).unwrap());
         assert!(actual.distance(expected) < 0.01);

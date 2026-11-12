@@ -866,6 +866,7 @@
   "grain_direction.show": "Show Grain Direction",
   "frame_rate.fps": "— FPS",
   "frame_rate.fps_2": "{fps:.0} FPS",
+  "inspector_docking.divider_gestures": "Drag to resize areas. Double-click to merge them.",
   "inspector_docking.drop_within_15px_inside_an_area_s_edge": "Drop within 15px inside an area's edge to split; cross a section's vertical midpoint to reorder, or drop in another area's center to join",
   "inspector_docking.export_time_and_cost_estimates_as_pdf": "Export time and cost estimates as PDF",
   "inspector_docking.generate_pdf": "Generate PDF",

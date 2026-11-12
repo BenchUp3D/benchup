@@ -1046,26 +1046,6 @@ pub(super) fn save_order(
 
 #[cfg(test)]
 mod preference_tests {
-    #[test]
-    fn orbit_origin_defaults_and_saves_without_model_edit() {
-        let legacy: InspectorPreferences = serde_json::from_str("{}").unwrap();
-        assert_eq!(legacy.orbit_origin, OrbitOrigin::VisibleModel);
-        let ctx = egui::Context::default();
-        let mut app = BenchUpApp::with_document(Document::default(), None, true);
-        let mut storage = SavedPreferences::default();
-        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
-        for origin in OrbitOrigin::ALL.into_iter().rev() {
-            storage.flushed = false;
-            app.orbit_origin = origin;
-            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
-            assert!(storage.flushed);
-            assert!(!app.project.modified);
-            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
-            restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
-            assert_eq!(restored.orbit_origin, origin);
-        }
-    }
-
     use super::*;
 
     #[test]
@@ -3569,6 +3549,26 @@ mod preference_tests {
     fn older_general_preferences_keep_defaults() {
         let preferences: InspectorPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(preferences.general, settings::GeneralSettings::default());
+    }
+
+    #[test]
+    fn orbit_origin_defaults_and_saves_without_model_edit() {
+        let legacy: InspectorPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.orbit_origin, OrbitOrigin::VisibleModel);
+        let ctx = egui::Context::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        let mut storage = SavedPreferences::default();
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        for origin in OrbitOrigin::ALL.into_iter().rev() {
+            storage.flushed = false;
+            app.orbit_origin = origin;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+            assert_eq!(restored.orbit_origin, origin);
+        }
     }
 
     #[test]

@@ -125,6 +125,35 @@ impl DockLayout {
         }
     }
 
+    fn oldest_stack_id(&self) -> u64 {
+        match self {
+            Self::Stack { id, .. } => *id,
+            Self::Split { first, second, .. } => {
+                first.oldest_stack_id().min(second.oldest_stack_id())
+            }
+        }
+    }
+
+    fn merge_split(&mut self, split: u64) {
+        let Self::Split {
+            id, first, second, ..
+        } = self else {
+            return;
+        };
+        if *id == split {
+            let mut sections = Vec::new();
+            self.sections(&mut sections);
+            // Retain the original stack's identity and its scroll preference.
+            *self = Self::Stack {
+                id: self.oldest_stack_id(),
+                sections,
+            };
+        } else {
+            first.merge_split(split);
+            second.merge_split(split);
+        }
+    }
+
     fn remove(&mut self, section: InspectorSection) {
         match self {
             Self::Stack { sections, .. } => sections.retain(|s| *s != section),
@@ -258,13 +287,22 @@ impl DockLayout {
         }
     }
 
-    fn panes(&mut self, ui: &mut egui::Ui, rect: Rect, panes: &mut Vec<Pane>, dragging: bool) {
+    fn panes(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: Rect,
+        panes: &mut Vec<Pane>,
+        dragging: bool,
+    ) -> Option<u64> {
         match self {
-            Self::Stack { id, sections } => panes.push(Pane {
-                id: *id,
-                rect,
-                sections: sections.clone(),
-            }),
+            Self::Stack { id, sections } => {
+                panes.push(Pane {
+                    id: *id,
+                    rect,
+                    sections: sections.clone(),
+                });
+                None
+            }
             Self::Split {
                 id,
                 horizontal,
@@ -304,8 +342,9 @@ impl DockLayout {
                 let response = ui.interact(
                     divider,
                     egui::Id::unique(("inspector_divider", *id)),
-                    Sense::drag(),
+                    Sense::click_and_drag(),
                 );
+                let merge = (!dragging && response.double_clicked()).then_some(*id);
                 if !dragging && response.dragged() && available > 1. {
                     let delta = ui.input(|i| {
                         if *horizontal {
@@ -316,15 +355,18 @@ impl DockLayout {
                     });
                     *ratio = (*ratio + delta / available).clamp(0.1, 0.9);
                 }
-                response.on_hover_cursor(if *horizontal {
-                    egui::CursorIcon::ResizeHorizontal
-                } else {
-                    egui::CursorIcon::ResizeVertical
-                });
+                response
+                    .on_hover_cursor(if *horizontal {
+                        egui::CursorIcon::ResizeHorizontal
+                    } else {
+                        egui::CursorIcon::ResizeVertical
+                    })
+                    .on_hover_text(tr!("inspector_docking.divider_gestures"));
                 ui.painter()
                     .rect_filled(divider, 2, Palette::for_ui(ui).border);
-                first.panes(ui, a, panes, dragging);
-                second.panes(ui, b, panes, dragging);
+                let first_merge = first.panes(ui, a, panes, dragging);
+                let second_merge = second.panes(ui, b, panes, dragging);
+                merge.or(first_merge).or(second_merge)
             }
         }
     }
@@ -423,7 +465,7 @@ impl BenchUpApp {
         let rect = ui.available_rect_before_wrap();
         let mut panes = Vec::new();
         let mut visible_dock = layout.dock.get_or_insert_with(|| DockLayout::stack(&self.inspector_order)).clone();
-        visible_dock.panes(ui, rect, &mut panes, layout.drag.is_some());
+        let merge = visible_dock.panes(ui, rect, &mut panes, layout.drag.is_some());
         layout.dock.as_mut().unwrap().remember_visible_ratios(&visible_dock);
         let pointer = ctx.pointer_interact_pos();
         let mut target = pointer.and_then(|p| find_drop_target(&panes, p));
@@ -522,6 +564,11 @@ impl BenchUpApp {
             remember_scroll(&ctx, &key, scroll.state.clamped_offset());
         }
         ui.allocate_rect(rect, Sense::hover());
+        if let Some(split) = merge {
+            layout.dock.as_mut().unwrap().merge_split(split);
+            self.inspector_order = layout.order();
+            ctx.request_repaint();
+        }
         if let Some(drag) = layout.drag {
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
             if let Some(target) = target
@@ -1270,6 +1317,70 @@ mod tests {
         }
         fn flush(&mut self) {
             self.flushes += 1;
+        }
+    }
+
+    #[test]
+    fn double_clicking_a_divider_merges_its_areas_and_saves_immediately() {
+        for (parent_side, merge_side) in [(Side::Bottom, Side::Left), (Side::Right, Side::Top)] {
+            let ctx = egui::Context::default();
+            ctx.style_mut_of(ctx.theme(), |style| style.animation_time = 0.);
+            let mut app = BenchUpApp::with_document(Document::default(), None, true);
+            for section in InspectorSection::ALL {
+                set_section_open(&ctx, section.id(), section == InspectorSection::EntityInfo);
+            }
+            let mut dock = DockLayout::stack(&app.inspector_order);
+            dock.dock(InspectorSection::Tags, 0, parent_side, 0);
+            dock.dock(InspectorSection::Components, 0, merge_side, 0);
+            app.inspector_layout.dock = Some(dock.clone());
+            app.inspector_order = app.inspector_layout.order();
+            let order = app.inspector_order;
+            let mut storage = Storage::default();
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            let flushes = storage.flushes;
+
+            ui_frame(&ctx, &mut app, vec![]);
+            let (_, rect) = ui_frame(&ctx, &mut app, vec![]);
+            let pos = rect.center()
+                - if parent_side == Side::Bottom {
+                    egui::vec2(0., rect.height() / 4.)
+                } else {
+                    egui::vec2(rect.width() / 4., 0.)
+                };
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            ui_frame(&ctx, &mut app, vec![egui::Event::PointerMoved(pos), button(true)]);
+            ui_frame(&ctx, &mut app, vec![button(false)]);
+            assert_eq!(app.inspector_layout.dock.as_ref(), Some(&dock));
+            ui_frame(&ctx, &mut app, vec![button(true)]);
+            ui_frame(&ctx, &mut app, vec![button(false)]);
+
+            let mut expected = dock;
+            let DockLayout::Split { first, .. } = &mut expected else { panic!() };
+            **first = DockLayout::Stack {
+                id: 0,
+                sections: order[..order.len() - 1].to_vec(),
+            };
+            assert_eq!(app.inspector_layout.dock.as_ref(), Some(&expected));
+            assert_eq!(app.inspector_order, order);
+            assert!(!app.project.modified);
+            assert!(app.dirty_since.is_none());
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushes > flushes);
+
+            let restored_ctx = egui::Context::default();
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&restored_ctx, Some(&storage));
+            assert_eq!(restored.inspector_layout.dock.as_ref(), Some(&expected));
+            assert_eq!(restored.inspector_order, order);
+            let _ = restored_ctx.run_test_ui(Default::default(), |ui| {
+                assert_eq!(restored_header_open(ui, "components", true), Some(false));
+                assert_eq!(restored_header_open(ui, "entity_info", false), Some(true));
+            });
         }
     }
 

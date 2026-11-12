@@ -468,6 +468,28 @@ impl BenchUpApp {
             self.say(ctx, Tool::Router.instructions());
             return;
         };
+        if self.doc.model.parent(edge) != self.doc.model.edit_context {
+            if self.doc.model.is_locked(edge) {
+                self.say(ctx, tr!("app.unlock_the_object_before_opening_it"));
+                return;
+            }
+            // Open each enclosing assembly down to the edge's own group.
+            while let Some(owner) = self.doc.model.entity_in_context(edge) {
+                if owner == edge {
+                    break;
+                }
+                if !self.doc.model.enter_object(owner) {
+                    return;
+                }
+            }
+            self.outliner_anchor = None;
+            self.selected.clear();
+            self.hover = None;
+            self.notice = None;
+        }
+        // Switching tools clears the transient router editor. Rebuild it after
+        // the switch so Properties keeps the clicked edge's routing controls.
+        self.set_tool(Tool::Select);
         self.inspect_router_edge(edge, ctx);
     }
 
@@ -755,6 +777,77 @@ impl BenchUpApp {
 mod tests {
     use super::*;
     use crate::test_ui::ContextExt as _;
+
+    #[test]
+    fn router_click_opens_the_owning_group_and_returns_to_select_with_its_edge() {
+        for depth in 0..=2 {
+            for locked in [false, true] {
+                let mut model = Model::default();
+                model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+                for _ in 0..depth {
+                    model
+                        .make_object(&model.root_entities(), false, "Assembly")
+                        .unwrap();
+                }
+                let edge = *model.edges.keys().next().unwrap();
+                let owner = model.parent(edge);
+                if locked && let Some(owner) = owner {
+                    model.locked.insert(owner);
+                }
+                let stock = model.clone();
+                let mut app = BenchUpApp::with_document(
+                    Document {
+                        model,
+                        ..Default::default()
+                    },
+                    None,
+                    true,
+                );
+                app.set_tool(Tool::Router);
+                app.viewport = Rect::from_min_size(Pos2::new(10., 20.), egui::vec2(800., 600.));
+                app.doc.camera.target = DVec3::X * 0.5;
+                let point = app.viewport.min
+                    + pv(app
+                        .doc
+                        .camera
+                        .project(DVec3::X * 0.5, dv(app.viewport.size()))
+                        .unwrap());
+                let ctx = egui::Context::default();
+                app.router_click(app.viewport.min + egui::vec2(5., 5.), &ctx);
+                assert_eq!(app.tool, Tool::Router, "a miss must keep Router active");
+                assert!(app.selected.is_empty());
+                app.router_click(point, &ctx);
+                let blocked = locked && owner.is_some();
+                let mut expected = stock;
+                expected.edit_context = if blocked { None } else { owner };
+                assert_eq!(app.doc.model, expected);
+                assert_eq!(app.tool, if blocked { Tool::Router } else { Tool::Select });
+                assert!(app.doc.history.is_empty());
+                assert!(!app.project.modified);
+                if blocked {
+                    assert!(app.selected.is_empty());
+                    assert!(app.router_editor.draft.is_empty());
+                } else {
+                    assert_eq!(app.selected, BTreeSet::from([edge]));
+                    assert_eq!(app.router_editor.scope, owner);
+                    assert!(app.router_editor.draft.contains_key(&edge));
+                    assert!(app.inspector);
+                    let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
+                        assert_eq!(
+                            sidebar::restored_header_open(ui, "router", false),
+                            Some(true)
+                        );
+                    });
+                    // Clicking again inside the open group keeps its scope.
+                    app.set_tool(Tool::Router);
+                    app.router_click(point, &ctx);
+                    assert_eq!(app.doc.model, expected);
+                    assert_eq!(app.selected, BTreeSet::from([edge]));
+                    assert_eq!(app.tool, Tool::Select);
+                }
+            }
+        }
+    }
 
     #[test]
     fn an_open_line_drawn_on_a_face_applies_a_surface_groove_only_on_activation() {
