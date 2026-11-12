@@ -65,6 +65,8 @@ mod grain_direction;
 mod measurement_tools;
 #[path = "move_tool.rs"]
 mod move_tool;
+#[path = "offset_tool.rs"]
+mod offset_tool;
 #[path = "rotate_tool.rs"]
 mod rotate_tool;
 #[path = "scale_tool.rs"]
@@ -227,6 +229,7 @@ struct Modeling {
     entities: BTreeSet<u64>,
     face: Option<u64>,
     anchor: DVec3,
+    offset: Option<offset_tool::Offset>,
     pixel: Pos2,
     pointer: Pos2,
     center: DVec3,
@@ -1583,6 +1586,7 @@ impl BenchUpApp {
             return;
         }
         let mut face_id = None;
+        let mut offset = None;
         let grip = (self.tool == Tool::Scale).then(|| self.scale_grip_at(pos, ctx)).flatten();
         let (anchor, direction) = if matches!(self.tool, Tool::PushPull | Tool::Offset) {
             let selected_face = self.selected_modeling_face();
@@ -1606,32 +1610,13 @@ impl BenchUpApp {
                         -1.
                     }
             } else {
-                let model = &self.doc.model;
-                let closest = std::iter::once(&face.vertices)
-                    .chain(face.holes.iter())
-                    .enumerate()
-                    .flat_map(|(hole, ring)| {
-                        let area: f64 = (0..ring.len()).map(|i| {
-                            plane.project(model.vertices[&ring[i]].position).perp_dot(
-                                plane.project(model.vertices[&ring[(i + 1) % ring.len()]].position),
-                            )
-                        }).sum();
-                        let sign = area.signum() * if hole == 0 { 1. } else { -1. };
-                        (0..ring.len()).map(move |i| {
-                            let a = model.vertices[&ring[i]].position;
-                            let b = model.vertices[&ring[(i + 1) % ring.len()]].position;
-                            let closest = a + (b - a)
-                                * ((point - a).dot(b - a) / (b - a).length_squared()).clamp(0., 1.);
-                            (closest, plane.normal.cross(b - a).normalize() * sign)
-                        })
-                    })
-                    .min_by(|a, b| {
-                        a.0.distance_squared(point)
-                            .total_cmp(&b.0.distance_squared(point))
-                    })
-                    .unwrap();
-                let delta = point - closest.0;
-                if delta.length() > 1e-7 { delta.normalize() } else { closest.1 }
+                let Some(mut plan) = offset_tool::Offset::new(&self.doc.model, id) else {
+                    self.say(ctx, tr!("core.modeling.cannot_offset_this_corner"));
+                    return;
+                };
+                let (direction, _) = plan.update(point);
+                offset = Some(plan);
+                direction
             };
             if selected_face != Some(id) {
                 self.selected = BTreeSet::from([id]);
@@ -1681,6 +1666,7 @@ impl BenchUpApp {
             entities: self.selected.clone(),
             face: face_id,
             anchor,
+            offset,
             pixel: pos,
             pointer: pos,
             center,
@@ -1778,7 +1764,34 @@ impl BenchUpApp {
             .infer_snap(pos, Some(edit.anchor), self.lock, self.doc.snap_to_axes)
             // Free Offset follows its face, including tilted and vertical faces.
             // Explicit locks use the shared axis/plane through the anchor.
-            .filter(|snap| snap.kind != Inference::Plane || constraint.is_some())
+            .filter(|snap| {
+                if constraint.is_some() {
+                    return true;
+                }
+                if snap.kind == Inference::Plane {
+                    return false;
+                }
+                // A background or adjacent surface must not change the depth
+                // of a free pointer target. Soft axis hints must also stay on
+                // the edited plane; exact visible references remain available.
+                if matches!(
+                    snap.kind,
+                    Inference::OnFace | Inference::Axis(_) | Inference::OnAxis(_)
+                )
+                    && (snap.point - plane.origin).dot(plane.normal).abs() > 1e-6
+                {
+                    return false;
+                }
+                let size = dv(self.viewport.size());
+                let Some(pixel) = self.doc.camera.project(snap.point, size) else {
+                    return false;
+                };
+                let ray = self.doc.camera.ray(pixel, size);
+                // The original face is excluded as a snap target, but it still
+                // hides geometry behind it during an inward offset.
+                self.face_cache.get(edit.face.unwrap()).hit(ray)
+                    .is_none_or(|(t, _)| snap.point.distance(ray.origin) <= t + 1e-5)
+            })
             .or_else(|| {
                 if constraint.is_some() {
                     return None;
@@ -1920,7 +1933,9 @@ impl BenchUpApp {
             Tool::Offset => {
                 edit.snap = offset_snap;
                 offset_snap.map_or(edit.value, |snap| {
-                    (snap.point - edit.anchor).dot(edit.direction)
+                    let (direction, value) = edit.offset.as_mut().unwrap().update(snap.point);
+                    edit.direction = direction;
+                    value
                 })
             }
             Tool::Move | Tool::Scale => {
@@ -2101,7 +2116,8 @@ impl BenchUpApp {
                 let reference = edit.scale_constraint.map_or(reference, |lock| lock.project(reference));
                 edit.anchor + reference * (value - 1.)
             }
-            Tool::PushPull | Tool::Offset => edit.anchor + edit.direction * value,
+            Tool::PushPull => edit.anchor + edit.direction * value,
+            Tool::Offset => edit.offset.as_ref()?.marker(value),
             _ => return None,
         };
         let kind = edit.snap.filter(|snap| snap.point.distance(point) < 1e-6)
@@ -5918,7 +5934,10 @@ impl BenchUpApp {
         {
             let color = self.inference_color();
             if display.guides {
-                let end = edit.anchor + edit.direction * edit.value;
+                let end = edit.offset.as_ref().map_or_else(
+                    || edit.anchor + edit.direction * edit.value,
+                    |offset| offset.marker(edit.value),
+                );
                 if let Some((a, b)) = camera.segment(snap.point, end, size) {
                     p.extend(egui::Shape::dashed_line(
                         &[rect.min + pv(a), rect.min + pv(b)],
