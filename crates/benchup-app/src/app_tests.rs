@@ -7332,7 +7332,7 @@ fn precision_routed_edge_selection_shows_only_original_endpoints() {
     for shape in &output.shapes { handles(&shape.shape, &mut points); }
     assert_eq!(points.len(), 2);
     for (actual, source) in points.into_iter().zip([a, b]) {
-        let expected = pv(h.app.doc.camera.project(source, dv(rect.size())).unwrap());
+        let expected = rect.min + pv(h.app.doc.camera.project(source, dv(rect.size())).unwrap());
         assert!(actual.distance(expected) < 0.01);
     }
     let rendered = h.app.render_model.shared();
