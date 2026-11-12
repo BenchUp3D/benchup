@@ -142,7 +142,7 @@ jobs:
           save-if: 'false'
 
       - name: Build release executable
-        run: cargo build -p benchup-app --bin benchup-app --release --locked --target "${{ matrix.target }}"
+        run: bash scripts/ci_cargo.sh build -p benchup-app --bin benchup-app --release --locked --target "${{ matrix.target }}"
 
       - name: Stage distribution
         run: |
@@ -229,11 +229,11 @@ jobs:
 
       - name: Test updates, identity migration, and project compatibility
         run: |
-          cargo test -p benchup-app --lib --profile ci-test --locked --target "${{ matrix.target }}" -- \
+          bash scripts/ci_cargo.sh test -p benchup-app --lib --profile ci-test --locked --target "${{ matrix.target }}" -- \
             updates:: update_repository:: identity:: storage:: project_files:: server_config::
 
       - name: Test native import and export fixtures
-        run: cargo test -p benchup-io -p benchup-skp --profile ci-test --locked --target "${{ matrix.target }}"
+        run: bash scripts/ci_cargo.sh test -p benchup-io -p benchup-skp --profile ci-test --locked --target "${{ matrix.target }}"
 
   wasm:
     name: Build WebAssembly

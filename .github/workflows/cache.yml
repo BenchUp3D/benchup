@@ -9,6 +9,7 @@ on:
       - 'rust-toolchain*'
       - '.cargo/**'
       - '.github/actions/setup-compiler-cache/**'
+      - 'scripts/ci_cargo.sh'
       - 'crates/**'
       - 'assets/**'
       - 'scripts/install_linux_dependencies.py'
@@ -95,10 +96,10 @@ jobs:
       # Workspace source changes do not change the dependency cache key. Always
       # refresh their compiler-cache entries; final release linking is not cached.
       - name: Warm release libraries
-        run: cargo build -p benchup-app --lib --release --locked --target "${{ matrix.target }}"
+        run: bash scripts/ci_cargo.sh build -p benchup-app --lib --release --locked --target "${{ matrix.target }}"
 
       - name: Warm desktop compatibility test dependencies
         if: matrix.platform != 'wasm'
         run: |
-          cargo test -p benchup-app --lib --profile ci-test --locked --no-run --target "${{ matrix.target }}"
-          cargo test -p benchup-io -p benchup-skp --profile ci-test --locked --no-run --target "${{ matrix.target }}"
+          bash scripts/ci_cargo.sh test -p benchup-app --lib --profile ci-test --locked --no-run --target "${{ matrix.target }}"
+          bash scripts/ci_cargo.sh test -p benchup-io -p benchup-skp --profile ci-test --locked --no-run --target "${{ matrix.target }}"
