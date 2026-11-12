@@ -5525,8 +5525,7 @@ impl BenchUpApp {
             let _profile = viewport_benchmark::scope("geometry_update");
             self.joinery_geometry.update_render(model,
                 self.history_preview.is_none() && self.modeling.as_ref().is_some_and(|edit| edit.preview.is_some()),
-                ui.ctx(), &self.doc.display, &self.shadow_cache, routing_revision,
-                self.tool == Tool::Router && self.history_preview.is_none());
+                ui.ctx(), &self.doc.display, &self.shadow_cache, routing_revision);
         } else {
             self.joinery_geometry.clear_removed_connections();
         }

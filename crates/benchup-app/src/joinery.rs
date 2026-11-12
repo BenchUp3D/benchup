@@ -107,8 +107,7 @@ pub(super) struct GeometryCache {
     #[cfg(test)]
     diagnostic_evaluations: usize,
     source: Option<Model>,
-    render_source_stamp: Option<(u64, Option<u64>, bool)>,
-    show_scoped_routes: bool,
+    render_source_stamp: Option<(u64, Option<u64>)>,
     regions: Vec<(u64, highlight::Region)>,
     pub result: Option<GeometryEvaluation>,
     faces: crate::renderer::FaceCache,
@@ -124,7 +123,8 @@ struct CachedRegion {
 }
 
 /// Root is the assembled overview; inside an object, show only joints between
-/// its immediate children. Opening a board therefore exposes its original stock.
+/// its immediate children. Opening a board suspends its assembly joints, while
+/// routing stays visible so its edge settings can be edited in Properties.
 fn joint_in_view(model: &Model, connection: &Connection) -> bool {
     model.edit_context.is_none()
         || connection.members.iter().all(|member| model.entity_in_context(*member) == Some(*member))
@@ -156,8 +156,8 @@ impl GeometryCache {
     /// end of a gesture synchronize through update().
     pub fn update_render(&mut self, source: &Model, transient: bool, ctx: &egui::Context,
         display: &benchup_core::DisplaySettings, shadows: &crate::shadows::ShadowCache,
-        committed_revision: Option<u64>, show_scoped_routes: bool) {
-        let stamp = committed_revision.map(|revision| (revision, source.edit_context, show_scoped_routes));
+        committed_revision: Option<u64>) {
+        let stamp = committed_revision.map(|revision| (revision, source.edit_context));
         // A document revision already tracks the geometry and routing inputs.
         // Include scope because opening stock does not change that revision.
         if stamp.is_some() && self.render_source_stamp == stamp {
@@ -170,8 +170,7 @@ impl GeometryCache {
                 self.finish_pending();
             }
             if transient && self.result.is_some() {
-                if self.pending.is_none() && (self.source.as_ref() != Some(source)
-                    || self.show_scoped_routes != show_scoped_routes) {
+                if self.pending.is_none() && self.source.as_ref() != Some(source) {
                     let source = source.clone();
                     let display = display.clone();
                     let mut shadows = shadows.clone();
@@ -185,7 +184,7 @@ impl GeometryCache {
                         ..Default::default()
                     };
                     self.pending = Some(benchup_core::i18n::spawn_localized(move || {
-                        worker.update_with_routing(&source, show_scoped_routes);
+                        worker.update(&source);
                         let model = &worker.result.as_ref().unwrap().model;
                         worker.faces.update(model);
                         worker.entities.update(model);
@@ -200,7 +199,7 @@ impl GeometryCache {
         }
         #[cfg(target_arch = "wasm32")]
         let _ = (transient, ctx, display, shadows);
-        self.update_with_routing(source, show_scoped_routes);
+        self.update(source);
         self.render_source_stamp = stamp;
     }
 
@@ -211,7 +210,6 @@ impl GeometryCache {
                 self.evaluation = worker.evaluation;
                 self.region_cache = worker.region_cache;
                 self.source = worker.source;
-                self.show_scoped_routes = worker.show_scoped_routes;
                 self.source_errors = worker.source_errors;
                 self.result = worker.result;
                 self.regions = worker.regions;
@@ -275,23 +273,15 @@ impl GeometryCache {
     }
 
     pub fn update(&mut self, source: &Model) {
-        self.update_with_routing(source, false);
-    }
-
-    fn update_with_routing(&mut self, source: &Model, show_scoped_routes: bool) {
         #[cfg(not(target_arch = "wasm32"))]
         self.finish_pending();
-        if self.source.as_ref() != Some(source) || self.show_scoped_routes != show_scoped_routes {
-            self.show_scoped_routes = show_scoped_routes;
+        if self.source.as_ref() != Some(source) {
             self.render_source_stamp = None;
             self.prepared_shadows = None;
             // Scope machining and guides together without changing saved
             // relations or the fully assembled geometry used by exports.
             let mut viewport_source = source.clone();
             scope_joints_for_view(&mut viewport_source);
-            if !show_scoped_routes && let Some(board) = source.edit_context {
-                viewport_source.routes.retain(|edge, _| source.route_board(*edge) != Some(board));
-            }
             let evaluation = {
                 #[cfg(not(target_arch = "wasm32"))]
                 let _profile = super::viewport_benchmark::scope("joinery_evaluate");
@@ -891,7 +881,7 @@ mod tests {
         for offset in [0.001, 0.003, 0.007] {
             latest = source.clone();
             latest.move_selection(&BTreeSet::from([members[0]]), DVec3::X * offset).unwrap();
-            cache.update_render(&latest, true, &ctx, &app.doc.display, &app.shadow_cache, None, false);
+            cache.update_render(&latest, true, &ctx, &app.doc.display, &app.shadow_cache, None);
             assert!(cache.pending.is_some());
             assert!(cache.result.is_some(), "the last complete preview stays drawable");
         }
@@ -901,11 +891,11 @@ mod tests {
         assert_eq!(cache.result.as_ref().unwrap().model, latest.evaluate_joinery().model);
         assert!(cache.revision > initial_revision);
         let revision = cache.revision;
-        cache.update_render(&latest, true, &ctx, &app.doc.display, &app.shadow_cache, None, false);
+        cache.update_render(&latest, true, &ctx, &app.doc.display, &app.shadow_cache, None);
         assert!(cache.pending.is_none());
         assert_eq!(cache.revision, revision);
         latest.move_selection(&BTreeSet::from([members[0]]), DVec3::X * 0.01).unwrap();
-        cache.update_render(&latest, true, &ctx, &app.doc.display, &app.shadow_cache, None, false);
+        cache.update_render(&latest, true, &ctx, &app.doc.display, &app.shadow_cache, None);
         cache.update(&source);
         assert!(cache.pending.is_none());
         assert_eq!(cache.source.as_ref(), Some(&source));

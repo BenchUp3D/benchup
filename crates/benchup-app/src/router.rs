@@ -1016,7 +1016,8 @@ mod tests {
         let mut app = BenchUpApp::with_document(doc, None, true);
         assert!(app.doc.model.enter_object(board) || app.doc.model.edit_context == Some(board));
         app.selected.insert(edge);
-        app.set_tool(Tool::Router);
+        // Router opens the edge in Select/Properties before applying settings.
+        app.set_tool(Tool::Select);
         let ctx = egui::Context::default();
         app.load_route_edges(Target::Object(board), BTreeSet::from([edge]));
         for settings in app.router_editor.draft.values_mut() {
@@ -1053,6 +1054,11 @@ mod tests {
         app.commit_route_draft(&ctx);
         assert!(app.doc.model.routes.contains_key(&edge));
         assert_eq!(app.doc.model.vertices, stock);
+        render(&mut app);
+        let machined = app.joinery_geometry.result.as_ref().unwrap();
+        assert!(machined.errors.is_empty());
+        assert!(!machined.model.edges.contains_key(&edge), "applying routing must update the open group immediately");
+        assert!(!app.render_model.shared().routing_appearance.faces.is_empty());
         let mut reopened = BenchUpApp::with_document(app.doc.clone(), None, true);
         reopened.doc.model.edit_context = None;
         render(&mut reopened);
@@ -1060,10 +1066,28 @@ mod tests {
         assert!(machined.errors.is_empty());
         assert!(!machined.model.edges.contains_key(&edge));
         assert!(reopened.doc.model.enter_object(board));
+        let saved = reopened.doc.model.clone();
+        let history_position = reopened.doc.history.position();
+        for tool in [Tool::Select, Tool::Router, Tool::Move, Tool::Select] {
+            reopened.set_tool(tool);
+            render(&mut reopened);
+            let machined_in_scope = reopened.joinery_geometry.result.as_ref().unwrap();
+            assert!(machined_in_scope.errors.is_empty());
+            assert!(!machined_in_scope.model.edges.contains_key(&edge), "routing must stay visible inside its group with {tool:?}");
+            let (pick_model, _, _, _) = reopened.joinery_geometry.evaluated_picking(
+                &reopened.doc.model, &reopened.doc.display,
+            );
+            assert!(!pick_model.edges.contains_key(&edge), "picking must use the visible routed geometry");
+            assert!(!pick_model.routing_appearance.faces.is_empty());
+            assert_eq!(reopened.doc.model, saved);
+            assert_eq!(reopened.doc.history.position(), history_position);
+        }
+        reopened.doc.model.edit_context = None;
         render(&mut reopened);
-        let stock_in_scope = reopened.joinery_geometry.result.as_ref().unwrap();
-        assert!(stock_in_scope.model.edges.contains_key(&edge));
+        assert!(!reopened.joinery_geometry.result.as_ref().unwrap().model.edges.contains_key(&edge));
         assert!(app.doc.history.undo(&mut app.doc.model));
         assert!(app.doc.model.routes.is_empty());
+        render(&mut app);
+        assert!(app.render_model.shared().edges.contains_key(&edge));
     }
 }
