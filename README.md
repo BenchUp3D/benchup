@@ -14,7 +14,7 @@
 
 A free, open-source 3D modeling app for woodworking and furniture design, written in Rust. Plan individual boards, wood joints, and complete assemblies with exact measurements before heading to the workshop. The same editor runs as a native Windows, macOS, or Linux application and in a desktop browser through WebAssembly.
 
-The workspace includes Select, Line, Rectangle, Circle, Polygon, Freehand, Push/Pull, Scale, Offset, Move, Rotate, Paint, Tape Measure, Protractor, Dimensions, a Union flyout, Erase, and Orbit, automatic geometry snapping, filled planar faces, measured lines, full-enclosure box selection, groups and components, a right-click object menu, geometry clipboard, undo/redo, local autosave, and portable `.bup` project files, with support for legacy `.k3d` and `.ketchup` projects. It starts with an empty model. File → Import/Export adds SketchUp `.skp` import and Wavefront `.obj` export. Mobile and cloud storage are outside this version.
+The workspace includes Select, Line, Rectangle, Circle, Polygon, Freehand, Push/Pull, Scale, Offset, Move, Rotate, Paint, Tape Measure, Protractor, Dimensions, a Union flyout, Router, Erase, and Orbit, automatic geometry snapping, filled planar faces, measured lines, full-enclosure box selection, groups and components, a right-click object menu, geometry clipboard, undo/redo, local autosave, and portable `.bup` project files, with support for legacy `.k3d` and `.ketchup` projects. It starts with an empty model. File → Import/Export adds SketchUp `.skp` import and Wavefront `.obj` export. Mobile and cloud storage are outside this version.
 
 ## Woodworking features
 
@@ -22,15 +22,23 @@ Model shelves, tables, cabinets, workbenches, and other furniture with precisely
 
 ### Wood joinery
 
-Create mortise-and-tenon, half-lap, tongue-and-groove, rabbet, dovetail, and finger joints between boards, including angled connections. Adjust joint dimensions and clearance with live previews, inspect machining diagnostics and cut guides, and trim excess material past a joint while keeping the original boards editable.
+Create mortise-and-tenon, half-lap, tongue-and-groove, rabbet, dovetail, and finger joints between boards, including angled connections. Adjust joint dimensions and clearance with live previews. Dynamic joints update automatically when either board moves. Inspect machining diagnostics and cut guides, and trim excess material past a joint while keeping the original boards editable.
 
-![Finger joint between two selected boards, showing the interlocking geometry and grain-direction guides](assets/screenshots/wood-joinery.png)
+![Dovetail joint between two selected boards, with joint types, tail width, pin width, angle, and clearance controls](assets/screenshots/wood-joinery-dovetail.png)
 
-### Wood grain orientation
+### Procedural wood material
 
 Set the grain direction on groups and components and show grain-direction guides directly on the model. Review how the grain runs across each board and through the full assembly before building. Grain orientation is saved with the project and follows the parts when they rotate.
 
 In the Materials face style, parts with assigned wood stock show procedural grain and the result of their sanding and finishing steps. Set the wood color and product appearance in the material catalog, then adjust the recipe and appearance overrides in the part's inspector. Work rates and drying times affect estimates only. Explicit face colors and Color by Tag take precedence over the finish preview.
+
+![Shelving with procedural wood grain visible across the horizontal shelves and vertical boards](assets/screenshots/procedural-wood.png)
+
+### Router tool
+
+Select an edge with Router, then choose a profile in Properties to apply it immediately. Shape edges with chamfer, bevel, roundover, cove, rabbet, groove, Roman ogee, and bead profiles. Adjust the profile dimensions, change it later, or choose None to remove routing while preserving the original stock. Lines drawn on a solid face can also define routing paths. Saved routes contribute their length and work time to project estimates.
+
+![Close-up of a routed bead along a board edge, with the Bead profile selected in Properties](assets/screenshots/router-tool.png)
 
 ### Plan materials and workshop work
 

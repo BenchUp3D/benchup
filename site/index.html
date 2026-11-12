@@ -4,11 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#f7f5ee" />
-    <meta name="description" content="Free, open-source 3D woodworking and furniture design with wood joinery, grain orientation, cutting plans, and cost estimates. On desktop or in your browser." />
+    <meta name="description" content="Free, open-source 3D woodworking and furniture design with procedural wood materials, dynamic joinery, and router tools. On desktop or in your browser." />
     <meta name="robots" content="index, follow, max-image-preview:large" />
     <link rel="canonical" href="https://benchup3d.github.io/editor/" />
     <meta property="og:title" content="BenchUp — Free 3D Woodworking &amp; Furniture Design App" />
-    <meta property="og:description" content="Free, open-source 3D woodworking and furniture design with wood joinery, grain orientation, cutting plans, and cost estimates. On desktop or in your browser." />
+    <meta property="og:description" content="Free, open-source 3D woodworking and furniture design with procedural wood materials, dynamic joinery, and router tools. On desktop or in your browser." />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://benchup3d.github.io/editor/" />
     <meta property="og:site_name" content="BenchUp" />
@@ -21,7 +21,7 @@
     <meta property="og:image:alt" content="BenchUp editor showing a loft bed model, drawing tools, and model controls." />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="BenchUp — Free 3D Woodworking &amp; Furniture Design App" />
-    <meta name="twitter:description" content="Free, open-source 3D woodworking and furniture design with wood joinery, grain orientation, cutting plans, and cost estimates. On desktop or in your browser." />
+    <meta name="twitter:description" content="Free, open-source 3D woodworking and furniture design with procedural wood materials, dynamic joinery, and router tools. On desktop or in your browser." />
     <meta name="twitter:image" content="https://benchup3d.github.io/editor/assets/screenshots/benchup.jpg?v=0.7.0" />
     <meta name="twitter:image:alt" content="BenchUp editor showing a loft bed model, drawing tools, and model controls." />
     <title>BenchUp — Free 3D Woodworking &amp; Furniture Design App</title>
@@ -36,7 +36,7 @@
   "@id": "https://benchup3d.github.io/editor/#application",
   "name": "BenchUp",
   "url": "https://benchup3d.github.io/editor/",
-  "description": "Free, open-source 3D woodworking and furniture design with wood joinery, grain orientation, cutting plans, and cost estimates. On desktop or in your browser.",
+  "description": "Free, open-source 3D woodworking and furniture design with procedural wood materials, dynamic joinery, and router tools. On desktop or in your browser.",
   "applicationCategory": "DesignApplication",
   "applicationSubCategory": "3D woodworking and furniture modeling",
   "operatingSystem": "Windows, macOS, Linux, Web browser",
@@ -56,9 +56,21 @@
     },
     {
       "@type": "ImageObject",
-      "url": "https://benchup3d.github.io/editor/assets/screenshots/wood-joinery.png",
-      "width": 990,
-      "height": 699
+      "url": "https://benchup3d.github.io/editor/assets/screenshots/wood-joinery-dovetail.png",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "@type": "ImageObject",
+      "url": "https://benchup3d.github.io/editor/assets/screenshots/procedural-wood.png",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "@type": "ImageObject",
+      "url": "https://benchup3d.github.io/editor/assets/screenshots/router-tool.png",
+      "width": 1440,
+      "height": 900
     }
   ],
   "downloadUrl": "https://github.com/BenchUp3D/editor/releases/latest",
@@ -71,6 +83,8 @@
     "Groups, components, and tags",
     "Mortise-and-tenon, half-lap, tongue-and-groove, rabbet, dovetail, and finger joints with live previews",
     "Per-part wood grain orientation with visible grain-direction guides",
+    "Procedural wood materials with sanding and finishing previews",
+    "Editable router profiles including chamfer, roundover, Roman ogee, and bead",
     "Stock materials, wood types, sanding, and finishing products",
     "Cut lists, cutting plans, workshop labels, and PDF time and cost estimates",
     "Local autosave and portable .bup projects",
@@ -173,28 +187,47 @@
 
       <section class="possibilities wrap" id="woodworking" aria-labelledby="woodworking-title">
         <div class="section-intro">
-          <h2 id="woodworking-title">Every joint.<br />Every grain direction.</h2>
-          <p>Plan how the boards meet, how the grain runs, and what you need in the workshop before the first cut.</p>
+          <h2 id="woodworking-title">Every grain.<br />Every joint. Every edge.</h2>
+          <p>See the wood, fit the boards, and shape the edges before the first cut.</p>
         </div>
-        <div class="features">
-          <article>
-            <h3>Wood joinery</h3>
-            <p>Create mortise-and-tenon, half-lap, tongue-and-groove, rabbet, dovetail, and finger joints, including angled connections. Adjust dimensions and clearance with live previews, inspect machining diagnostics and cut guides, and trim excess material while keeping the original boards editable.</p>
+        <div class="woodworking-features">
+          <article class="woodworking-feature" aria-labelledby="wood-material-title">
+            <div class="woodworking-copy">
+              <h3 id="wood-material-title">Procedural wood material</h3>
+              <p>See procedural grain across your boards in the Materials face style. Assign wood stock, set the grain direction, and preview the appearance of sanding and finishing steps in the full assembly.</p>
+              <p>Adjust wood colors and product appearance in the material catalog, then fine-tune the recipe for each part. Grain orientation stays with the project and follows the boards when they rotate.</p>
+            </div>
+            <figure class="workspace-preview">
+              <img src="assets/screenshots/procedural-wood.png" alt="Shelving in BenchUp with procedural wood grain visible across horizontal shelves and vertical boards." width="1440" height="900" loading="lazy" />
+              <figcaption><span>See how the grain runs.</span><span>Procedural wood on a shelving assembly</span></figcaption>
+            </figure>
           </article>
-          <article>
-            <h3>Wood grain orientation</h3>
-            <p>Set the grain direction on groups and components and show grain-direction guides on the model. Review each board in the full assembly before building. Grain orientation stays with the project and follows the parts when they rotate.</p>
+          <article class="woodworking-feature" aria-labelledby="joinery-title">
+            <div class="woodworking-copy">
+              <h3 id="joinery-title">Wood joinery</h3>
+              <p>Create mortise-and-tenon, half-lap, tongue-and-groove, rabbet, dovetail, and finger joints, including angled connections. Adjust dimensions and clearance with live previews. Dynamic joints update automatically when either board moves.</p>
+              <p>Inspect machining diagnostics and cut guides, and trim excess material while keeping the original boards editable.</p>
+            </div>
+            <figure class="workspace-preview">
+              <img src="assets/screenshots/wood-joinery-dovetail.png" alt="Dovetail joint between two selected boards in BenchUp, with controls for tail width, minimum pin width, angle, and clearance." width="1440" height="900" loading="lazy" />
+              <figcaption><span>Fit the boards together.</span><span>Dovetail joinery with adjustable dimensions and clearance</span></figcaption>
+            </figure>
           </article>
-          <article>
-            <h3>Prepare for the workshop</h3>
-            <p>Assign stock materials and wood types, configure sanding and finishing products, and prepare cut lists, cutting plans, and workshop labels. Export cutting plans and time and cost estimates to PDF to bring the design to the bench.</p>
+          <article class="woodworking-feature" aria-labelledby="router-title">
+            <div class="woodworking-copy">
+              <h3 id="router-title">Router tool</h3>
+              <p>Select an edge, then choose a profile in Properties to apply it immediately. Shape it with a chamfer, bevel, roundover, cove, rabbet, groove, Roman ogee, or bead, and adjust the profile dimensions to suit the part.</p>
+              <p>Change the profile later or choose None to remove routing while preserving the original stock. Lines drawn on a solid face can also become routing paths. Saved routes add their length and work time to your project estimates.</p>
+            </div>
+            <figure class="workspace-preview">
+              <img src="assets/screenshots/router-tool.png" alt="Close-up of a routed bead along a board edge in BenchUp, with the Bead profile selected in Properties." width="1440" height="900" loading="lazy" />
+              <figcaption><span>Shape the finishing details.</span><span>Bead profile applied along a board edge</span></figcaption>
+            </figure>
           </article>
         </div>
-        <div class="woodworking-previews">
-          <figure class="workspace-preview">
-            <img src="assets/screenshots/wood-joinery.png" alt="Close-up of a finger joint between two selected boards, showing interlocking geometry and grain-direction guides." width="990" height="699" loading="lazy" />
-            <figcaption><span>Inspect the joint up close.</span><span>Finger joint with grain-direction guides</span></figcaption>
-          </figure>
+        <div class="workshop-planning">
+          <h3>Prepare for the workshop</h3>
+          <p>Assign stock materials and wood types, configure sanding and finishing products, and prepare cut lists, cutting plans, and workshop labels. Export cutting plans and time and cost estimates to PDF to bring the design to the bench.</p>
         </div>
         <p class="download-note">Start with <a href="play/">the browser editor</a> or <a href="#downloads">download the desktop app</a>. Read the <a href="https://github.com/BenchUp3D/editor/tree/main/docs">user guide</a> for modeling instructions and supported workflows.</p>
       </section>
