@@ -3029,13 +3029,6 @@ impl BenchUpApp {
                                 ui.close();
                             }
                             ui.separator();
-                            let editable = !self.selected.is_empty()
-                                && !self.doc.model.selection_protected(&self.selected);
-                            if ui.add_enabled(editable, Self::menu_item_button(ui, tr!("app.clean_aligned_vertices"), Some("clean_aligned"))).clicked() {
-                                self.context_action(&ctx, ContextAction::CleanAligned);
-                                ui.close();
-                            }
-                            ui.separator();
                             if ui.add_enabled(!self.project.blocked(), Self::menu_item_button(ui, tr!("app.generate_time_cost_estimates"), Some("export_pdf")))
                                 .on_hover_text(tr!("app.export_time_and_cost_estimates_as_pdf"))
                                 .clicked() {

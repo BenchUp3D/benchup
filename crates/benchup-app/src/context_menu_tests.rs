@@ -125,6 +125,7 @@ fn outliner_and_viewport_offer_the_same_object_commands() {
         "Paste",
         "Paste in Place",
         "Delete",
+        "Clean aligned vertices",
         "Hide",
         "Lock",
     ];
@@ -373,4 +374,32 @@ fn clean_aligned_vertices_is_one_undoable_shared_menu_action() {
     assert_eq!(h.app.doc.model,before);
     h.app.undo(&h.ctx,true);
     assert_eq!(h.app.doc.model,cleaned);
+}
+
+#[test]
+fn clean_aligned_vertices_handles_multiple_groups_and_edges_in_one_undo_step() {
+    let mut h = Harness::new();
+    let mut run = Model::default();
+    let middle = DVec3::new(1., 0.000_000_05, 0.);
+    run.add_edge(DVec3::ZERO, middle).unwrap();
+    run.add_edge(middle, DVec3::X * 2.).unwrap();
+    let mut selected = BTreeSet::new();
+    for (i, name) in ["First run", "Second run"].into_iter().enumerate() {
+        let edges = h.app.doc.model.paste_entities(&run, DVec3::Y * i as f64 * 2.);
+        let group = h.app.doc.model.make_object(&edges, false, name).unwrap();
+        selected.insert(group);
+    }
+    selected.extend(h.app.doc.model.paste_entities(&run, DVec3::Y * 4.));
+    h.app.selected = selected;
+    let before = h.app.doc.model.clone();
+
+    h.app.context_action(&h.ctx, context_menu::ContextAction::CleanAligned);
+    assert_eq!(h.app.doc.model.edges.len(), 3);
+    assert_eq!(h.app.selected.len(), 3);
+    assert_eq!(h.app.doc.history.undo_label(), Some("Clean aligned vertices"));
+    let cleaned = h.app.doc.model.clone();
+    h.app.undo(&h.ctx, false);
+    assert_eq!(h.app.doc.model, before);
+    h.app.undo(&h.ctx, true);
+    assert_eq!(h.app.doc.model, cleaned);
 }
