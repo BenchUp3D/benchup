@@ -452,7 +452,7 @@ dependencies = [
 
 [[package]]
 name = "benchup-cli"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "benchup-core",
  "benchup-tools",
@@ -493,7 +493,7 @@ dependencies = [
 
 [[package]]
 name = "benchup-tools"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "benchup-core",
  "flate2",
