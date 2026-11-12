@@ -2744,11 +2744,40 @@ impl BenchUpApp {
     }
 
     fn app_bar_menu(ui: &mut egui::Ui, title: &str, content: impl FnOnce(&mut egui::Ui)) {
-        // MenuConfig carries the same padding into nested submenus.
-        // Override the stroke for every state, including hover and an open menu.
-        egui::menu::MenuButton::from_button(egui::Button::new(title).stroke(Stroke::NONE))
-            .config(egui::menu::MenuConfig::new().style(Self::menu_style))
-            .ui(ui, content);
+        let response = ui.add(egui::Button::new(title).stroke(Stroke::NONE));
+        let popup_id = egui::Popup::default_response_id(&response);
+        let active_id = ui.scope_id().with("main_menu_active_popup");
+        let hover_id = response.id.with("main_menu_hover_started");
+        let active = ui.data(|data| data.get_temp::<egui::Id>(active_id));
+        let can_switch = active.is_some_and(|id| {
+            id != popup_id && egui::Popup::is_id_open(ui.ctx(), id)
+        });
+        if can_switch && response.hovered() && !response.clicked() {
+            let now = ui.input(|input| input.time);
+            let started = ui.data_mut(|data| {
+                *data.get_temp_mut_or_insert_with(hover_id, || now)
+            });
+            let remaining = 0.5 - (now - started);
+            if remaining <= 0.0 {
+                egui::Popup::open_id(ui.ctx(), popup_id);
+            } else {
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(remaining));
+            }
+        } else {
+            ui.data_mut(|data| data.remove::<f64>(hover_id));
+        }
+
+        // Carry the same padding and behavior into nested submenus.
+        let config = egui::menu::MenuConfig::new().style(Self::menu_style);
+        let inner = egui::Popup::menu(&response)
+            .close_behavior(config.close_behavior)
+            .style(config.style.clone())
+            .info(egui::UiStackInfo::new(egui::UiKind::Menu)
+                .with_tag_value(egui::menu::MenuConfig::MENU_CONFIG_TAG, config))
+            .show(content);
+        if inner.is_some() {
+            ui.data_mut(|data| data.insert_temp(active_id, popup_id));
+        }
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
