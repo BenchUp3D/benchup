@@ -923,3 +923,20 @@ fn the_scene_shows_materials_inherited_from_groups() {
     assert_eq!(entry["material"]["name"], "MDF");
     assert_eq!(entry["material"]["inherited_from"], group);
 }
+
+#[test]
+fn small_conveniences_from_the_last_round() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let side = board(&mut model, &mut env, "Side", [0., 0., 0.], [18., 300., 900.]);
+    let shelf = board(&mut model, &mut env, "Shelf", [9., 0., 400.], [500., 300., 18.]);
+    let joint = ok(&mut model, &mut env, "add_joint", json!({"a": side, "b": shelf, "kind": "tongue_groove"})).joints[0];
+    // A single "id" works where a list of ids is expected.
+    ok(&mut model, &mut env, "flip_joint", json!({"id": joint}));
+    let check = ok(&mut model, &mut env, "check_model", json!({})).result;
+    assert_eq!(check["passed"], true, "{check}");
+    // A drawn face comes back with where it is.
+    let drawn = ok(&mut model, &mut env, "draw_polyline", json!({"points_mm": [[0, 600, 0], [100, 600, 0], [100, 700, 0], [0, 700, 0]], "close": true}));
+    assert_eq!(drawn.result["faces"][0]["center_mm"], json!([50.0, 650.0, 0.0]));
+    let check = ok(&mut model, &mut env, "check_model", json!({})).result;
+    assert_eq!(check["passed"], true, "loose geometry is only info: {check}");
+}

@@ -237,11 +237,11 @@ pub fn definitions() -> Vec<ToolDefinition> {
         def("get_scene", "Return the whole scene summary again (objects, selection, stock, joints). Lengths are in mm.", json!({}), &[]),
         def("find_objects", "Search objects (groups and components) when the scene summary was truncated. query matches part of a name, tag or material name, a kind (\"group\" or \"component\") or an exact id; omit it or pass \"\" to list every object. Dimensions and texts are not objects.",
             json!({"query": text(), "limit": {"type": "integer", "minimum": 1, "maximum": 100}}), &[]),
-        def("get_object", "Details of one entity, including its faces (id, normal, center, area) for push_pull. Face normals point out of the part; a positive push_pull distance moves a face outward.",
+        def("get_object", "Details of one entity, including its faces (id, normal, facing, center_mm, area_mm2) for push_pull. Face normals point out of the part; a positive push_pull distance moves a face outward.",
             json!({"id": id()}), &["id"]),
         def("get_selection", "Entities currently selected in the editor.", json!({}), &[]),
         def("list_stock_materials", "Stock materials that can be assigned to boards (ids for material_id). A new project has none: add them with create_stock_material.", json!({}), &[]),
-        def("check_model", "Look for problems before building: boards that overlap without a joint, joints that cannot be cut or lost a board, open solids, loose geometry, boards without material. Run it after a change.", json!({}), &[]),
+        def("check_model", "Look for problems before building: boards passing through others or overlapping without a joint, joints that cannot be cut, look reversed or lost a board, thickness that does not match the material, open solids, loose geometry, boards without material. passed is true when there are no errors or warnings (ok only says the check ran). Run it after a change.", json!({}), &[]),
         def("get_cut_list", "Cut list: boards grouped by material and blank size (length along the grain x width x thickness, mm) with quantities, and area totals per material.", json!({}), &[]),
         def("get_guide", "Conventions, workflow and woodworking recipes for building furniture with these tools. Read it before the first change.", json!({}), &[]),
         def("create_stock_material", "Add a stock material (sheet or board) to this project and return its id for material_id. Sizes in mm; length runs along the grain.",
@@ -395,7 +395,21 @@ struct IdArg {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct IdsArg {
+    /// `"id": 5` is accepted too: agents guess the singular for one id.
+    #[serde(alias = "id", deserialize_with = "one_or_many")]
     ids: Vec<u64>,
+}
+fn one_or_many<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<u64>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(u64),
+        Many(Vec<u64>),
+    }
+    Ok(match OneOrMany::deserialize(deserializer)? {
+        OneOrMany::One(id) => vec![id],
+        OneOrMany::Many(ids) => ids,
+    })
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -733,6 +747,9 @@ fn draw_polyline(model: &mut Model, a: PolylineArgs) -> Res {
         done.extra.insert("face_id".into(), json!(face));
     }
     done.extra.insert("face_ids".into(), json!(faces));
+    // Where each new face is, so a split face's pieces can be told apart.
+    let detail: Vec<Value> = faces.iter().filter_map(|f| scene::face_entry(model, *f)).collect();
+    done.extra.insert("faces".into(), Value::Array(detail));
     Ok(done)
 }
 
@@ -1205,13 +1222,26 @@ fn add_joint(model: &mut Model, a: JointArgs) -> Res {
         operation: ConnectionOperation::Joinery(settings.clone()),
     })?;
     if let Some(error) = scene::joint_errors(model).remove(&joint) {
+        // Only joints whose shared region touches this one's can be the cause.
+        let region = |pair: [u64; 2]| -> Option<(DVec3, DVec3)> {
+            let (a, b) = (model.selection_bounds(&BTreeSet::from([pair[0]]))?, model.selection_bounds(&BTreeSet::from([pair[1]]))?);
+            Some((a.0.max(b.0), a.1.min(b.1)))
+        };
+        let near = |x: (DVec3, DVec3), y: (DVec3, DVec3)| (y.0 - x.1).max_element() <= 2.0e-3 && (x.0 - y.1).max_element() <= 2.0e-3;
+        let mine = region(members);
         let others: Vec<String> = model
             .connections
             .iter()
             .filter(|(id, c)| **id != joint && c.members.iter().any(|m| members.contains(m)))
+            .filter(|(_, c)| matches!((mine, region(c.members)), (Some(x), Some(y)) if near(x, y)))
             .map(|(id, c)| format!("{id} ({} between {} and {})", scene::joint_kind(c), c.members[0], c.members[1]))
             .collect();
-        let hint = if others.is_empty() {
+        let shaped = members.iter().any(|m| model.expand_entities(&BTreeSet::from([*m])).iter().filter(|e| model.faces.contains_key(e)).count() > 6);
+        let hint = if others.is_empty() && shaped {
+            "No other joint touches this one; the board's own geometry is the problem: a shaped board with many small faces, \
+             or vertices very close to the joint's planes. Change the number of segments of a curve (try 24 or 48), or move the joint a few millimetres."
+                .to_owned()
+        } else if others.is_empty() {
             format!("Orientations that fit: {}. Check the overlap and params.", orientations(model, &settings))
         } else {
             format!(

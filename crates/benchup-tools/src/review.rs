@@ -248,6 +248,7 @@ pub fn check(model: &Model) -> Value {
     let joint_errors = scene::joint_errors(model);
     let wood_joints = model.connections.values().filter(|c| matches!(c.operation, ConnectionOperation::Joinery(_))).count();
     let mut out = json!({
+        "passed": errors == 0 && warnings == 0,
         "boards": all.len(), "errors": errors, "warnings": warnings,
         "joints": {"total": wood_joints, "ok": wood_joints - joint_errors.len().min(wood_joints), "failing": joint_errors.keys().collect::<Vec<_>>()},
         "issues": issues,

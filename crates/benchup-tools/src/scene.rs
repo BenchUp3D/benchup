@@ -350,6 +350,11 @@ fn ray_hits(origin: DVec3, direction: DVec3, [a, b, c]: &[DVec3; 3]) -> bool {
     e2.dot(q) / det > 1e-9
 }
 
+/// A face as listed by get_object: id, normal, facing, center and area.
+pub fn face_entry(model: &Model, id: u64) -> Option<Value> {
+    face_json(model, id)
+}
+
 fn face_json(model: &Model, id: u64) -> Option<Value> {
     let face = model.faces.get(&id)?;
     let n = faces::plane(model, &face.vertices)?.normal * outward_sign(model, id);
