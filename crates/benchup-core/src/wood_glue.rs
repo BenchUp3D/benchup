@@ -359,20 +359,36 @@ impl Model {
         }
     }
 
-    /// Area of the coated faces in square metres, including both coated sides
-    /// of a joint. The same patch on a face contributes only once.
+    /// Area of the coated surfaces in square metres. Coplanar matching
+    /// coverage contributes once, even when both sides of a joint are coated.
     pub fn wood_glue_area(&self) -> f64 {
-        self.wood_glue
-            .keys()
-            .filter_map(|id| self.faces.get(id))
-            .map(|face| {
-                let (_, coated) = self.glue_mesh(face.id, &self.face_triangles(face));
-                coated
-                    .iter()
-                    .map(|[a, b, c]| (*b - *a).cross(*c - *a).length() * 0.5)
-                    .sum::<f64>()
-            })
-            .sum()
+        let mut surfaces: Vec<(faces::Plane, Vec<Vec<DVec2>>)> = Vec::new();
+        let mut area = 0.;
+        for id in self.wood_glue.keys() {
+            let Some(face) = self.faces.get(id) else { continue };
+            let Some(plane) = faces::plane(self, &face.vertices) else { continue };
+            let (_, coated) = self.glue_mesh(*id, &self.face_triangles(face));
+            for triangle in coated {
+                let existing = surfaces.iter().position(|(other, _)| {
+                    plane.normal.cross(other.normal).length() <= 1e-7
+                        && triangle.iter().all(|p| {
+                            (*p - other.origin).dot(other.normal).abs() <= CONTACT
+                        })
+                });
+                let index = existing.unwrap_or_else(|| {
+                    surfaces.push((plane, Vec::new()));
+                    surfaces.len() - 1
+                });
+                let (plane, masks) = &mut surfaces[index];
+                let polygon = ccw(triangle.map(|p| plane.project(p)).to_vec());
+                // Subtract previously counted coverage, rather than halving
+                // the total: unmatched portions still contribute in full.
+                let additions = partition(polygon, masks, |_| {});
+                area += additions.iter().map(|p| signed_area(p)).sum::<f64>();
+                masks.extend(additions);
+            }
+        }
+        area
     }
 
     pub fn glue_contacts(&mut self, selection: &BTreeSet<u64>) -> usize {

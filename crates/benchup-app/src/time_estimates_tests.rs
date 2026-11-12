@@ -1665,3 +1665,19 @@ fn router_section_shows_profile_length_and_work_with_zero_finishing_area() {
     assert!(app.doc.history.is_empty());
     assert_eq!(crate::icons::section_icon(ROUTER_SECTION_KEY), "router");
 }
+
+#[test]
+fn wood_glue_estimate_counts_touching_coated_faces_once() {
+    let mut stock = Model::default();
+    let face = rectangle(&mut stock, DVec3::ZERO);
+    assert!(stock.glue_face(face));
+    let mut model = Model::default();
+    model.paste_entities(&stock, DVec3::ZERO);
+    model.paste_entities(&stock, DVec3::X);
+    let mut app = BenchUpApp::with_document(
+        benchup_core::Document { model, ..Default::default() }, None, true,
+    );
+    // Each face is 6 m², with a 3 m² matching patch between them.
+    let report = app.time_estimate_report();
+    assert!(report.notes.iter().any(|note| note == "Wood glue coverage (whole project): 9.0000 m²"));
+}

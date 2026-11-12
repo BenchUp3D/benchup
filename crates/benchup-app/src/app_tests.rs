@@ -6891,7 +6891,7 @@ fn wood_glue_pointer_clicks_and_automatic_selection_record_one_edit_each() {
     };
     apply_automatic(&mut h);
     assert_eq!(h.app.tool, Tool::Select);
-    assert!((h.app.doc.model.wood_glue_area() - 1.5).abs() < 1e-9);
+    assert!((h.app.doc.model.wood_glue_area() - 1.0).abs() < 1e-9);
     apply_automatic(&mut h);
     assert_eq!(h.app.doc.history.position(), initial + 4);
     // Clicking a face with automatic partial coverage also toggles it off,
@@ -6902,7 +6902,7 @@ fn wood_glue_pointer_clicks_and_automatic_selection_record_one_edit_each() {
     assert_eq!(h.app.doc.model.wood_glue_area(), 1.);
     assert_eq!(h.app.doc.history.position(), initial + 5);
     h.app.undo(&h.ctx, false);
-    assert!((h.app.doc.model.wood_glue_area() - 1.5).abs() < 1e-9);
+    assert!((h.app.doc.model.wood_glue_area() - 1.0).abs() < 1e-9);
     h.app.undo(&h.ctx, false);
     assert_eq!(h.app.doc.model.wood_glue_area(), 1.);
 }

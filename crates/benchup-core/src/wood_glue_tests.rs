@@ -58,13 +58,13 @@ fn wood_glue_contacts_clip_partial_overlaps_and_holes_and_union_repeated_patches
     let (b, face_b) = piece(&mut model, rectangle(0.5, 0., 2., 2., 0.), None, 0.);
     let (c, _) = piece(&mut model, rectangle(1., 1., 2., 2., 0.), None, 0.);
     assert_eq!(model.glue_contacts(&BTreeSet::from([a, b])), 2);
-    area(&model, 5.);
+    area(&model, 2.5);
     let first = model.clone();
     assert_eq!(model.glue_contacts(&BTreeSet::from([face_a, face_b])), 0);
     assert_eq!(model, first);
     // c overlaps the existing patch on a, but only c gains new coverage.
     assert_eq!(model.glue_contacts(&BTreeSet::from([a, c])), 1);
-    area(&model, 5.875);
+    area(&model, 2.5);
     assert_eq!(model.glue_contacts(&BTreeSet::from([a, c])), 0);
 }
 
@@ -87,9 +87,9 @@ fn wood_glue_ignores_air_gaps_edge_contacts_and_overlapping_solids() {
         .move_selection(&selected, DVec3::new(19., -38., 57.))
         .unwrap();
     assert_eq!(model.glue_contacts(&selected), 2);
-    area(&model, 1.);
+    area(&model, 0.5);
     model.scale_selection(&selected, DVec3::ZERO, 2.).unwrap();
-    area(&model, 4.);
+    area(&model, 2.);
 }
 
 #[test]
@@ -151,4 +151,20 @@ fn wood_glue_survives_boolean_replacement_only_where_the_original_surface_remain
         .unwrap();
     area(&model, 1.);
     model.validate().unwrap();
+}
+
+#[test]
+fn wood_glue_area_unions_matching_coverage_but_keeps_unmatched_and_separate_surfaces() {
+    let mut model = Model::default();
+    let (_, a) = piece(&mut model, rectangle(0., 0., 2., 1., 0.), None, 0.);
+    let (_, b) = piece(&mut model, rectangle(1., 0., 2., 1., 0.), None, 0.);
+    assert!(model.glue_face(a));
+    assert!(model.glue_face(b));
+    area(&model, 3.);
+    let (_, c) = piece(&mut model, rectangle(0., 0., 2., 1., 0.001), None, 0.);
+    assert!(model.glue_face(c));
+    area(&model, 5.);
+    let (_, d) = piece(&mut model, rectangle(0., 0., 2., 1., 0.), None, 0.);
+    assert!(model.glue_face(d));
+    area(&model, 5.);
 }
