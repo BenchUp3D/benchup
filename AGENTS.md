@@ -9,6 +9,10 @@ Every future user-facing option, setting, tool choice, and expandable section th
 - Save changes through `persist_inspector_changes` so preferences survive immediate reloads, without requiring a model edit or waiting for framework autosave.
 - Add regression coverage for newly persisted controls, defaults, and restoration where appropriate, including changes saved without a model edit.
 
+# Website URLs
+
+Keep all public website URLs under `https://benchup3d.github.io/editor/`. Do not synchronize README or website links with the checkout repository, GitHub Pages configuration, or custom domains.
+
 # Release workflow
 
 Whenever the user asks to deploy, treat it as a request to push a new version tag and follow this release workflow. Unless the user specifies a version or bump type, increment the patch version.

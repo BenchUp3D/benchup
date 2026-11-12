@@ -44,7 +44,6 @@ jobs:
         run: node --test scripts/test_space_mouse_web.mjs
 
       - name: Configure GitHub Pages
-        id: pages
         uses: actions/configure-pages@v5
 
       - name: Download browser app from the completed release run
@@ -94,11 +93,9 @@ jobs:
         run: trunk build --release --locked --dist dist/site/play --public-url ./
 
       - name: Stage landing page and discovery files
-        env:
-          PAGES_BASE_URL: ${{ steps.pages.outputs.base_url }}
         run: |
           python3 -m unittest discover -s scripts -p 'test_stage_site.py'
-          python3 scripts/stage_site.py --base-url "$PAGES_BASE_URL"
+          python3 scripts/stage_site.py
           test -f dist/site/index.html
           test -f dist/site/sitemap.xml
           test -f dist/site/llms.txt

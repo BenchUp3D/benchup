@@ -1,59 +1,38 @@
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 from stage_site import DEFAULT_URL, FILES, stage
 
 
 class StageSiteTests(unittest.TestCase):
-    def test_discovery_files_and_application_urls_follow_pages_url(self):
+    def test_staging_preserves_links_regardless_of_repository_and_pages_configuration(self):
         source = Path(__file__).resolve().parents[1] / 'site'
-        for base in (DEFAULT_URL, 'https://example.org/', 'https://example.org/woodworking'):
-            with self.subTest(base=base), tempfile.TemporaryDirectory() as directory:
-                target = Path(directory)
-                (target / 'play').mkdir()
-                (target / 'play/index.html').write_text('existing editor')
-                stage(source, target, base)
-                url = base.rstrip('/') + '/'
-                for name in FILES:
-                    self.assertTrue((target / name).is_file())
-                page = (target / 'index.html').read_text()
-                data = json.loads(page.split('<script type="application/ld+json">')[1].split('</script>')[0])
-                self.assertEqual(data['url'], url)
-                self.assertEqual(data['offers']['price'], '0')
-                self.assertIn(f'href="{url}"', page)
-                locations = ET.parse(target / 'sitemap.xml').findall('{*}url/{*}loc')
-                self.assertEqual([node.text for node in locations], [url])
-                self.assertIn(url + 'sitemap.xml', (target / 'robots.txt').read_text())
-                self.assertIn(f'({url})', (target / 'llms.txt').read_text())
-                self.assertTrue((target / 'assets/screenshots/benchup.png').is_file())
-                self.assertEqual((target / 'play/index.html').read_text(), 'existing editor')
-                if base != DEFAULT_URL:
-                    for name in FILES:
-                        self.assertNotIn(DEFAULT_URL, (target / name).read_text())
-
-    def test_fork_links_use_the_building_repository(self):
-        source = Path(__file__).resolve().parents[1] / 'site'
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
+            'GITHUB_REPOSITORY': 'someone/wood-editor',
+            'PAGES_BASE_URL': 'https://fork.example.org/',
+        }):
             target = Path(directory)
-            stage(source, target, 'https://fork.example.org/', 'someone/wood-editor')
+            (target / 'play').mkdir()
+            (target / 'play/index.html').write_text('existing editor')
+            stage(source, target)
             for name in FILES:
-                self.assertNotIn('https://github.com/BenchUp3D/editor', (target / name).read_text())
+                self.assertEqual((target / name).read_bytes(), (source / name).read_bytes())
             page = (target / 'index.html').read_text()
-            self.assertIn('https://github.com/someone/wood-editor/releases/latest', page)
-            self.assertIn('https://github.com/someone/wood-editor/blob/main/LICENSE', page)
-            self.assertIn('https://fork.example.org/assets/screenshots/benchup.jpg', page)
+            data = json.loads(page.split('<script type="application/ld+json">')[1].split('</script>')[0])
+            self.assertEqual(data['url'], DEFAULT_URL)
+            self.assertIn(f'href="{DEFAULT_URL}"', page)
+            self.assertIn('https://github.com/BenchUp3D/editor/releases/latest', page)
+            locations = ET.parse(target / 'sitemap.xml').findall('{*}url/{*}loc')
+            self.assertEqual([node.text for node in locations], [DEFAULT_URL])
+            self.assertIn(DEFAULT_URL + 'sitemap.xml', (target / 'robots.txt').read_text())
+            self.assertIn(f'({DEFAULT_URL})', (target / 'llms.txt').read_text())
             self.assertTrue((target / 'assets/screenshots/benchup.jpg').is_file())
-
-    def test_reject_invalid_public_urls(self):
-        for url in ('http://example.org', 'https://', 'https://user:secret@example.org',
-                    'https://example.org/?a=b', 'https://example.org/#fragment',
-                    'https://example.org/\"invalid'):
-            with self.subTest(url=url), tempfile.TemporaryDirectory() as directory:
-                with self.assertRaises(ValueError):
-                    stage(Path('site'), Path(directory), url)
+            self.assertEqual((target / 'play/index.html').read_text(), 'existing editor')
 
 
 if __name__ == '__main__':

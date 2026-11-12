@@ -317,18 +317,17 @@ To enable publishing for `BenchUp3D/editor`:
    either workflow.
 3. After the deployment succeeds, the landing page is at
    <https://benchup3d.github.io/editor/> and its **Try in browser** links open
-   <https://benchup3d.github.io/editor/play/>. The workflow's environment link shows
-   the actual URL if a custom domain is configured.
+   <https://benchup3d.github.io/editor/play/>.
 
-All local page and editor asset links are relative, so the same package supports
-the repository path or a custom domain. GitHub Pages supplies HTTPS. The editor
+Local page and editor asset links are relative. Public website URLs always use
+`https://benchup3d.github.io/editor/`. GitHub Pages supplies HTTPS. The editor
 uses browser-local autosave; visitors should download `.bup` projects they
 want to keep. GitHub Pages is not cloud model storage.
 
 The landing page includes a canonical URL, Open Graph image metadata, and a
-large-image Twitter/X card using the editor screenshot. During deployment,
-the workflow sets these absolute URLs from the GitHub Pages configuration,
-including a configured custom domain. Social previews require the deployed
+large-image Twitter/X card using the editor screenshot. These absolute URLs stay on
+`https://benchup3d.github.io/editor/` regardless of the deployment repository or
+Pages configuration. Social previews require the deployed
 public HTTPS page and image; the local preview URL cannot be fetched by social
 networks.
 
@@ -501,13 +500,10 @@ to `owner/repository` at build time to select an explicit feed. The fork must
 publish its own compatible installer and update assets through the release
 workflow. Already installed upstream binaries retain their original update feed.
 
-Forks use their own GitHub repository for website source, documentation, license,
-and release links. Pages resolves these links from `GITHUB_REPOSITORY` during
-staging. Enable Actions in a fork and run **Synchronize repository links** once
-(or push a README change) to update the README links; later README changes on
-the default branch synchronize automatically. Set the repository variable
-`PAGES_BASE_URL` when using a custom Pages domain. The fork must enable Pages
-and publish its own releases before its browser and download links are available.
+README and website links are maintained explicitly. No workflow synchronizes
+them with the checkout repository or Pages configuration. Public website URLs
+always remain under `https://benchup3d.github.io/editor/`, including in forks.
+
 
 
 ### BenchUp identity migration
