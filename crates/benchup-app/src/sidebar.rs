@@ -22,6 +22,28 @@ const ORDER_PREFERENCE_KEY: &str = "benchup.inspector-order.v1";
 const PREFERENCE_KEY: &str = "benchup.inspector.v1";
 const OUTLINER_SEARCH_ID: &str = "outliner_search";
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) enum OrbitOrigin {
+    #[default]
+    VisibleModel,
+    Selection,
+    World,
+    View,
+}
+
+impl OrbitOrigin {
+    pub(super) const ALL: [Self; 4] = [Self::VisibleModel, Self::Selection, Self::World, Self::View];
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::VisibleModel => "Visible model center",
+            Self::Selection => "Selection center",
+            Self::World => "World origin",
+            Self::View => "View center",
+        }
+    }
+}
+
 // Persist the whole settings object: new DisplaySettings fields automatically
 // participate, while serde defaults keep older preferences compatible.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -43,6 +65,7 @@ pub(super) struct InspectorPreferences {
     paint_color: [u8; 3],
     paint_target: PaintTarget,
     tools: ToolPreferences,
+    orbit_origin: OrbitOrigin,
     snapping: Option<SnappingPreferences>,
     cutting_plan: CuttingPlanPreferences,
     time_estimates: time_estimates::Settings,
@@ -83,6 +106,7 @@ impl Default for InspectorPreferences {
             paint_color: [195, 96, 67],
             paint_target: PaintTarget::default(),
             tools: ToolPreferences::default(),
+            orbit_origin: OrbitOrigin::default(),
             snapping: None,
             cutting_plan: CuttingPlanPreferences::default(),
             time_estimates: Default::default(),
@@ -678,6 +702,7 @@ impl BenchUpApp {
         self.general_settings.normalize();
         benchup_core::i18n::set_language(&self.general_settings.language);
         preferences.tools.restore(self);
+        self.orbit_origin = preferences.orbit_origin;
         self.project.recent = preferences.recent_projects.clone();
         self.project.recent.truncate(10);
         self.project.import_format =
@@ -798,6 +823,7 @@ impl BenchUpApp {
             paint_color: self.paint_color,
             paint_target: self.paint_target,
             tools: ToolPreferences::capture(self),
+            orbit_origin: self.orbit_origin,
             snapping: Some(SnappingPreferences {
                 geometry: true,
                 edges: self.doc.snap_to_geometry && self.snap_to_edge,
@@ -950,6 +976,26 @@ pub(super) fn save_order(
 
 #[cfg(test)]
 mod preference_tests {
+    #[test]
+    fn orbit_origin_defaults_and_saves_without_model_edit() {
+        let legacy: InspectorPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.orbit_origin, OrbitOrigin::VisibleModel);
+        let ctx = egui::Context::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        let mut storage = SavedPreferences::default();
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        for origin in OrbitOrigin::ALL.into_iter().rev() {
+            storage.flushed = false;
+            app.orbit_origin = origin;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+            assert_eq!(restored.orbit_origin, origin);
+        }
+    }
+
     use super::*;
 
     #[test]

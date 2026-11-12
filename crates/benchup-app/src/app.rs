@@ -409,6 +409,7 @@ pub struct BenchUpApp {
     paint_target: PaintTarget,
     gesture: Option<Gesture>,
     section_drag: Option<section_gizmo::SectionDrag>,
+    orbit_origin: sidebar::OrbitOrigin,
     drawing_orbit_down: bool,
     drawing_orbit_pivot: Option<DVec3>,
     viewport_pointer: Option<Pos2>,
@@ -596,6 +597,7 @@ impl BenchUpApp {
             paint_target: PaintTarget::default(),
             gesture: None,
             section_drag: None,
+            orbit_origin: Default::default(),
             drawing_orbit_down: false,
             drawing_orbit_pivot: None,
             viewport_pointer: None,
@@ -4428,6 +4430,18 @@ impl BenchUpApp {
         self.line_start.or(self.grain_anchor.as_ref().map(|anchor| anchor.point))
     }
     fn orbit_center(&mut self) -> DVec3 {
+        match self.orbit_origin {
+            sidebar::OrbitOrigin::World => return DVec3::ZERO,
+            sidebar::OrbitOrigin::View => return self.doc.camera.target,
+            sidebar::OrbitOrigin::Selection => {
+                if let Some((lo, hi)) = self.doc.model.selection_bounds(&self.selected) {
+                    return (lo + hi) * 0.5;
+                }
+                // An empty selection falls back to the visible model center.
+            }
+            sidebar::OrbitOrigin::VisibleModel => {}
+        }
+
         // Match the renderer's inherited object/tag visibility, including the
         // options that reveal hidden objects and geometry. Prepare it once at
         // the start of an orbit; keep the pivot fixed throughout the gesture.

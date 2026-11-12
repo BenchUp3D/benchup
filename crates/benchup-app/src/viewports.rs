@@ -778,6 +778,29 @@ impl BenchUpApp {
             {
                 activate = Some(pane.selected);
             }
+            if self.tool == Tool::Orbit {
+                egui::Area::new(egui::Id::unique(("orbit-origin-selector", pane.id)))
+                    .order(egui::Order::Foreground)
+                    .pivot(Align2::RIGHT_TOP)
+                    .fixed_pos(rect.right_top() + egui::vec2(-8., 8.))
+                    .movable(false)
+                    .show(&ctx, |ui| {
+                        egui::Frame::NONE.show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Origin");
+                                egui::ComboBox::from_id_salt("orbit-origin")
+                                    .selected_text(self.orbit_origin.label())
+                                    .show_ui(ui, |ui| {
+                                        for origin in sidebar::OrbitOrigin::ALL {
+                                            ui.selectable_value(&mut self.orbit_origin, origin, origin.label());
+                                        }
+                                    })
+                                    .response
+                                    .on_hover_text("Choose the orbit pivot. Selection center uses the visible model center when nothing is selected.");
+                            });
+                        });
+                    });
+            }
             views.push((pane.selected, rect, response));
         }
         #[cfg(target_arch = "wasm32")]

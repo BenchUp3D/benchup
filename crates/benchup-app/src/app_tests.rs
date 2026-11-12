@@ -6971,3 +6971,21 @@ fn selected_edge_length_labels_hide_behind_faces() {
             cover_height <= 0., "cover height {cover_height}");
     }
 }
+
+#[test]
+fn orbit_origin_choices_use_current_project_and_selection() {
+    let mut h = Harness::new();
+    let edge = h.app.doc.model.add_edge(DVec3::X * 2., DVec3::X * 4.).unwrap();
+    h.app.doc.model.add_edge(DVec3::X * 10., DVec3::X * 12.).unwrap();
+    h.app.doc.camera.target = DVec3::new(20., 30., 40.);
+    h.app.orbit_origin = sidebar::OrbitOrigin::World;
+    assert_eq!(h.app.orbit_center(), DVec3::ZERO);
+    h.app.orbit_origin = sidebar::OrbitOrigin::View;
+    assert_eq!(h.app.orbit_center(), h.app.doc.camera.target);
+    h.app.orbit_origin = sidebar::OrbitOrigin::Selection;
+    assert_eq!(h.app.orbit_center(), DVec3::X * 7.);
+    h.app.selected.insert(edge);
+    assert_eq!(h.app.orbit_center(), DVec3::X * 3.);
+    h.app.orbit_origin = sidebar::OrbitOrigin::VisibleModel;
+    assert_eq!(h.app.orbit_center(), DVec3::X * 7.);
+}
