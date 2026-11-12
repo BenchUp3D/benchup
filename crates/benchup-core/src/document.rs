@@ -604,6 +604,9 @@ pub struct Document {
     )]
     pub history: History,
     pub camera: Camera,
+    /// User-picked orbit pivot, scoped to this project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orbit_focus: Option<DVec3>,
     /// Per-viewport framing belongs to this project, unlike reusable layout preferences.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(deserialize_with = "deserialize_map_or_empty_sequence")]
@@ -634,6 +637,7 @@ impl Default for Document {
             model: Model::default(),
             history: History::default(),
             camera: Camera::default(),
+            orbit_focus: None,
             viewport_cameras: BTreeMap::new(),
             selection: BTreeSet::new(),
             selection_context: None,
@@ -656,6 +660,7 @@ impl Document {
             model: Model::default(),
             history: History::default(),
             camera: self.camera.clone(),
+            orbit_focus: self.orbit_focus,
             viewport_cameras: self.viewport_cameras.clone(),
             selection: self.selection.clone(),
             selection_context: self.selection_context,

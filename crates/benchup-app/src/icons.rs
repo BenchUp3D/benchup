@@ -70,15 +70,18 @@ pub fn dropdown_chevron(p: &egui::Painter, center: Pos2, color: Color32) {
 /// A fixed pivot: center dot, target ring, and four axis ticks.
 pub fn origin_atom(color: Color32) -> egui::Atom<'static> {
     egui::Atom::paint(egui::vec2(18., 18.), move |ui, args| {
-        let painter = ui.painter();
-        let center = args.rect.center();
-        let stroke = Stroke::new(1.3, color);
-        painter.circle_stroke(center, 4.5, stroke);
-        painter.circle_filled(center, 1.5, color);
-        for direction in [egui::vec2(1., 0.), egui::vec2(-1., 0.), egui::vec2(0., 1.), egui::vec2(0., -1.)] {
-            painter.line_segment([center + direction * 5., center + direction * 8.], stroke);
-        }
+        origin_target(ui.painter(), args.rect.center(), color);
     })
+}
+
+/// Shared target geometry for the orbit selector and focus cursor.
+pub fn origin_target(painter: &egui::Painter, center: Pos2, color: Color32) {
+    let stroke = Stroke::new(1.3, color);
+    painter.circle_stroke(center, 4.5, stroke);
+    painter.circle_filled(center, 1.5, color);
+    for direction in [egui::vec2(1., 0.), egui::vec2(-1., 0.), egui::vec2(0., 1.), egui::vec2(0., -1.)] {
+        painter.line_segment([center + direction * 5., center + direction * 8.], stroke);
+    }
 }
 
 pub fn dropdown_atom(color: Color32) -> egui::Atom<'static> {

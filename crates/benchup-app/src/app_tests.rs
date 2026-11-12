@@ -7277,6 +7277,18 @@ fn precision_routed_edge_selection_shows_only_original_endpoints() {
     let mut points = Vec::new();
     for shape in &output.shapes { handles(&shape.shape, &mut points); }
     assert_eq!(points.len(), 2);
+    h.app.orbit_origin = sidebar::OrbitOrigin::Focused;
+    assert_eq!(h.app.orbit_center(), h.app.doc.camera.target);
+    h.app.doc.orbit_focus = Some(DVec3::new(4., 5., 6.));
+    assert_eq!(h.app.orbit_center(), DVec3::new(4., 5., 6.));
+    let saved = serde_json::to_string(&h.app.doc).unwrap();
+    let restored: Document = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored.orbit_focus, h.app.doc.orbit_focus);
+    let mut legacy = serde_json::to_value(&h.app.doc).unwrap();
+    legacy.as_object_mut().unwrap().remove("orbit_focus");
+    let restored: Document = serde_json::from_value(legacy).unwrap();
+    assert_eq!(restored.orbit_focus, None);
+    assert_eq!(Document::default().orbit_focus, None);
     for (actual, source) in points.into_iter().zip([a, b]) {
         let expected = pv(h.app.doc.camera.project(source, dv(rect.size())).unwrap());
         assert!(actual.distance(expected) < 0.01);
@@ -7284,4 +7296,28 @@ fn precision_routed_edge_selection_shows_only_original_endpoints() {
     let rendered = h.app.render_model.shared();
     assert!(!rendered.routing_appearance.faces.is_empty());
     assert!(rendered.routing_appearance.faces.iter().all(|id| rendered.faces.contains_key(id)));
+}
+
+#[test]
+fn focus_picker_highlights_like_pointer_without_selecting() {
+    let mut h = Harness::new();
+    let face = properties_outline(&mut h.app.doc.model, &[
+        DVec3::new(-2., -2., 0.), DVec3::new(2., -2., 0.),
+        DVec3::new(2., 2., 0.), DVec3::new(-2., 2., 0.),
+    ]);
+    h.app.doc.camera.set_standard_view(benchup_core::StandardView::Top);
+    h.app.fit(&h.ctx);
+    let pos = h.at(DVec3::ZERO);
+    h.app.set_tool(Tool::Select);
+    h.app.update_pointer(pos);
+    let pointer_hover = h.app.hover;
+    assert_eq!(pointer_hover, Some(face));
+    h.app.set_tool(Tool::Orbit);
+    h.app.setting_orbit_focus = true;
+    h.app.update_pointer(pos);
+    assert_eq!(h.app.hover, pointer_hover);
+    assert!(h.app.selected.is_empty());
+    h.app.setting_orbit_focus = false;
+    h.app.update_pointer(pos);
+    assert_eq!(h.app.hover, None);
 }

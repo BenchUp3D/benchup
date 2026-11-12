@@ -419,6 +419,7 @@ pub struct BenchUpApp {
     drawing_orbit_pivot: Option<DVec3>,
     viewport_pointer: Option<Pos2>,
     viewport: Rect,
+    setting_orbit_focus: bool,
     viewports: viewports::Workspace,
     inspector: bool,
     inspector_width: f32,
@@ -611,6 +612,7 @@ impl BenchUpApp {
             viewport_pointer: None,
             viewport: Rect::NOTHING,
             viewports: viewports::Workspace::default(),
+            setting_orbit_focus: false,
             inspector: true,
             inspector_width: 300.,
             inspector_preferences: sidebar::InspectorPreferences::default(),
@@ -4446,6 +4448,11 @@ impl BenchUpApp {
             if self.drawing.is_some() && self.paste_preview.is_none() {
                 if self.lock.is_none()
                     && let Some(drawing) = &mut self.drawing
+        if self.tool == Tool::Orbit && self.setting_orbit_focus && !self.navigating() {
+            self.hover = self.pick_at(dv(pos - self.viewport.min), dv(self.viewport.size()), true);
+            self.flip_hover = None;
+            return;
+        }
                 {
                     // Inferred planes belong to the current snap only. Start
                     // each query on the original plane so leaving a target
@@ -4619,6 +4626,7 @@ impl BenchUpApp {
             return;
         };
         if !matches!(
+            sidebar::OrbitOrigin::Focused => return self.doc.orbit_focus.unwrap_or(self.doc.camera.target),
             gesture.button,
             egui::PointerButton::Primary | egui::PointerButton::Middle
         ) {
@@ -4926,6 +4934,22 @@ impl BenchUpApp {
                     self.viewport_pointer = in_viewport.then_some(pos);
                     if let Some(mut gesture) = self.gesture.take() {
                         self.update_compass_orbit(ctx, &mut gesture, pos);
+                    if self.tool == Tool::Orbit && self.setting_orbit_focus {
+                        if button == egui::PointerButton::Primary {
+                            self.prepare_picking();
+                            if let Some(snap) = self.infer_snap(pos, None, None, false) {
+                                self.doc.orbit_focus = Some(snap.point);
+                                self.orbit_origin = sidebar::OrbitOrigin::Focused;
+                                self.setting_orbit_focus = false;
+                                self.camera_changed(ctx);
+                            }
+                            continue;
+                        }
+                        if button == egui::PointerButton::Secondary {
+                            self.setting_orbit_focus = false;
+                            continue;
+                        }
+                    }
                         match &mut gesture.kind {
                             GestureKind::Navigate { pivot } => {
                                 self.navigate(ctx, dv(pos - gesture.last), pivot);
@@ -5319,6 +5343,19 @@ impl BenchUpApp {
                 pair[0],
                 pair[1],
                 2.2,
+        if self.tool == Tool::Orbit && self.setting_orbit_focus && !self.navigating() {
+            #[cfg(target_arch = "wasm32")]
+            if crate::tool_cursor::show_focus(ctx) {
+                ctx.set_cursor_icon(egui::CursorIcon::None);
+                return;
+            }
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Tooltip, egui::Id::unique("viewport_tool_cursor"),
+            ));
+            ctx.set_cursor_icon(egui::CursorIcon::None);
+            icons::origin_target(&painter, pos, if ctx.global_style().visuals.dark_mode { Color32::WHITE } else { Color32::BLACK });
+            return;
+        }
                 self.lock
                     .map(|axis| self.axis_color(axis))
                     .unwrap_or(ACCENT),

@@ -19,9 +19,17 @@ extern "C" {
 }
 
 pub fn show(ctx: &egui::Context, tool: Tool, hotspot: egui::Vec2, offset: egui::Vec2) -> bool {
+    show_impl(ctx, tool, hotspot, offset, false)
+}
+
+pub fn show_focus(ctx: &egui::Context) -> bool {
+    show_impl(ctx, Tool::Orbit, egui::Vec2::ZERO, egui::Vec2::ZERO, true)
+}
+
+fn show_impl(ctx: &egui::Context, tool: Tool, hotspot: egui::Vec2, offset: egui::Vec2, focus: bool) -> bool {
     let dark = ctx.global_style().visuals.dark_mode;
     let scale = ctx.zoom_factor();
-    let key = format!("{tool:?}:{dark}:{scale}");
+    let key = format!("{tool:?}:{dark}:{scale}:{focus}");
     // Only generate geometry when the tool, theme, or browser zoom changes.
     thread_local! {
         static CACHE: std::cell::RefCell<std::collections::HashMap<String, String>> = Default::default();
@@ -33,14 +41,19 @@ pub fn show(ctx: &egui::Context, tool: Tool, hotspot: egui::Vec2, offset: egui::
             icon_ctx.set_global_style(ctx.global_style());
             let painter = icon_ctx.layer_painter(egui::LayerId::background());
             // A 64-point image leaves room for measurement icons' offset.
-            crate::icons::tool_vectors(
-                &painter,
-                egui::Rect::from_center_size(
-                    egui::pos2(24., 24.) - hotspot + offset,
-                    egui::Vec2::splat(28.),
-                ),
-                tool,
-            );
+            if focus {
+                crate::icons::origin_target(&painter, egui::pos2(24., 24.),
+                    if dark { egui::Color32::WHITE } else { egui::Color32::BLACK });
+            } else {
+                crate::icons::tool_vectors(
+                    &painter,
+                    egui::Rect::from_center_size(
+                        egui::pos2(24., 24.) - hotspot + offset,
+                        egui::Vec2::splat(28.),
+                    ),
+                    tool,
+                );
+            }
             let mut commands = Vec::new();
             painter.for_each_shape(|shape| encode(&shape.shape, &mut commands));
             serde_json::to_string(&commands).expect("cursor geometry")

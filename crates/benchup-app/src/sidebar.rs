@@ -29,10 +29,11 @@ pub(super) enum OrbitOrigin {
     Selection,
     World,
     View,
+    Focused,
 }
 
 impl OrbitOrigin {
-    pub(super) const ALL: [Self; 4] = [Self::VisibleModel, Self::Selection, Self::World, Self::View];
+    pub(super) const ALL: [Self; 5] = [Self::VisibleModel, Self::Selection, Self::World, Self::View, Self::Focused];
 
     pub(super) fn label(self) -> &'static str {
         match self {
@@ -40,6 +41,7 @@ impl OrbitOrigin {
             Self::Selection => "Selection center",
             Self::World => "World origin",
             Self::View => "View center",
+            Self::Focused => "Focused",
         }
     }
 }
@@ -67,6 +69,8 @@ pub(super) struct InspectorPreferences {
     paint_target: PaintTarget,
     tools: ToolPreferences,
     orbit_origin: OrbitOrigin,
+    tool_rail_order: Vec<Tool>,
+    tool_rail_order_revision: u32,
     snapping: Option<SnappingPreferences>,
     cutting_plan: CuttingPlanPreferences,
     time_estimates: time_estimates::Settings,
