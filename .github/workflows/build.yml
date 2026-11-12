@@ -37,8 +37,6 @@ jobs:
           python scripts/desktop_release.py version --tag "$TAG_NAME"
           python -m unittest discover -s scripts -p 'test_install_linux_dependencies.py'
           python -m unittest discover -s scripts -p 'test_desktop_release.py'
-          python -m unittest discover -s scripts -p 'test_package_deb.py'
-          python -m unittest discover -s scripts -p 'test_package_rpm.py'
           python -m unittest discover -s scripts -p 'test_verify_update_transfer.py'
 
       - name: Verify old updater URLs survived the repository transfer
@@ -96,7 +94,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo python3 scripts/install_linux_dependencies.py \
-            build-essential pkg-config dpkg-dev desktop-file-utils rpm libx11-dev libxcb1-dev \
+            build-essential pkg-config libx11-dev libxcb1-dev \
             libxkbcommon-dev libwayland-dev libegl1-mesa-dev libudev-dev
 
       - name: Install Rust
@@ -156,17 +154,6 @@ jobs:
 
       - name: Create installer and update feed
         run: python scripts/desktop_release.py package --tag "$TAG_NAME" --platform "${{ matrix.platform }}"
-
-      - name: Package Debian installer from the existing Linux executable
-        if: matrix.platform == 'linux-x64'
-        # Reuse package/ and the release binary built with the Cargo/sccache caches.
-        # This only stages files and compresses them; it never invokes Cargo again.
-        run: python scripts/package_deb.py package --tag "$TAG_NAME"
-
-      - name: Package Fedora RPM from the existing Linux executable
-        if: matrix.platform == 'linux-x64'
-        # Share the same Cargo/sccache build as the AppImage and Debian package.
-        run: python scripts/package_rpm.py package --tag "$TAG_NAME"
 
       - name: Remove temporary macOS keychain
         if: always() && runner.os == 'macOS'
@@ -340,16 +327,11 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Install RPM validation tools
-        run: sudo python3 scripts/install_linux_dependencies.py rpm
-
       - name: Validate all platforms, remove packaging metadata, and checksum release files
         env:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           test -s "dist/benchup-${TAG_NAME}-wasm.zip"
-          python scripts/package_deb.py validate --tag "$TAG_NAME"
-          python scripts/package_rpm.py validate --tag "$TAG_NAME"
           python scripts/desktop_release.py validate --tag "$TAG_NAME"
 
       - name: Publish release with desktop and WebAssembly packages
