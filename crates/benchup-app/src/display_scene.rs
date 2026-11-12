@@ -57,6 +57,19 @@ impl FaceLighting {
         let channel = |value| (f64::from(value) * brightness).round() as u8;
         Color32::from_rgba_unmultiplied(channel(r), channel(g), channel(b), alpha)
     }
+
+    // Match the retained shader for faces that already use CPU projection
+    // (for example when section planes are active).
+    pub(super) fn finish_highlight(&self, sheen: u8, normal: DVec3, point: DVec3) -> u8 {
+        if sheen == 0 {
+            return 0;
+        }
+        let eye = self.parallel.unwrap_or(self.eye - point).normalize_or_zero();
+        let half = (eye + self.direction).normalize_or_zero();
+        let normal = if normal.dot(eye) < 0. { -normal } else { normal };
+        let sheen = f64::from(sheen) / 255.;
+        (255. * 0.65 * sheen * normal.dot(half).max(0.).powf(5. + 31. * sheen)).round() as u8
+    }
 }
 
 /// Darken the face's own material while preserving X-Ray/hidden-face opacity.

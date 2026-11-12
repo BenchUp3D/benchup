@@ -4,6 +4,7 @@
 use super::*;
 
 use crate::theme::{FacePalette, Palette};
+use crate::app::surface_appearance::{Materials, appearance_changed};
 #[path = "resident_appearance.rs"]
 mod appearance;
 #[path = "resident_bounds.rs"]
@@ -91,6 +92,7 @@ pub(super) struct Cache {
     builds: usize,
     appearance: appearance::Cache,
     source: Option<Model>,
+    source_catalog: Option<Arc<Catalog>>,
     removed: std::collections::BTreeSet<u64>,
     bounds_index: bounds::Index,
     hierarchy: Option<Arc<appearance::Hierarchy>>,
@@ -166,7 +168,7 @@ fn geometry_key(key: &SceneKey) -> SceneKey {
         joint_preview: key.joint_preview.clone(),
         model_revision: key.model_revision,
         edit_context: None, camera: Camera::default(), size: DVec2::ZERO,
-        pixels_per_point: 1., display: key.display.clone(), dark: key.dark,
+        pixels_per_point: 1., display: key.display.clone(), surface_catalog: key.surface_catalog.clone(), dark: key.dark,
         tool: benchup_core::Tool::Orbit, selected: Default::default(), hover: None,
         outliner_hover: Default::default(), erasing: Default::default(),
     };
@@ -531,6 +533,9 @@ impl SceneCache {
             let same_style = self.resident.key.as_ref().is_some_and(|previous| {
                 let mut previous = previous.clone();
                 previous.model_revision = geometry_key.model_revision;
+                // Catalog edits can replace only the stock faces, like other
+                // retained edits. Display-mode changes still rebuild normally.
+                previous.surface_catalog.clone_from(&geometry_key.surface_catalog);
                 previous == geometry_key
             });
             let dirty = same_style
@@ -541,6 +546,26 @@ impl SceneCache {
                         .and_then(|source| edited_geometry(source, model))
                 })
                 .flatten();
+            let dirty = dirty.and_then(|mut dirty| {
+                let catalog_changed = self.resident.source_catalog != key.surface_catalog;
+                if key.surface_catalog.is_some() || self.resident.source_catalog.is_some() {
+                    let source = self.resident.source.as_ref().unwrap();
+                    // Only treatments and the part's grain direction change
+                    // baked attributes independently of the affected vertices.
+                    let mut touched = std::collections::BTreeSet::new();
+                    for (&id, object) in &model.objects {
+                        if (catalog_changed && (object.stock_material_id.is_some() || object.stock_material.is_some()))
+                            || source.objects.get(&id).is_some_and(|before| appearance_changed(before, object))
+                        {
+                            touched.insert(id);
+                        }
+                    }
+                    if !touched.is_empty() {
+                        dirty.extend(model.expand_entities(&touched).into_iter().filter(|id| model.faces.contains_key(id)));
+                    }
+                }
+                (dirty.len() < 4096).then_some(dirty)
+            });
             if let Some(dirty) = dirty {
                 let source = self.resident.source.as_ref().unwrap();
                 let hierarchy = Arc::make_mut(self.resident.hierarchy.as_mut().unwrap());
@@ -577,6 +602,7 @@ impl SceneCache {
                 self.resident.hierarchy = Some(Arc::new(hierarchy));
                 self.resident.bounds_index = bounds::Index::new(model, entities, &key.display);
                 self.resident.source = Some(model.clone());
+                self.resident.source_catalog.clone_from(&key.surface_catalog);
                 self.resident.overlay = None;
                 self.resident.removed.clear();
                 self.resident.builds += 1;
@@ -766,6 +792,7 @@ impl Geometry {
         let mut vertices = Vec::new();
         let mut material_vertices = Vec::new();
         let mut surfaces: BTreeMap<(u64, u64), Vec<(DVec3, DVec3, u32)>> = BTreeMap::new();
+        let mut materials = Materials::new(model, entities, key.surface_catalog.as_deref());
         for face in model.faces.values().filter(|f| {
             !model.reference_images.contains_key(&f.id) && dirty.is_none_or(|dirty| dirty.contains(&f.id))
                 && entities.get(f.id).displayed(&key.display)
@@ -782,19 +809,18 @@ impl Geometry {
             } else {
                 None
             };
+            let finish = if material.is_none() { materials.for_face(face.id) } else { None };
             let material = if model.routing_appearance.faces.contains(&face.id) {
                 Some(&benchup_core::router::CUT_COLOR)
             } else { material };
-            let material = material.map_or(face_palette.front, |rgb| {
-                Color32::from_rgb(rgb[0], rgb[1], rgb[2])
-            });
-            let color = material;
+            let color = material.copied().or(finish.map(|surface| surface.color))
+                .map_or(face_palette.front, |[r, g, b]| Color32::from_rgb(r, g, b));
             let anchor = model.vertices[&face.vertices[0]].position;
             let (bare, coated, glue) = cached.glue.as_ref().map_or(
                 (cached.triangles.as_slice(), &[][..], None),
                 |glue| (glue.bare.as_slice(), glue.coated.as_slice(), Some(glue.material)),
             );
-            for (triangle, finish) in bare.iter().map(|triangle| (triangle, None))
+            for (triangle, finish) in bare.iter().map(|triangle| (triangle, finish))
                 .chain(coated.iter().map(|triangle| (triangle, glue)))
             {
                 for &p in triangle {
@@ -1566,6 +1592,7 @@ mod tests {
                 grain_direction: false,
                 ..Default::default()
             },
+            surface_catalog: None,
             dark: false,
             tool: benchup_core::Tool::Orbit,
             selected: Default::default(),
@@ -1573,6 +1600,45 @@ mod tests {
             outliner_hover: Default::default(),
             erasing: Default::default(),
         }
+    }
+
+    #[test]
+    fn finish_preview_updates_only_stock_faces_and_stays_resident_during_selection() {
+        let ctx = egui::Context::default();
+        let mut model = model(1025);
+        let face = *model.faces.keys().next().unwrap();
+        let part = model.make_object(&[face].into_iter().collect(), false, "Board").unwrap();
+        model.objects.get_mut(&part).unwrap().stock_material_id =
+            Some(benchup_core::MaterialId::new_v4());
+        let face = model.objects[&part].entities.iter().copied()
+            .find(|id| model.faces.contains_key(id)).unwrap();
+        let mut faces = FaceCache::default();
+        faces.update(&model);
+        let mut entities = EntityCache::default();
+        entities.update(&model);
+        let mut cache = SceneCache::default();
+        let mut key = key();
+        let mut recipe = benchup_core::surface_treatment::Settings::default();
+        key.surface_catalog = Some(Arc::new(Catalog::from_defaults_for_test(&recipe)));
+        let render = |key: &SceneKey, cache: &mut SceneCache| {
+            let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
+                cache.prepare_resident(key, &model, &faces, &entities, ui);
+            });
+        };
+        render(&key, &mut cache);
+        assert!(!cache.resident.geometry.as_ref().unwrap().materials.is_empty());
+        recipe.stain.enabled = true;
+        key.surface_catalog = Some(Arc::new(Catalog::from_defaults_for_test(&recipe)));
+        render(&key, &mut cache);
+        let overlay = Arc::clone(cache.resident.overlay.as_ref().unwrap());
+        assert_eq!(cache.resident.removed, std::collections::BTreeSet::from([face]));
+        assert_eq!(overlay.faces.len(), 3);
+        assert_eq!(overlay.materials.len(), 3);
+        key.selected.insert(part);
+        key.camera.yaw += 0.5;
+        render(&key, &mut cache);
+        assert_eq!(cache.resident.builds, 1);
+        assert!(Arc::ptr_eq(cache.resident.overlay.as_ref().unwrap(), &overlay));
     }
 
     #[test]

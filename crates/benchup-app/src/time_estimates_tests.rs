@@ -1048,6 +1048,32 @@ fn custom_grit_edits_match_values_across_mixed_object_lists() {
 }
 
 #[test]
+fn sanding_reorder_preserves_extra_passes_and_visual_overrides() {
+    use benchup_core::surface_treatment::Sheen;
+    let mut before = Settings::default();
+    before.sanding_grits = vec![80, 220];
+    before.sanitize();
+    before.sanding[0].enabled = true;
+    before.sanding[1].enabled = true;
+    before.sanding_after_varnish[1] = true;
+    let mut after = before.clone();
+    after.sanding_grits.swap(0, 1);
+    after.sanding.swap(0, 1);
+    after.sanding_after_varnish.swap(0, 1);
+    after.varnish.appearance.sheen = Some(Sheen::Gloss);
+    let mut target = before.clone();
+    target.sanding_grits.insert(1, 150);
+    target.sanding.insert(1, Step::default());
+    target.sanding_after_varnish.insert(1, false);
+    target.varnish.appearance.tint = Some([171, 115, 53]);
+    apply_treatment_changes(&mut target, &before, &after);
+    assert_eq!(target.sanding_grits, vec![220, 150, 80]);
+    assert_eq!(target.sanding_after_varnish, vec![true, false, false]);
+    assert_eq!(target.varnish.appearance.tint, Some([171, 115, 53]));
+    assert_eq!(target.varnish.appearance.sheen, Some(Sheen::Gloss));
+}
+
+#[test]
 fn task_groups_sum_work_and_share_the_longest_wait_per_coat() {
     let mut model = Model::default();
     let face = rectangle(&mut model, DVec3::ZERO);

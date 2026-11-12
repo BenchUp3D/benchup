@@ -5469,6 +5469,13 @@ impl BenchUpApp {
             themed_display.section_fill = false;
         }
         let display = &themed_display;
+        let surface_catalog = (display.face_style == benchup_core::FaceStyle::Materials
+            && !display.color_by_tag
+            && joinery_parts.is_none()
+            && self.render_model.has_assigned_stock())
+            .then(|| surface_appearance::Catalog::for_viewport(
+                ui.ctx(), &self.general_settings.stock, &self.time_estimates,
+            ));
         if background {
             crate::environment::paint(&p, rect, camera, display, ui.visuals().dark_mode, self.doc.display.shadows);
         }
@@ -5496,6 +5503,7 @@ impl BenchUpApp {
             size,
             pixels_per_point: ui.ctx().pixels_per_point(),
             display: display.clone(),
+            surface_catalog: surface_catalog.clone(),
             dark: ui.visuals().dark_mode,
             tool: self.tool,
             selected: selected.clone(),
@@ -5681,6 +5689,9 @@ impl BenchUpApp {
                 _ => None,
             };
             let mut face_draws = Vec::new();
+            let mut materials = surface_appearance::Materials::new(
+                model, entities, surface_catalog.as_deref(),
+            );
             for (face, _) in visible_faces
                 .into_iter()
                 .filter(|_| display.face_style != benchup_core::FaceStyle::Wireframe)
@@ -5691,6 +5702,15 @@ impl BenchUpApp {
                 let cached = self.face_cache.get(face.id);
                 let normal = cached.normal;
                 let tag_color = entity.tag_color;
+                let outliner_hover = entities.in_set(face.id,&rendered_hover);
+                let erasing_face = erasing.is_some_and(|ids| {
+                    entity.context.is_some_and(|id| ids.contains(&id))
+                });
+                let surface = (entity.context.is_some() && !erasing_face
+                    && !display.x_ray && !entity.entity_hidden
+                    && (!move_x_ray || selected_entities.contains(&face.id))
+                    && !model.face_colors.contains_key(&face.id))
+                    .then(|| materials.for_face(face.id)).flatten();
                 let rgb = if display.color_by_tag {
                     tag_color.as_ref()
                 } else if display.face_style == benchup_core::FaceStyle::Materials {
@@ -5711,17 +5731,22 @@ impl BenchUpApp {
                     Color32::from_rgb(r, g, b)
                 } else if let Some(rgb) = rgb {
                     Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+                } else if let Some(surface) = surface {
+                    let [r, g, b] = surface.color;
+                    Color32::from_rgb(r, g, b)
                 } else {
                     faces.front
                 };
-                let outliner_hover = entities.in_set(face.id,&rendered_hover);
+                let highlight = |color: Color32| if surface.is_some() {
+                    let rgb = material.to_array();
+                    let [r, g, b] = std::array::from_fn(|i| {
+                        (f32::from(rgb[i]) * 0.78 + f32::from(color.to_array()[i]) * 0.22).round() as u8
+                    });
+                    Color32::from_rgb(r, g, b)
+                } else { color };
                 let color = if entity.context.is_none() && !outliner_hover {
                     faces.inactive
-                } else if erasing.is_some_and(|ids| {
-                    entity
-                        .context
-                        .is_some_and(|id| ids.contains(&id))
-                }) {
+                } else if erasing_face {
                     Color32::from_rgb(220, 91, 76)
                 } else if self.tool == Tool::Paint
                     && model.face_colors.contains_key(&face.id)
@@ -5736,12 +5761,12 @@ impl BenchUpApp {
                         ((material.b() as u16 * 3 + color.b() as u16) / 4) as u8,
                     )
                 } else if selected_entities.contains(&face.id) {
-                    faces.selected
+                    highlight(faces.selected)
                 } else if hover.is_some() && hover == entity.context
                     || hover == Some(face.id)
                     || outliner_hover
                 {
-                    faces.hovered
+                    highlight(faces.hovered)
                 } else {
                     material
                 };
@@ -5758,9 +5783,14 @@ impl BenchUpApp {
                     color
                 };
                 face_draws.push(renderer::FaceDraw {
-                    surface: None,
                     face, cached, color,
                     smooth: model.routing_appearance.faces.contains(&face.id).then_some((model, &lighting)),
+                    surface: surface.map(|mut surface| {
+                        surface.params[3] = lighting.finish_highlight(
+                            surface.params[3], normal, model.vertices[&face.vertices[0]].position,
+                        );
+                        surface
+                    }),
                     shadow: self.shadow_cache.get(face.id).map(|shadow|
                         (shadow, display_scene::shadow_color(color, display.shadow_darkness))),
                 });

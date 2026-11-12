@@ -258,6 +258,7 @@ impl EstimateCache {
         selected: &BTreeSet<u64>,
         layout: crate::cutting_layout::Settings,
     ) -> &Result<MaterialEstimate, String> {
+        let layout = crate::cutting_layout::Settings { show_joinery: false, ..layout };
         self.validate(model, selected);
         if self
             .materials
@@ -270,7 +271,7 @@ impl EstimateCache {
             }
             self.materials = Some((
                 layout,
-                crate::cutting_plan::CuttingPlan::collect_assigned(model, selected).map(|plan| {
+                crate::cutting_plan::CuttingPlan::collect_assigned(model, selected, layout).map(|plan| {
                     MaterialEstimate {
                         requirements: plan.material_requirements(layout),
                         skipped: plan.skipped,
@@ -346,6 +347,15 @@ fn apply_treatment_changes(target: &mut Settings, before: &Settings, after: &Set
             drying_hours,
             final_drying_hours
         );
+        if before.appearance.tint != after.appearance.tint {
+            target.appearance.tint = after.appearance.tint;
+        }
+        if before.appearance.strength != after.appearance.strength {
+            target.appearance.strength = after.appearance.strength;
+        }
+        if before.appearance.sheen != after.appearance.sheen {
+            target.appearance.sheen = after.appearance.sheen;
+        }
     }
     target.sanitize();
     // Match by grit rather than position: mixed selections may have different
@@ -387,6 +397,26 @@ fn apply_treatment_changes(target: &mut Settings, before: &Settings, after: &Set
             target
                 .sanding_after_varnish
                 .push(after.sanding_after_varnish[i]);
+        }
+    }
+    // A reorder changes only the relative order of passes in the edited
+    // recipe. Keep the positions of extra passes in other selected objects.
+    if before.sanding_grits != after.sanding_grits
+        && before.sanding_grits.len() == after.sanding_grits.len()
+        && before.sanding_grits.iter().all(|grit| after.sanding_grits.contains(grit))
+    {
+        let order: std::collections::BTreeMap<_, _> = after.sanding_grits.iter()
+            .enumerate().map(|(i, &grit)| (grit, i)).collect();
+        let slots: Vec<_> = target.sanding_grits.iter().enumerate()
+            .filter_map(|(i, grit)| order.contains_key(grit).then_some(i)).collect();
+        let mut passes: Vec<_> = slots.iter().map(|&i| (
+            target.sanding_grits[i], target.sanding[i].clone(), target.sanding_after_varnish[i],
+        )).collect();
+        passes.sort_by_key(|(grit, _, _)| order[grit]);
+        for (i, (grit, step, between)) in slots.into_iter().zip(passes) {
+            target.sanding_grits[i] = grit;
+            target.sanding[i] = step;
+            target.sanding_after_varnish[i] = between;
         }
     }
     step(&mut target.pre_stain, &before.pre_stain, &after.pre_stain);
@@ -804,9 +834,10 @@ fn finish_controls(
     step: &mut Step,
     products: &[finish_settings::Finish],
     filter: &mut String,
+    stage: finish_settings::FinishType,
 ) {
     sidebar::inspector_section(ui, title, key, false, |ui| {
-        ui.checkbox(&mut step.enabled, tr!("time_estimates.include_in_estimate"));
+        ui.checkbox(&mut step.enabled, tr!("finish_settings.apply_step"));
         if !step.enabled {
             return;
         }
@@ -869,6 +900,26 @@ fn finish_controls(
                 }
             });
         }
+        let product = products.iter().find(|product| Some(product.id) == step.product_id);
+        let (tint, strength, sheen) = product.map_or_else(|| stage.preset(), |p| p.visual_preset());
+        let visual = product.map_or_else(Default::default, |p| p.appearance);
+        for (row, label) in [
+            tr!("finish_settings.appearance_color"),
+            tr!("finish_settings.coat_strength"),
+            tr!("finish_settings.sheen"),
+        ].into_iter().enumerate() {
+            table.row(ui, (key, "appearance", row), |column, ui| {
+                if column == 0 {
+                    ui.text_label(label);
+                } else {
+                    match row {
+                        0 => finish_settings::tint_input(ui, &mut step.appearance.tint, visual.tint.or(tint)),
+                        1 => finish_settings::strength_input(ui, &mut step.appearance.strength, visual.strength.unwrap_or(strength)),
+                        _ => finish_settings::sheen_input(ui, &mut step.appearance.sheen, visual.sheen.unwrap_or(sheen)),
+                    }
+                }
+            });
+        }
     });
 }
 
@@ -901,6 +952,7 @@ pub(super) fn treatment_controls(
     sidebar::inspector_section(ui, tr!("time_estimates.sanding"), keys[0], false, |ui| {
         settings.sanitize();
         let mut remove = None;
+        let mut swap = None;
         for i in 0..settings.sanding_grits.len() {
             let mut grit = settings.sanding_grits[i];
             let alias = format!("{}/grit/{grit}", keys[0]);
@@ -910,7 +962,7 @@ pub(super) fn treatment_controls(
                 &tr!("time_estimates.grit_2", grit = grit),
                 &section_key,
                 |ui| {
-                    ui.checkbox(&mut settings.sanding[i].enabled, tr!("time_estimates.include_in_estimate"));
+                    ui.checkbox(&mut settings.sanding[i].enabled, tr!("finish_settings.apply_step"));
                     let mut table = InspectorTable::new(
                         ui.available_width(),
                         [Column::flex(0.4), Column::flex(0.6)],
@@ -946,6 +998,18 @@ pub(super) fn treatment_controls(
                         }
                     });
                     }
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(i > 0, egui::Button::new("↑"))
+                            .on_hover_text(tr!("finish_settings.move_sanding_up")).clicked()
+                        {
+                            swap = Some((i, i - 1));
+                        }
+                        if ui.add_enabled(i + 1 < settings.sanding_grits.len(), egui::Button::new("↓"))
+                            .on_hover_text(tr!("finish_settings.move_sanding_down")).clicked()
+                        {
+                            swap = Some((i, i + 1));
+                        }
+                    });
                 },
             ) {
                 remove = Some(i);
@@ -970,6 +1034,10 @@ pub(super) fn treatment_controls(
             settings.sanding_grits.remove(i);
             settings.sanding.remove(i);
             settings.sanding_after_varnish.remove(i);
+        } else if let Some((i, j)) = swap {
+            settings.sanding_grits.swap(i, j);
+            settings.sanding.swap(i, j);
+            settings.sanding_after_varnish.swap(i, j);
         }
         if ui
             .add_sized(
@@ -1009,15 +1077,16 @@ pub(super) fn treatment_controls(
     ui.add_space(8.);
     sidebar::inspector_section(ui, tr!("time_estimates.finishing"), keys[1], false, |ui| {
         let wait = tr!("time_estimates.wait_per_coat");
-        for (title, wait_label, key, step) in [
+        for (title, wait_label, key, step, stage) in [
             (
                 tr!("time_estimates.pre_stain"),
                 tr!("time_estimates.soak_per_coat"),
                 keys[2],
                 &mut settings.pre_stain,
+                finish_settings::FinishType::PreStain,
             ),
-            (tr!("time_estimates.stain"), wait, keys[3], &mut settings.stain),
-            (tr!("time_estimates.varnish"), wait, keys[4], &mut settings.varnish),
+            (tr!("time_estimates.stain"), wait, keys[3], &mut settings.stain, finish_settings::FinishType::Stain),
+            (tr!("time_estimates.varnish"), wait, keys[4], &mut settings.varnish, finish_settings::FinishType::Varnish),
         ] {
             finish_controls(
                 ui,
@@ -1027,8 +1096,10 @@ pub(super) fn treatment_controls(
                 step,
                 products,
                 filters.entry(key.into()).or_default(),
+                stage,
             );
         }
+        ui.text_weak(tr!("finish_settings.viewport_preview_help"));
     });
     ui.add_space(8.);
     settings.sanitize();
@@ -1528,14 +1599,7 @@ impl BenchUpApp {
         // Unassigned imported assemblies have no wood treatment to display.
         // Avoid constructing a parent entry for every piece of mesh geometry.
         if self.doc.model.objects.values().all(|object| object.stock_material_id.is_none() && object.stock_material.is_none()) {return;}
-        let wood: WoodMaterials = self
-            .general_settings
-            .stock
-            .wood
-            .iter()
-            .map(|stock| (stock.id, stock.definition()))
-            .collect();
-        let parents = self
+        let parents: std::collections::BTreeMap<_, _> = self
             .doc
             .model
             .objects
@@ -1548,7 +1612,13 @@ impl BenchUpApp {
             .expand_entities(&self.selected)
             .into_iter()
             .filter(|id| self.doc.model.objects.contains_key(id))
-            .filter(|id| object_has_wood_material(&self.doc.model, *id, &parents, &wood))
+            .filter(|&id| {
+                std::iter::successors(Some(id), |id| parents.get(id).copied()).any(|id| {
+                    self.doc.model.objects.get(&id).is_some_and(|object| {
+                        object.stock_material_id.is_some() || object.stock_material.is_some()
+                    })
+                })
+            })
             .collect();
         let Some(first) = objects.first() else {
             return;

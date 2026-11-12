@@ -1,6 +1,6 @@
 use eframe::{egui, egui_wgpu, wgpu};
 use egui::{Color32, Rect};
-use crate::app::surface_appearance::FaceMaterial;
+use crate::app::surface_appearance::{Catalog, FaceMaterial};
 use benchup_core::{Camera, CameraView, DVec2, DVec3, Face, Model};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -130,6 +130,7 @@ pub struct ModelSnapshot {
     model: Option<Arc<Model>>,
     revision: u64,
     source_revision: Option<u64>,
+    assigned_stock: bool,
 }
 
 pub(crate) struct GroupMarker {
@@ -162,6 +163,18 @@ impl GroupMarkerCache {
 }
 
 impl ModelSnapshot {
+    pub(crate) fn has_assigned_stock(&self) -> bool {
+        self.assigned_stock
+    }
+
+    fn set_model(&mut self, model: Arc<Model>) {
+        self.assigned_stock = !model.stock_materials.is_empty() || model.objects.values().any(|object| {
+            object.stock_material_id.is_some() || object.stock_material.is_some()
+        });
+        self.model = Some(model);
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     pub(crate) fn update_scene(&mut self, model: &Model) -> u64 {
         self.source_revision = None;
         if self
@@ -169,8 +182,7 @@ impl ModelSnapshot {
             .as_deref()
             .is_none_or(|previous| !previous.same_scene_geometry(model))
         {
-            self.model = Some(Arc::new(model.clone()));
-            self.revision = self.revision.wrapping_add(1);
+            self.set_model(Arc::new(model.clone()));
         }
         self.revision
     }
@@ -184,8 +196,7 @@ impl ModelSnapshot {
     /// revision with a derived snapshot, instead of scanning it again.
     pub(crate) fn update_from_source(&mut self, model: Arc<Model>, source_revision: u64) -> u64 {
         if self.source_revision != Some(source_revision) {
-            self.model = Some(model);
-            self.revision = self.revision.wrapping_add(1);
+            self.set_model(model);
             self.source_revision = Some(source_revision);
         }
         self.revision
@@ -193,8 +204,7 @@ impl ModelSnapshot {
     pub fn update(&mut self, model: &Model) -> u64 {
         self.source_revision = None;
         if self.model.as_deref() != Some(model) {
-            self.model = Some(Arc::new(model.clone()));
-            self.revision = self.revision.wrapping_add(1);
+            self.set_model(Arc::new(model.clone()));
         }
         self.revision
     }
@@ -210,6 +220,7 @@ pub struct SceneKey {
     pub size: DVec2,
     pub pixels_per_point: f32,
     pub display: benchup_core::DisplaySettings,
+    pub(crate) surface_catalog: Option<Arc<Catalog>>,
     pub dark: bool,
     pub tool: benchup_core::Tool,
     pub selected: std::collections::BTreeSet<u64>,
@@ -249,7 +260,7 @@ pub(crate) fn scale_preview_supported(camera: &Camera, display: &benchup_core::D
     resident_supported(&SceneKey {
         joinery_members: None, joint_preview: None, model_revision: 0,
         edit_context: model.edit_context, camera: camera.clone(), size: DVec2::ONE,
-        pixels_per_point: 1., display: display.clone(), dark: false,
+        pixels_per_point: 1., display: display.clone(), surface_catalog: None, dark: false,
         tool: benchup_core::Tool::Scale, selected: Default::default(), hover: None,
         outliner_hover: Default::default(), erasing: Default::default(),
     }, model, faces)

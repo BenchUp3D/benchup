@@ -2953,6 +2953,7 @@ mod preference_tests {
             length_mm: 2438.4,
             price: 8.25,
             wood_type: Default::default(),
+            appearance_color: None,
         });
         set_section_open(&ctx, "settings/stock/wood", false);
         app.doc.display.grid_auto_size = false;
@@ -3342,6 +3343,12 @@ mod preference_tests {
         app.general_settings.stock.finishes[1].name = "White paint".into();
         app.general_settings.stock.finishes[1].price = 30.;
         app.general_settings.stock.finishes[1].coverage_m2_per_container = Some(12.5);
+        app.general_settings.stock.finishes[0].appearance.strength = Some(38);
+        app.general_settings.stock.finishes[1].appearance.tint = Some([237, 230, 215]);
+        app.general_settings.stock.finishes[1].appearance.sheen =
+            Some(benchup_core::surface_treatment::Sheen::Satin);
+        app.time_estimates.varnish.appearance.sheen =
+            Some(benchup_core::surface_treatment::Sheen::Matte);
         set_section_open(&ctx, "settings/stock/finishes", false);
         storage.flushed = false;
         app.persist_inspector_changes(&ctx, Some(&mut storage), false);
@@ -3353,6 +3360,7 @@ mod preference_tests {
         let mut restored = BenchUpApp::with_document(Document::default(), None, true);
         restored.restore_inspector_preferences(&restored_ctx, Some(&storage));
         assert_eq!(restored.general_settings, app.general_settings);
+        assert_eq!(restored.time_estimates, app.time_estimates);
         let _ = restored_ctx.run_test_ui(Default::default(), |ui| {
             assert_eq!(
                 restored_header_open(ui, "settings/stock/finishes", true),

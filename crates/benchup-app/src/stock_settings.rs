@@ -47,6 +47,18 @@ impl WoodType {
             Self::Other => tr!("stock_settings.other"),
         }
     }
+
+    pub(super) fn appearance(self) -> ([u8; 3], f32) {
+        match self {
+            Self::Plywood => ([211, 178, 126], 0.66),
+            Self::Veneer => ([188, 140, 88], 0.77),
+            Self::Mdf => ([172, 143, 103], 0.0),
+            Self::Particleboard => ([181, 149, 111], 0.0),
+            Self::Osb => ([198, 164, 115], 0.0),
+            Self::Hardboard => ([139, 100, 68], 0.0),
+            _ => ([199, 156, 105], 0.84),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -60,6 +72,8 @@ pub(super) struct Stock {
     pub width_mm: f64,
     pub length_mm: f64,
     pub price: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub appearance_color: Option<[u8; 3]>,
 }
 
 impl Default for Stock {
@@ -72,6 +86,7 @@ impl Default for Stock {
             width_mm: 89.,
             length_mm: 2440.,
             price: 0.,
+            appearance_color: None,
         }
     }
 }
@@ -181,6 +196,7 @@ impl Settings {
                         Column::at_least(66.),
                         Column::at_least(66.),
                         Column::at_least(112.),
+                        Column::at_least(92.),
                         Column::fixed(28.),
                     ],
                 )
@@ -195,6 +211,7 @@ impl Settings {
                             tr!("stock_settings.width"),
                             tr!("stock_settings.length"),
                             tr!("stock_settings.price_piece"),
+                            tr!("finish_settings.appearance_color"),
                             "",
                         ],
                     );
@@ -254,6 +271,11 @@ impl Settings {
                                     ui.add(currency::price_input(&self.currency, &mut stock.price))
                                         .on_hover_text(tr!("stock_settings.per_piece", self.currency));
                                 }
+                                6 => finish_settings::tint_input(
+                                    ui,
+                                    &mut stock.appearance_color,
+                                    Some(stock.wood_type.appearance().0),
+                                ),
                                 _ => {
                                     if ui
                                         .button(tr!("stock_settings.format"))

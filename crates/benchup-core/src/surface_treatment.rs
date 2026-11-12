@@ -32,6 +32,29 @@ where
     }
     deserializer.deserialize_any(List(std::marker::PhantomData))
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Sheen {
+    Matte,
+    Satin,
+    Gloss,
+}
+
+/// Optional appearance overrides. Unset values come from the product or the
+/// treatment stage's preset. These fields do not affect time or cost.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Appearance {
+    pub tint: Option<[u8; 3]>,
+    pub strength: Option<u8>,
+    pub sheen: Option<Sheen>,
+}
+
+impl Appearance {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Step {
@@ -43,6 +66,8 @@ pub struct Step {
     pub drying_hours: f64,
     // None preserves the original per-coat wait for existing saved settings.
     pub final_drying_hours: Option<f64>,
+    #[serde(skip_serializing_if = "Appearance::is_default")]
+    pub appearance: Appearance,
 }
 
 impl Default for Step {
@@ -54,6 +79,7 @@ impl Default for Step {
             coats: 1,
             drying_hours: 0.,
             final_drying_hours: None,
+            appearance: Appearance::default(),
         }
     }
 }
@@ -88,11 +114,13 @@ impl Step {
             self.final_drying_hours = defaults.final_drying_hours;
         }
         self.coats = self.coats.clamp(1, 100);
+        self.appearance.strength = self.appearance.strength.map(|value| value.min(100));
         if sanding {
             self.product_id = None;
             self.coats = 1;
             self.drying_hours = 0.;
             self.final_drying_hours = None;
+            self.appearance = Appearance::default();
         }
     }
 
@@ -205,6 +233,18 @@ impl Task {
 }
 
 impl Settings {
+    /// Sanding order follows the recipe's row order in both the appearance
+    /// preview and the time estimate.
+    pub fn sanding_passes(&self, between_coats: bool) -> impl Iterator<Item = (u32, &Step)> {
+        self.sanding
+            .iter()
+            .zip(&self.sanding_grits)
+            .zip(&self.sanding_after_varnish)
+            .filter_map(move |((step, &grit), &between)| {
+                (step.enabled && between == between_coats).then_some((grit, step))
+            })
+    }
+
     pub fn sanitize(&mut self) {
         let defaults = Self::default();
         self.sanding
@@ -233,15 +273,8 @@ impl Settings {
 
     pub fn tasks(&self, area: f64) -> impl Iterator<Item = (Task, Duration)> {
         let mut tasks = Vec::new();
-        for ((step, grit), between_coats) in self
-            .sanding
-            .iter()
-            .zip(&self.sanding_grits)
-            .zip(&self.sanding_after_varnish)
-        {
-            if step.enabled && !*between_coats {
-                tasks.push((Task::Sanding(*grit), step.estimate(area)));
-            }
+        for (grit, step) in self.sanding_passes(false) {
+            tasks.push((Task::Sanding(grit), step.estimate(area)));
         }
         for (step, task) in [
             (&self.pre_stain, Task::PreStain as fn(u32) -> Task),
@@ -258,21 +291,14 @@ impl Settings {
                 let task = task(coat);
                 tasks.push((task, step.coat_estimate(area, coat)));
                 if matches!(task, Task::Varnish { .. }) && coat < step.coats {
-                    for ((sanding, grit), between_coats) in self
-                        .sanding
-                        .iter()
-                        .zip(&self.sanding_grits)
-                        .zip(&self.sanding_after_varnish)
-                    {
-                        if sanding.enabled && *between_coats {
-                            tasks.push((
-                                Task::Varnish {
-                                    coat,
-                                    sanding_grit: Some(*grit),
-                                },
-                                sanding.estimate(area),
-                            ));
-                        }
+                    for (grit, sanding) in self.sanding_passes(true) {
+                        tasks.push((
+                            Task::Varnish {
+                                coat,
+                                sanding_grit: Some(grit),
+                            },
+                            sanding.estimate(area),
+                        ));
                     }
                 }
             }
@@ -298,6 +324,26 @@ pub struct Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_visual_overrides_do_not_change_the_estimate() {
+        let mut settings = Settings::default();
+        settings.varnish.enabled = true;
+        let estimate = settings.estimate(2.);
+        let mut legacy = serde_json::to_value(&settings).unwrap();
+        legacy["varnish"].as_object_mut().unwrap().remove("appearance");
+        let old: Settings = serde_json::from_value(legacy).unwrap();
+        assert_eq!(old.varnish.appearance, Appearance::default());
+        settings.varnish.appearance = Appearance {
+            tint: Some([133, 60, 38]),
+            strength: Some(47),
+            sheen: Some(Sheen::Matte),
+        };
+        let restored: Settings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored, settings);
+        assert_eq!(restored.estimate(2.), estimate);
+    }
 
     #[test]
     fn legacy_grits_migrate_and_custom_grits_round_trip_with_estimates() {

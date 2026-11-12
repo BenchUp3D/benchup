@@ -5968,6 +5968,7 @@ fn materials_section_assigns_catalog_material_as_an_undoable_document_edit() {
             length_mm: 2440.,
             price: 10.,
             wood_type: Default::default(),
+            appearance_color: None,
         });
     let output = h.frame(vec![], egui::Modifiers::NONE);
     h.click(text_position(&output, "Properties"));
