@@ -10,11 +10,27 @@ if CARGO_TERM_COLOR=never cargo "$@" 2>&1 | tee "$log"; then
 fi
 
 awk '
-    /^error(\[[[:alnum:]]+\])?:/ || /^test .* \.\.\. FAILED$/ {
-        gsub(/%/, "%25")
-        sub(/\r$/, "")
-        print "::error::" $0
-        if (++count == 12) exit
+    function escape(line) {
+        gsub(/%/, "%25", line)
+        sub(/\r$/, "", line)
+        return line
     }
+    function annotate() {
+        if (message != "") print "::error::" message
+        message = ""
+    }
+    /^error(\[[[:alnum:]]+\])?:/ || /^test .* \.\.\. FAILED$/ {
+        annotate()
+        if (++count > 12) exit
+        message = escape($0)
+        context = 10
+        next
+    }
+    message != "" && context-- > 0 && NF {
+        message = message "%0A" escape($0)
+        next
+    }
+    { annotate() }
+    END { annotate() }
 ' "$log"
 exit 1
