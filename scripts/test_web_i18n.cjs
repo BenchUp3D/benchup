@@ -37,23 +37,25 @@ test('a late catalog response leaves the open project title intact', async () =>
     assert.equal(document.title, 'Workshop - BenchUp');
 });
 
-test('Chinese messages preserve English catalog keys and format arguments', () => {
-    const chinese = require('../assets/i18n/zh_CN.json');
-    assert.deepEqual(Object.keys(chinese).sort(), Object.keys(catalog).sort());
-    const argumentsOf = text => [...text.matchAll(/(?<!\{)\{([^{}]*)\}(?!\})/g)]
-        .map(match => match[1]).sort();
-    for (const [key, message] of Object.entries(catalog)) {
-        assert.equal(typeof chinese[key], typeof message, key);
-        if (typeof message === 'string') {
-            assert.deepEqual(argumentsOf(chinese[key]), argumentsOf(message), key);
-        } else {
-            assert.deepEqual(Object.keys(chinese[key]).sort(), Object.keys(message).sort(), key);
-            for (const [form, text] of Object.entries(message)) {
-                assert.deepEqual(argumentsOf(chinese[key][form]), argumentsOf(text), `${key}.${form}`);
+for (const [language, file] of [['Chinese', 'zh_CN'], ['Brazilian Portuguese', 'pt_BR']]) {
+    test(`${language} messages preserve English catalog keys and format arguments`, () => {
+        const translated = require(`../assets/i18n/${file}.json`);
+        assert.deepEqual(Object.keys(translated).sort(), Object.keys(catalog).sort());
+        const argumentsOf = text => [...text.matchAll(/(?<!\{)\{([^{}]*)\}(?!\})/g)]
+            .map(match => match[1]).sort();
+        for (const [key, message] of Object.entries(catalog)) {
+            assert.equal(typeof translated[key], typeof message, key);
+            if (typeof message === 'string') {
+                assert.deepEqual(argumentsOf(translated[key]), argumentsOf(message), key);
+            } else {
+                assert.deepEqual(Object.keys(translated[key]).sort(), Object.keys(message).sort(), key);
+                for (const [form, text] of Object.entries(message)) {
+                    assert.deepEqual(argumentsOf(translated[key][form]), argumentsOf(text), `${key}.${form}`);
+                }
             }
         }
-    }
-});
+    });
+}
 
 test('runtime translations are formatted before being passed to Rust output macros', () => {
     const rustFiles = directory => fs.readdirSync(directory, {withFileTypes: true}).flatMap(entry => {

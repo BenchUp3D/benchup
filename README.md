@@ -133,6 +133,11 @@ For a quantity, put both complete messages under `one` and `other` and pass
 `count = quantity` before the other arguments. English uses `one` for exactly
 1 and `other` for zero and all other quantities.
 
+Translations sit next to it with the same keys and arguments:
+[zh_CN.json](assets/i18n/zh_CN.json) (Simplified Chinese, always `other`) and
+[pt_BR.json](assets/i18n/pt_BR.json) (Brazilian Portuguese, `one` for exactly 1,
+like English). A new key added to `en.json` needs an entry in each translation.
+
 Rust embeds English at build time and the browser startup screen reads the
 same catalog. Keep storage keys, shortcuts, file-format tokens and wire codes
 separate from display messages. Release-note content lives in its own feed.
