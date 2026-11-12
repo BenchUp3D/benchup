@@ -5407,7 +5407,9 @@ impl BenchUpApp {
             };
             // Keep the moving selection solid while exposing surrounding geometry.
             // Derive this every frame so selecting after entering Move works too.
-            let move_x_ray = self.tool == Tool::Move && !selected_entities.is_empty();
+            let move_x_ray = display.move_wireframe
+                && self.tool == Tool::Move
+                && !selected_entities.is_empty();
             let mut mesh = renderer::Mesh::cached(camera, size, &mut self.scene_cache);
             mesh.reference_image_depth_bounds(model);
             mesh.set_pixels_per_point(ui.ctx().pixels_per_point());

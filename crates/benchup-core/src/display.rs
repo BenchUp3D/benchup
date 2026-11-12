@@ -61,6 +61,8 @@ pub struct DisplaySettings {
     pub grain_direction: bool,
     pub face_style: FaceStyle,
     pub x_ray: bool,
+    /// Show surrounding geometry as wireframe while using the Move tool.
+    pub move_wireframe: bool,
     pub edges: bool,
     pub back_edges: bool,
     pub profiles: bool,
@@ -117,6 +119,7 @@ impl Default for DisplaySettings {
             grain_direction: true,
             face_style: FaceStyle::Materials,
             x_ray: false,
+            move_wireframe: false,
             edges: true,
             back_edges: false,
             profiles: false,

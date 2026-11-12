@@ -3259,6 +3259,28 @@ mod preference_tests {
     }
 
     #[test]
+    fn move_wireframe_defaults_off_and_persists_without_model_edit() {
+        let legacy: DisplaySettings = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.move_wireframe);
+        let ctx = egui::Context::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        assert!(!app.doc.display.move_wireframe);
+        let mut storage = SavedPreferences::default();
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        for enabled in [true, false] {
+            storage.flushed = false;
+            app.doc.display.move_wireframe = enabled;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            let restored_ctx = egui::Context::default();
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&restored_ctx, Some(&storage));
+            assert_eq!(restored.doc.display.move_wireframe, enabled);
+        }
+    }
+
+    #[test]
     fn sidebar_preferences_save_immediately_and_restore_without_a_model_edit() {
         let ctx = egui::Context::default();
         let mut app = BenchUpApp::with_document(Document::default(), None, true);
@@ -5130,6 +5152,11 @@ impl BenchUpApp {
         {
             ui.ctx().request_repaint();
         }
+        Self::menu_checkbox(
+            ui,
+            &mut d.move_wireframe,
+            "Wireframe other objects while moving",
+        );
         ui.separator();
 
         // Hidden model content.
