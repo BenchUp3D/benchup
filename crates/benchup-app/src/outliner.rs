@@ -780,50 +780,59 @@ impl Outliner<'_> {
             .collect();
         if !geometry.is_empty() {
             let key = format!("outliner_geometry/{parent:?}");
-            let open = restored_header_open(ui, &key, false);
-            let mut label = egui::text::LayoutJob::simple(
-                tr!("outliner.geometry", count = geometry.len()),
-                egui::TextStyle::Button.resolve(ui.style()),
-                Color32::PLACEHOLDER,
-                f32::INFINITY,
-            );
-            // Reserve space after the disclosure arrow for the geometry icon.
-            label.sections[0].leading_space = 22.;
-            let header = egui::CollapsingHeader::new(label)
-                .id_salt(("outliner_geometry", parent))
-                .open(open)
-                .show(ui, |ui| {
-                    // Virtualize geometry rows; imported meshes can contain millions of entities.
-                    let height = ui.spacing().interact_size.y;
-                    let scroll_key = format!("outliner_geometry_rows/{parent:?}");
-                    let scroll = restored_scroll_area(
-                        ui,
-                        &scroll_key,
-                        egui::ScrollArea::vertical()
-                            .id_salt(("outliner_geometry_rows", parent))
-                            .max_height(180.)
-                            .auto_shrink([false, true]),
-                    )
-                    .show_rows(ui, height, geometry.len(), |ui, range| {
-                        for index in range {
-                            let id = geometry[index];
-                            ui.push_id(id, |ui| {
-                                self.row(ui, id);
-                            });
-                        }
-                    });
-                    remember_scroll(ui.ctx(), &scroll_key, scroll.state.clamped_offset());
+            let state_id = ui.make_persistent_id(("outliner_geometry", parent));
+            restore_section(ui.ctx(), state_id, &key, false);
+            let mut clicked = false;
+            let mut header = egui::collapsing_header::CollapsingState::load_with_default_open(
+                ui.ctx(),
+                state_id,
+                false,
+            )
+            .show_header(ui, |ui| {
+                // Match object rows: the same disclosure, button padding, icon size and spacing.
+                let icon = egui::Atom::paint(egui::vec2(18., 18.), |ui, args| {
+                    icons::line_icon(
+                        ui.painter(),
+                        args.rect.center(),
+                        "geometry",
+                        args.fallback_text_color,
+                    );
                 });
-            icons::line_icon(
-                ui.painter(),
-                Pos2::new(
-                    header.header_response.rect.left() + ui.spacing().indent + 9.,
-                    header.header_response.rect.center().y,
-                ),
-                "geometry",
-                ui.style().interact(&header.header_response).text_color(),
-            );
-            remember_section(ui.ctx(), header.header_response.id, &key);
+                let label = tr!("outliner.geometry", count = geometry.len());
+                let response = ui.add_sized(
+                    egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                    egui::Button::selectable(false, (icon, label, egui::Atom::grow()))
+                        .truncate(),
+                );
+                clicked = response.clicked();
+                response
+            });
+            if clicked {
+                header.toggle();
+            }
+            header.body(|ui| {
+                // Virtualize geometry rows; imported meshes can contain millions of entities.
+                let height = ui.spacing().interact_size.y;
+                let scroll_key = format!("outliner_geometry_rows/{parent:?}");
+                let scroll = restored_scroll_area(
+                    ui,
+                    &scroll_key,
+                    egui::ScrollArea::vertical()
+                        .id_salt(("outliner_geometry_rows", parent))
+                        .max_height(180.)
+                        .auto_shrink([false, true]),
+                )
+                .show_rows(ui, height, geometry.len(), |ui, range| {
+                    for index in range {
+                        let id = geometry[index];
+                        ui.push_id(id, |ui| {
+                            self.row(ui, id);
+                        });
+                    }
+                });
+                remember_scroll(ui.ctx(), &scroll_key, scroll.state.clamped_offset());
+            });
+            remember_section(ui.ctx(), state_id, &key);
         }
     }
 }
