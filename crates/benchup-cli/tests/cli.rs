@@ -164,3 +164,127 @@ fn mcp_serves_tools_over_stdio() {
     assert_eq!(replies[3]["result"]["isError"], true);
     assert_eq!(object_count(&path), 1);
 }
+
+/// A stand-in for the desktop app that records the path it was asked to open.
+#[cfg(unix)]
+fn fake_app(dir: &Path) -> (String, std::path::PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let record = dir.join("opened.txt");
+    let app = dir.join("fake-benchup-app");
+    std::fs::write(&app, format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}.tmp'\nmv '{0}.tmp' '{0}'\n", record.display()))
+        .unwrap();
+    std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (app.display().to_string(), record)
+}
+
+/// The app is started detached, so wait for it to record its argument.
+#[cfg(unix)]
+fn opened_by(record: &Path) -> String {
+    for _ in 0..100 {
+        if let Ok(text) = std::fs::read_to_string(record) {
+            return text;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("the app was not started");
+}
+
+#[cfg(unix)]
+#[test]
+fn open_starts_the_app_with_the_absolute_project_path() {
+    let dir = tempfile::tempdir().unwrap();
+    new_project(dir.path());
+    let (app, record) = fake_app(dir.path());
+    // A relative path, as typed in a shell, reaches the app as an absolute one.
+    let output = Command::new(env!("CARGO_BIN_EXE_benchup"))
+        .args(["open", "shelf.bup", "--app", &app])
+        .current_dir(dir.path())
+        .env_remove("BENCHUP_APP")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let expected = dir.path().canonicalize().unwrap().join("shelf.bup").display().to_string();
+    let result = json_out(&output);
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["opened"], expected);
+    assert_eq!(opened_by(&record), expected);
+}
+
+#[cfg(unix)]
+#[test]
+fn open_uses_the_benchup_app_variable() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = new_project(dir.path());
+    let (app, record) = fake_app(dir.path());
+    let output = Command::new(env!("CARGO_BIN_EXE_benchup")).args(["open", &path]).env("BENCHUP_APP", &app).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(json_out(&output)["app"], app);
+    assert!(opened_by(&record).ends_with("shelf.bup"));
+}
+
+#[test]
+fn open_refuses_missing_files_and_other_extensions() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing.bup").display().to_string();
+    let output = benchup(&["open", &missing, "--app", "/nonexistent/app"], None);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot open"));
+
+    let text = dir.path().join("notes.txt");
+    std::fs::write(&text, "not a project").unwrap();
+    let output = benchup(&["open", &text.display().to_string(), "--app", "/nonexistent/app"], None);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not a .bup project"));
+
+    let output = benchup(&["open"], None);
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn open_reports_an_app_that_cannot_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = new_project(dir.path());
+    let output = benchup(&["open", &path, "--app", "/nonexistent/benchup-app"], None);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot start /nonexistent/benchup-app"));
+}
+
+/// A project with one group "Pair" holding two boards; returns (group, inner board).
+fn grouped_project(dir: &Path) -> (String, u64, u64) {
+    let path = new_project(dir);
+    let batch = [
+        json!({"tool": "create_board", "arguments": board("A", [0., 0., 0.], [100., 100., 20.])}),
+        json!({"tool": "create_board", "arguments": board("B", [200., 0., 0.], [100., 100., 20.])}),
+    ];
+    let input: String = batch.iter().map(|c| format!("{c}\n")).collect();
+    let created = json_out(&benchup(&["call", &path, "--batch", "-"], Some(&input)));
+    let ids: Vec<u64> = created["results"].as_array().unwrap().iter().map(|r| r["created"][0].as_u64().unwrap()).collect();
+    let grouped = json_out(&benchup(&["call", &path, "group", &json!({"ids": ids, "name": "Pair", "component": false}).to_string()], None));
+    let group = grouped["created"][0].as_u64().unwrap();
+    let inner = grouped["members"][0]["id"].as_u64().unwrap();
+    (path, group, inner)
+}
+
+#[test]
+fn an_open_group_lasts_for_one_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, group, inner) = grouped_project(dir.path());
+    let rename = json!({"id": inner, "name": "Inner"}).to_string();
+    // Opened in one command, the group is closed again in the next.
+    assert!(benchup(&["call", &path, "enter_object", &json!({"id": group}).to_string()], None).status.success());
+    let output = benchup(&["call", &path, "rename", &rename], None);
+    assert_eq!(output.status.code(), Some(1));
+    let hint = json_out(&output)["hint"].as_str().unwrap().to_owned();
+    assert!(hint.contains(&format!("enter_object{{id:{group}}}")) && hint.contains("--batch"), "{hint}");
+    // In one batch it works, and the file is left at the top level.
+    let batch = format!(
+        "{}\n{}\n",
+        json!({"tool": "enter_object", "arguments": {"id": group}}),
+        json!({"tool": "rename", "arguments": {"id": inner, "name": "Inner"}})
+    );
+    assert!(benchup(&["call", &path, "--batch", "-"], Some(&batch)).status.success());
+    let doc = files::decode(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(doc.model.objects[&inner].name, "Inner");
+    assert_eq!(doc.model.edit_context, None);
+}
+

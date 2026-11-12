@@ -3,7 +3,7 @@
 Read and edit BenchUp `.bup` projects from a shell or an AI coding agent (Claude Code, Codex, Cursor…), without opening the app.
 
 ```sh
-cargo install --path crates/benchup-cli   # installs the `benchup` binary
+cargo install --locked --path crates/benchup-cli   # installs `benchup` in ~/.cargo/bin
 ```
 
 The tools come from [`benchup-tools`](../benchup-tools), the same operation layer an MCP server or in-app integration can use. Lengths are millimetres and Z is up.
@@ -25,6 +25,9 @@ benchup undo shelf.bup
 benchup redo shelf.bup
 
 benchup mcp shelf.bup                       # the same tools over MCP (stdio)
+
+benchup open shelf.bup                      # open it in the BenchUp desktop app
+benchup open shelf.bup --app target/debug/benchup-app   # or in a specific executable
 ```
 
 A batch file has one call per line. Blank lines and lines starting with `#` are skipped:
@@ -41,7 +44,8 @@ A batch file has one call per line. Blank lines and lines starting with `#` are 
 - **History:** each `call` is one entry in the project history, labelled `Agent: <tool>`, or `Agent: N changes` for a batch. You can undo it in BenchUp or with `benchup undo`.
 - **Atomic saves:** the file is written through a temporary file and a rename. If the file changed on disk since it was read (for example, BenchUp saved it), the command refuses to overwrite it.
 - **Shared projects:** local copies of shared projects are refused unless you pass `--allow-shared`, because edits would diverge from the server.
-- **Not live:** the CLI edits the file, not a running BenchUp window. Reopen the project to see the changes. Live editing through a local bridge is planned (see #13).
+- **Opening in the app:** `benchup open` hands the file to the installed desktop app (by bundle id on macOS, through the `.bup` file association on Linux and Windows). `--app <executable>`, or the `BENCHUP_APP` environment variable, starts that executable instead, which is handy for a development build. The app must be installed separately: [download it](https://github.com/BenchUp3D/editor/releases/latest).
+- **Not live:** the CLI edits the file, not a running BenchUp window. Run `benchup open` again after a change to reload it; if the project has unsaved changes in the app, BenchUp asks first. Saving in BenchUp overwrites the file without checking for outside changes, so save or discard your app edits before editing with the CLI. Live editing through a local bridge is planned (see #13).
 
 ## Using it from an agent
 

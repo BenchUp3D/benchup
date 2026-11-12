@@ -2,6 +2,7 @@
 //!
 //! Every command prints JSON on stdout. Exit status: 0 success, 1 the tool
 //! reported an error (the file is unchanged), 2 usage or I/O error.
+mod launch;
 mod mcp;
 mod project;
 
@@ -26,11 +27,16 @@ usage:
   benchup undo <file.bup>                          undo the last change
   benchup redo <file.bup>                          redo the last undone change
   benchup mcp <file.bup>                           serve the tools over MCP (stdio)
+  benchup open <file.bup> [--app EXECUTABLE]       open the project in the BenchUp desktop app
+                                                   (or in EXECUTABLE, default $BENCHUP_APP)
 
 options:
   --allow-shared   edit the local copy of a shared project
 
 Every change is one undo step in BenchUp and the file is saved atomically.
+Each command starts at the top level of the model: a group opened with
+enter_object stays open only until the end of that command, so put enter_object
+and the calls that need it in one --batch.
 Output is JSON. Exit status: 0 ok, 1 tool error (file unchanged), 2 usage or I/O error.";
 
 /// What a command produced: JSON to print and whether it succeeded.
@@ -210,6 +216,14 @@ fn run(mut argv: Vec<String>) -> Result<Output, String> {
             let value = open(&args)?.step_history(command == "redo")?;
             let ok = value["ok"] == true;
             Ok(Output { value, ok })
+        }
+        "open" => {
+            let args = parse_args(argv, &[], &["--app"])?;
+            let path = &args.expect(1)?[0];
+            let app = args.value("--app").map(str::to_owned).or_else(|| {
+                std::env::var("BENCHUP_APP").ok().filter(|app| !app.is_empty())
+            });
+            Ok(ok(launch::open(path, app.as_deref())?))
         }
         "mcp" => {
             let args = parse_args(argv, &["--allow-shared"], &[])?;

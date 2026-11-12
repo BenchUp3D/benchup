@@ -572,3 +572,97 @@ fn lease_rolls_back_calls_that_alter_foreign_loose_geometry() {
     // Geometry that touches nothing existing is fine.
     ok(&mut model, &mut env, "draw_polyline", json!({"points_mm": [[0, 5000, 0], [100, 5000, 0]]}));
 }
+
+/// A side and a shelf entering it by 9 mm, joined with a tongue and groove.
+fn joined_pair(model: &mut Model, env: &mut ToolEnv) -> (u64, u64, u64) {
+    let side = board(model, env, "Side", [0., 0., 0.], [18., 300., 900.]);
+    let shelf = board(model, env, "Shelf", [9., 0., 400.], [500., 300., 18.]);
+    let joint = ok(model, env, "add_joint", json!({"a": side, "b": shelf, "kind": "tongue_groove"})).joints[0];
+    (side, shelf, joint)
+}
+
+#[test]
+fn erasing_a_board_removes_its_joints() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let (side, shelf, joint) = joined_pair(&mut model, &mut env);
+    let other = board(&mut model, &mut env, "Other", [0., 500., 0.], [18., 300., 900.]);
+    let second = board(&mut model, &mut env, "Second", [9., 500., 400.], [500., 300., 18.]);
+    let kept = ok(&mut model, &mut env, "add_joint", json!({"a": other, "b": second, "kind": "tongue_groove"})).joints[0];
+    let outcome = ok(&mut model, &mut env, "erase", json!({"ids": [shelf]}));
+    assert_eq!(outcome.result["removed_joints"], json!([joint]));
+    assert!(!model.connections.contains_key(&joint));
+    assert!(model.connections.contains_key(&kept), "joints of other boards stay");
+    assert!(model.contains_entity(&side));
+    // Erasing a group removes the joints of the boards inside it.
+    let group = ok(&mut model, &mut env, "group", json!({"ids": [other, second], "name": "Pair", "component": false})).created[0];
+    assert_eq!(model.connections.len(), 1);
+    let outcome = ok(&mut model, &mut env, "erase", json!({"ids": [group]}));
+    assert_eq!(outcome.result["removed_joints"].as_array().unwrap().len(), 1);
+    assert!(model.connections.is_empty());
+}
+
+#[test]
+fn joints_are_removed_with_remove_joint_not_erase() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let (side, shelf, joint) = joined_pair(&mut model, &mut env);
+    let message = err(&mut model, &mut env, "erase", json!({"ids": [joint]}));
+    assert!(message.contains("is a joint"), "{message}");
+    let hint = run(&mut model, &mut env, "erase", json!({"ids": [joint]})).result["hint"].clone();
+    assert!(hint.as_str().unwrap().contains("remove_joint"));
+    assert!(err(&mut model, &mut env, "remove_joint", json!({"ids": [side]})).contains("not a joint"));
+    let outcome = ok(&mut model, &mut env, "remove_joint", json!({"ids": [joint]}));
+    assert!(outcome.mutated, "removing a joint is an undoable change");
+    assert_eq!(outcome.result["removed_joints"], json!([joint]));
+    assert!(model.connections.is_empty());
+    assert!(model.contains_entity(&side) && model.contains_entity(&shelf), "the boards stay");
+}
+
+#[test]
+fn the_scene_flags_joints_whose_board_is_gone() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let (_, shelf, joint) = joined_pair(&mut model, &mut env);
+    // What the app leaves behind today (BenchUp3D/editor#36).
+    model.erase(&BTreeSet::from([shelf]));
+    let scene = ok(&mut model, &mut env, "get_scene", json!({})).result;
+    assert_eq!(scene["joints"][0]["missing_boards"], json!([shelf]));
+    // Such a joint can still be removed.
+    ok(&mut model, &mut env, "remove_joint", json!({"ids": [joint]}));
+    assert!(model.connections.is_empty());
+}
+
+#[test]
+fn scope_errors_name_every_object_to_open() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "A", [0., 0., 0.], [100., 100., 20.]);
+    let b = board(&mut model, &mut env, "B", [200., 0., 0.], [100., 100., 20.]);
+    let inner = ok(&mut model, &mut env, "group", json!({"ids": [a, b], "name": "Inner", "component": false})).created[0];
+    let other = board(&mut model, &mut env, "C", [0., 300., 0.], [100., 100., 20.]);
+    let outer = ok(&mut model, &mut env, "group", json!({"ids": [inner, other], "name": "Outer", "component": false})).created[0];
+    let inner = model.objects[&outer].entities.iter().copied().find(|id| model.objects.get(id).is_some_and(|o| o.name == "Inner")).unwrap();
+    let part = *model.objects[&inner].entities.iter().find(|id| model.objects.contains_key(id)).unwrap();
+    let hint = |model: &mut Model, env: &mut ToolEnv| {
+        run(model, env, "rename", json!({"id": part, "name": "P"})).result["hint"].as_str().unwrap().to_owned()
+    };
+    let from_root = hint(&mut model, &mut env);
+    assert!(from_root.contains(&format!("enter_object{{id:{outer}}}, then enter_object{{id:{inner}}}")), "{from_root}");
+    ok(&mut model, &mut env, "enter_object", json!({"id": outer}));
+    let from_outer = hint(&mut model, &mut env);
+    assert!(from_outer.contains(&format!("call enter_object{{id:{inner}}} first")), "{from_outer}");
+    assert!(!from_outer.contains("exit_to_root"), "{from_outer}");
+    // From an unrelated group, leave it first.
+    ok(&mut model, &mut env, "exit_to_root", json!({}));
+    let lone = board(&mut model, &mut env, "D", [0., 600., 0.], [100., 100., 20.]);
+    let side_group = ok(&mut model, &mut env, "group", json!({"ids": [lone], "name": "Side", "component": false})).created[0];
+    ok(&mut model, &mut env, "enter_object", json!({"id": side_group}));
+    assert!(hint(&mut model, &mut env).contains("exit_to_root, then enter_object"));
+}
+
+#[test]
+fn find_objects_lists_everything_without_a_query() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    board(&mut model, &mut env, "Side", [0., 0., 0.], [18., 300., 900.]);
+    board(&mut model, &mut env, "Shelf", [18., 0., 400.], [500., 300., 18.]);
+    assert_eq!(ok(&mut model, &mut env, "find_objects", json!({})).result["total"], 2);
+    assert_eq!(ok(&mut model, &mut env, "find_objects", json!({"query": "shel"})).result["total"], 1);
+    assert_eq!(ok(&mut model, &mut env, "find_objects", json!({"query": "group"})).result["total"], 2);
+}

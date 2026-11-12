@@ -116,6 +116,7 @@ const TOOLS: &[(&str, bool)] = &[
     ("paint", true),
     ("erase", true),
     ("add_joint", true),
+    ("remove_joint", true),
     ("add_dimension", true),
     ("add_text", true),
     ("select", false),
@@ -225,8 +226,8 @@ pub fn definitions() -> Vec<ToolDefinition> {
     let joint_kinds = json!(["mortise_tenon", "half_lap", "tongue_groove", "rabbet", "dovetail", "finger"]);
     vec![
         def("get_scene", "Return the whole scene summary again (objects, selection, stock, joints). Lengths are in mm.", json!({}), &[]),
-        def("find_objects", "Search objects by name, tag, material, kind (group/component) or id. Use when the scene summary was truncated.",
-            json!({"query": text(), "limit": {"type": "integer", "minimum": 1, "maximum": 100}}), &["query"]),
+        def("find_objects", "Search objects (groups and components) when the scene summary was truncated. query matches part of a name, tag or material name, a kind (\"group\" or \"component\") or an exact id; omit it or pass \"\" to list every object. Dimensions and texts are not objects.",
+            json!({"query": text(), "limit": {"type": "integer", "minimum": 1, "maximum": 100}}), &[]),
         def("get_object", "Details of one entity, including its faces (id, normal, center, area) for push_pull. Face normals point out of the part; a positive push_pull distance moves a face outward.",
             json!({"id": id()}), &["id"]),
         def("get_selection", "Entities currently selected in the editor.", json!({}), &[]),
@@ -261,7 +262,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
             json!({"ids": ids(), "tag": tag_name(true)}), &["ids", "tag"]),
         def("paint", "Paint objects or faces with an RGB color.",
             json!({"ids": ids(), "rgb": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 255}, "minItems": 3, "maxItems": 3}}), &["ids", "rgb"]),
-        def("erase", "Delete entities.", json!({"ids": ids()}), &["ids"]),
+        def("erase", "Delete entities (objects, faces, edges, dimensions, texts). Joints that use an erased board are removed with it; use remove_joint to delete a joint alone.", json!({"ids": ids()}), &["ids"]),
         def("add_joint", "Add a wood joint between two boards. The boards must already overlap where they meet (the overlap sets the joint depth). Optional params tune the joint (ratios 0-1, clearance in mm).",
             json!({"a": id(), "b": id(), "kind": {"type": "string", "enum": joint_kinds},
                 "params": {"type": "object", "properties": {
@@ -272,12 +273,14 @@ pub fn definitions() -> Vec<ToolDefinition> {
                     "width_axis": {"type": "integer", "minimum": 0, "maximum": 2}},
                     "additionalProperties": false}}),
             &["a", "b", "kind"]),
+        def("remove_joint", "Delete wood joints by id (from the joints list in get_scene); the boards stay.",
+            json!({"ids": ids()}), &["ids"]),
         def("add_dimension", "Add a dimension annotation between two points, drawn offset_mm away.",
             json!({"start_mm": vec3(), "end_mm": vec3(), "offset_mm": vec3()}), &["start_mm", "end_mm", "offset_mm"]),
         def("add_text", "Add a text note anchored at point_mm.",
             json!({"point_mm": vec3(), "offset_mm": vec3(), "text": text()}), &["point_mm", "offset_mm", "text"]),
         def("select", "Select entities in the editor so the designer sees them.", json!({"ids": ids()}), &["ids"]),
-        def("enter_object", "Open a group/component for editing its inner parts.", json!({"id": id()}), &["id"]),
+        def("enter_object", "Open a group/component for editing its inner parts. Nested parts need each level opened in turn, from the outside in. The group stays open until exit_to_root or the end of the session (with the benchup CLI, one command or --batch). push_pull does not need it.", json!({"id": id()}), &["id"]),
         def("exit_to_root", "Leave any open group and edit the top level again.", json!({}), &[]),
     ]
 }
@@ -331,6 +334,7 @@ struct Empty {}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FindArgs {
+    #[serde(default)]
     query: String,
     limit: Option<usize>,
 }
@@ -493,13 +497,29 @@ fn finite(value: f64, what: &str) -> Result<f64, Fail> {
 
 // ---------------------------------------------------------------- id checks
 
+/// How to reach `id` from the current editing scope: the objects to open, from
+/// the outside in, after leaving the current scope if `id` is not inside it.
 fn unreachable_hint(model: &Model, id: u64) -> String {
-    match model.parent(id) {
-        Some(parent) if model.objects.contains_key(&parent) => {
-            format!("{id} is inside object {parent}: call enter_object{{id:{parent}}} first, or exit_to_root to edit the top level.")
+    let mut chain = Vec::new();
+    let mut current = model.parent(id).filter(|o| model.objects.contains_key(o));
+    while let Some(object) = current {
+        if Some(object) == model.edit_context || chain.len() > 256 {
+            break;
         }
-        _ => "Call exit_to_root, then retry.".into(),
+        chain.push(object);
+        current = model.parent(object).filter(|o| model.objects.contains_key(o));
     }
+    let Some(&parent) = chain.first() else {
+        return "Call exit_to_root, then retry.".into();
+    };
+    chain.reverse();
+    let leave = if model.edit_context.is_some() && current != model.edit_context { "exit_to_root, then " } else { "" };
+    let steps: Vec<String> = chain.iter().map(|o| format!("enter_object{{id:{o}}}")).collect();
+    format!(
+        "{id} is inside object {parent}: call {leave}{} first, in the same session \
+         (with the benchup CLI, in the same --batch).",
+        steps.join(", then ")
+    )
 }
 
 /// Resolve ids that must exist and be visible; mutating use also needs them
@@ -817,13 +837,68 @@ fn paint(model: &mut Model, a: PaintArgs) -> Res {
     Ok(modified(&set))
 }
 fn erase(model: &mut Model, a: IdsArg) -> Res {
+    if let Some(joint) = a.ids.iter().find(|id| model.connections.contains_key(id)) {
+        return Err(fail(
+            format!("{joint} is a joint, not an entity"),
+            "Use remove_joint to delete a joint. Erasing a board also removes its joints.",
+        ));
+    }
     let set = entities(model, &a.ids, true)?;
+    let intact: Vec<u64> = model
+        .connections
+        .iter()
+        .filter(|(_, c)| c.members.iter().all(|m| model.contains_entity(m)))
+        .map(|(id, _)| *id)
+        .collect();
     model.erase(&set);
     let erased: Vec<u64> = set.iter().copied().filter(|id| !model.contains_entity(id)).collect();
     if erased.is_empty() {
         return Err("nothing was erased".into());
     }
-    Ok(Done { erased, ..Default::default() })
+    // The core keeps joints whose boards are gone (BenchUp3D/editor#36);
+    // remove the ones this call left without a board.
+    let orphaned: Vec<u64> = intact
+        .into_iter()
+        .filter(|id| model.connections[id].members.iter().any(|m| !model.contains_entity(m)))
+        .collect();
+    for id in &orphaned {
+        model.connections.remove(id);
+    }
+    let mut done = Done { erased, ..Default::default() };
+    if !orphaned.is_empty() {
+        done.extra.insert("removed_joints".into(), json!(orphaned));
+    }
+    Ok(done)
+}
+fn remove_joint(model: &mut Model, env: &ToolEnv, a: IdsArg) -> Res {
+    if a.ids.is_empty() || a.ids.len() > MAX_IDS {
+        return Err(fail("bad ids", format!("Pass between 1 and {MAX_IDS} joint ids.")));
+    }
+    let mut boards = BTreeSet::new();
+    for id in &a.ids {
+        let Some(connection) = model.connections.get(id) else {
+            return Err(fail(format!("{id} is not a joint"), "Use ids from the joints list in get_scene."));
+        };
+        if !matches!(connection.operation, ConnectionOperation::Joinery(_)) {
+            return Err(fail(format!("{id} is not a wood joint"), "Only wood joints can be removed with this tool."));
+        }
+        // A joint whose board was erased has nothing left to protect.
+        for board in connection.members.iter().filter(|b| model.contains_entity(b)) {
+            if model.is_locked(*board) {
+                return Err(fail(format!("board {board} of joint {id} is locked"), "Locked entities cannot be changed; tell the designer to unlock it."));
+            }
+            if !leased(model, env, *board) {
+                return Err(fail("not-leased", "select it first so you hold the edit lease"));
+            }
+            boards.insert(*board);
+        }
+    }
+    for id in &a.ids {
+        model.connections.remove(id);
+    }
+    let mut done = modified(&boards);
+    done.extra.insert("removed_joints".into(), json!(a.ids));
+    Ok(done)
 }
 fn add_joint(model: &mut Model, a: JointArgs) -> Res {
     if a.a == a.b {
@@ -955,6 +1030,7 @@ fn run(model: &mut Model, env: &mut ToolEnv, name: &str, arguments: &str) -> Res
         "paint" => paint(model, parse(arguments)?),
         "erase" => erase(model, parse(arguments)?),
         "add_joint" => add_joint(model, parse(arguments)?),
+        "remove_joint" => remove_joint(model, env, parse(arguments)?),
         "add_dimension" => add_dimension(model, parse(arguments)?),
         "add_text" => add_text(model, parse(arguments)?),
         "select" => {

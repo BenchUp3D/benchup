@@ -121,7 +121,13 @@ fn joint_json(model: &Model, id: u64) -> Option<Value> {
         ConnectionOperation::Joinery(settings) => json!(format!("{:?}", settings.kind)),
         ConnectionOperation::Fasteners(_) => json!("Fasteners"),
     };
-    Some(json!({"id": id, "a": connection.members[0], "b": connection.members[1], "kind": kind}))
+    let mut joint = json!({"id": id, "a": connection.members[0], "b": connection.members[1], "kind": kind});
+    let missing: Vec<u64> = connection.members.iter().copied().filter(|m| !model.contains_entity(m)).collect();
+    if !missing.is_empty() {
+        // Left behind when a board was erased (BenchUp3D/editor#36).
+        joint["missing_boards"] = json!(missing);
+    }
+    Some(joint)
 }
 
 /// Everything the model needs to plan an edit, within `budget` characters.
