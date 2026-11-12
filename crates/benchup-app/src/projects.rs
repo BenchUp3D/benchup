@@ -449,7 +449,7 @@ impl BenchUpApp {
                     return;
                 }
                 Err(error) => {
-                    self.project.error = Some(format!("Could not capture the project preview: {error}"));
+                    self.project.error = Some(tr!("projects.could_not_capture_preview", error = error));
                     self.project.after_save = None;
                     self.project.snapshot = None;
                     return;
@@ -470,12 +470,12 @@ impl BenchUpApp {
                 result => {
                     let contents = match result.and_then(|pages| {
                         let page = pages.and_then(|pages| pages.into_iter().next())
-                            .ok_or("The viewport preview is empty.")?;
+                            .ok_or(tr!("project_files.empty_preview"))?;
                         project_files::with_preview(&contents, page)
                     }) {
                         Ok(contents) => contents,
                         Err(error) => {
-                            self.project.error = Some(format!("Could not capture the project preview: {error}"));
+                            self.project.error = Some(tr!("projects.could_not_capture_preview", error = error));
                             self.project.after_save = None;
                             self.project.snapshot = None;
                             return;

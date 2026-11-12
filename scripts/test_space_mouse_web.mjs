@@ -111,7 +111,7 @@ test('unsupported browsers and insecure contexts do not request device access', 
         f.connection.connect();
         assert.equal(f.connection.supported, false);
         assert.equal(f.connection.canConnect, false);
-        assert.match(f.connection.status, secure ? /Chrome or Edge/ : /HTTPS or localhost/);
+        assert.equal(f.connection.status, secure ? "unsupported" : "insecure");
         assert.equal(f.env.navigator.hid?.requests.length ?? 0, 0);
     }
 });
@@ -127,7 +127,8 @@ test('reload automatically opens only a previously authorized multi-axis SpaceMo
     assert.equal(logitechMouse.opens, 0);
     assert.equal(f.hid.requests.length, 0);
     assert.equal(f.connection.canConnect, false);
-    assert.match(f.connection.status, /Connected: SpaceNavigator/);
+    assert.equal(f.connection.status, "connected");
+    assert.equal(f.connection.device, "SpaceNavigator");
     for (let i = 0; i < 5; ++i) f.connection.sync(true, true);
     await settle();
     assert.equal(device.opens, 1);
@@ -222,7 +223,7 @@ test('unplug clears input and reconnect reopens without another permission promp
     emit(f.hid, 'disconnect', { device });
     assert.equal(f.input, null);
     assert.equal(f.connection.device, undefined);
-    assert.match(f.connection.status, /disconnected/);
+    assert.equal(f.connection.status, "disconnected");
     device.report(3, [2]);
     assert.equal(f.input, null);
     await settle();
@@ -238,7 +239,7 @@ test('disabling closes the device and re-enabling restores authorized access', a
     const f = await ready(t, [device]);
     device.report(1, [1, 2, 3, 4, 5, 6]);
     f.connection.sync(false, true);
-    assert.equal(f.connection.status, 'Disabled');
+    assert.equal(f.connection.status, 'disabled');
     assert.equal(f.connection.device, undefined);
     assert.equal(f.input, null);
     device.report(3, [2]);
@@ -256,13 +257,13 @@ test('permission denial and cancellation are recoverable without automatic promp
     f.hid.requestError = new DOMException('blocked', 'NotAllowedError');
     f.connection.connect();
     await settle();
-    assert.match(f.connection.status, /not allowed/);
+    assert.equal(f.connection.status, "denied");
     assert.equal(f.connection.canConnect, true);
     assert.equal(f.hid.requests.length, 1);
     f.hid.requestError = null;
     f.connection.connect();
     await settle();
-    assert.match(f.connection.status, /No 3D Mouse selected/);
+    assert.equal(f.connection.status, "no_selection");
     assert.equal(f.connection.canConnect, true);
     const device = new Device();
     f.hid.selection = [device];
@@ -276,7 +277,7 @@ test('policy rejection of getDevices is shown and does not repeatedly retry', as
     f.hid.scanError = new DOMException('policy', 'SecurityError');
     f.connection.sync(true, true);
     await settle();
-    assert.match(f.connection.status, /site's device permissions/);
+    assert.equal(f.connection.status, "denied");
     assert.equal(f.connection.canConnect, true);
     for (let i = 0; i < 5; ++i) f.connection.sync(true, true);
     assert.equal(f.hid.scans, 1);
@@ -287,14 +288,14 @@ test('exclusive-access failures permit retry and another granted device can open
     const first = new Device({ openError: new DOMException('busy', 'NetworkError') });
     const second = new Device({ productName: 'SpaceMouse Pro' });
     const f = await ready(t, [first]);
-    assert.match(f.connection.status, /Quit other apps or drivers/);
+    assert.equal(f.connection.status, "open_failed");
     assert.equal(f.connection.canConnect, true);
     // Chrome reports an OS-level open failure as NotAllowedError.
     first.openError = new DOMException('Failed to open the device.', 'NotAllowedError');
     f.hid.selection = [first];
     f.connection.connect();
     await settle();
-    assert.match(f.connection.status, /Quit other apps or drivers/);
+    assert.equal(f.connection.status, "open_failed");
     assert.equal(f.connection.canConnect, true);
     f.hid.selection = [first, second];
     f.connection.connect();
@@ -313,7 +314,7 @@ test('turning off during authorization ignores the late selection', async t => {
     await settle();
     assert.equal(device.opens, 0);
     assert.equal(f.connection.device, undefined);
-    assert.equal(f.connection.status, 'Disabled');
+    assert.equal(f.connection.status, 'disabled');
 });
 
 test('turning off while a scan is pending never opens its result', async t => {
@@ -325,7 +326,7 @@ test('turning off while a scan is pending never opens its result', async t => {
     f.hid.scanGate.resolve([device]);
     await settle();
     assert.equal(device.opens, 0);
-    assert.equal(f.connection.status, 'Disabled');
+    assert.equal(f.connection.status, 'disabled');
 });
 
 test('an in-flight open is closed before re-enabling can open the same device again', async t => {
@@ -354,7 +355,7 @@ test('disconnect while opening invalidates the pending connection', async t => {
     await settle();
     assert.equal(device.opened, false);
     assert.equal(f.connection.device, undefined);
-    assert.match(f.connection.status, /disconnected/);
+    assert.equal(f.connection.status, "disconnected");
 });
 
 test('dispose detaches listeners and pending operations never call dropped Rust closures', async t => {

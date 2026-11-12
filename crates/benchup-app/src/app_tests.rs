@@ -7271,16 +7271,34 @@ fn applied_routing_keeps_visible_stock_and_cut_surfaces_selectable_and_highlight
 }
 
 #[test]
-fn view_menu_toggles_selected_edge_lengths_without_model_edits() {
+fn view_menu_localizes_display_options_and_toggles_selected_edge_lengths_without_model_edits() {
+    struct ResetLanguage;
+    impl Drop for ResetLanguage {
+        fn drop(&mut self) {
+            benchup_core::i18n::set_language("en");
+        }
+    }
+    let _reset = ResetLanguage;
     let mut h = Harness::new();
-    let output = h.frame(vec![], egui::Modifiers::NONE);
-    assert!(!h.app.doc.display.face_side_lengths);
-    h.click(text_position(&output, "View"));
-    let output = h.frame(vec![], egui::Modifiers::NONE);
-    h.click(menu_text_position(&output, "Selected Edge Lengths"));
-    assert!(h.app.doc.display.face_side_lengths);
-    assert!(!h.app.project.modified);
-    assert!(h.app.doc.history.is_empty());
+    for (language, view, wireframe, lengths) in [
+        ("en", "View", "Wireframe other objects while moving", "Selected Edge Lengths"),
+        ("zh_CN", "视图", "移动时以线框显示其他对象", "所选边的长度"),
+        ("pt_BR", "Visualizar", "Exibir outros objetos em aramado ao mover", "Comprimentos das arestas selecionadas"),
+        ("en", "View", "Wireframe other objects while moving", "Selected Edge Lengths"),
+    ] {
+        h.app.general_settings.language = language.into();
+        benchup_core::i18n::set_language(language);
+        let before = h.app.doc.display.face_side_lengths;
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        h.click(text_position(&output, view));
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        menu_text_position(&output, wireframe);
+        h.click(menu_text_position(&output, lengths));
+        h.key(Key::Escape);
+        assert_eq!(h.app.doc.display.face_side_lengths, !before);
+        assert!(!h.app.project.modified);
+        assert!(h.app.doc.history.is_empty());
+    }
 }
 
 #[test]

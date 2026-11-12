@@ -186,7 +186,7 @@ impl Cache {
             let result = self
                 .client
                 .as_ref()
-                .ok_or_else(|| "The measurement worker is unavailable.".to_string())
+                .ok_or_else(|| tr!("selection_measurements.worker_unavailable").to_string())
                 .and_then(|client| {
                     let function = js_sys::Reflect::get(client, &"request".into())
                         .map_err(|e| format!("{e:?}"))?
@@ -211,7 +211,7 @@ impl Cache {
                         .map_err(|e: JsValue| format!("{e:?}"))
                         .and_then(|v| {
                             v.as_string()
-                                .ok_or_else(|| "Invalid measurement result.".into())
+                                .ok_or_else(|| tr!("selection_measurements.invalid_result").into())
                         })
                         .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string())),
                     Err(error) => Err(error),

@@ -59,6 +59,13 @@ mod tests {
         super::set_language("zh_CN");
         assert_eq!(tr!("common.cancel"), "取消");
         assert_eq!(tr!("settings.settings"), "设置");
+        assert_eq!(crate::ImageFit::Contain.label(), "完整显示");
+        assert_eq!(crate::ImageFit::Cover.label(), "填满裁剪");
+        assert_eq!(crate::ImageFit::Stretch.label(), "拉伸");
+        assert_eq!(
+            serde_json::to_string(&crate::ImageFit::Contain).unwrap(),
+            "\"contain\""
+        );
         #[cfg(not(target_arch = "wasm32"))]
         assert!(super::spawn_localized(super::is_chinese).join().unwrap());
         assert_eq!(tr!("settings.connected", device = "test"), "已连接：test");
@@ -78,6 +85,9 @@ mod tests {
         super::set_language("pt_BR");
         assert_eq!(tr!("common.cancel"), "Cancelar");
         assert_eq!(tr!("settings.settings"), "Configurações");
+        assert_eq!(crate::ImageFit::Contain.label(), "Conter");
+        assert_eq!(crate::ImageFit::Cover.label(), "Cobrir");
+        assert_eq!(crate::ImageFit::Stretch.label(), "Esticar");
         #[cfg(not(target_arch = "wasm32"))]
         assert_eq!(
             super::spawn_localized(super::current_language).join().unwrap(),
@@ -87,6 +97,7 @@ mod tests {
         assert_eq!(tr!("app.selection_entities", count = 2), "2 entidades");
         super::set_language("en");
         assert_eq!(tr!("common.cancel"), "Cancel");
+        assert_eq!(crate::ImageFit::Contain.label(), "Contain");
         super::set_language("unsupported");
         assert_eq!(tr!("settings.settings"), "Settings");
     }

@@ -1,5 +1,6 @@
 //! Scale factors come from the same world-space targets as Move.
 use super::*;
+use benchup_core::tr;
 
 /// Idle redraws must not repeat scene snapping or geometry work. Camera,
 /// precision, grid, guide and lock changes still invalidate the last query.
@@ -200,16 +201,16 @@ impl BenchUpApp {
             && let Some(grip) = hovered
         {
             let label = match grip.constraint {
-                Some(AxisConstraint::Axis(axis)) => format!("Scale {} axis", axis.label()),
-                Some(AxisConstraint::Plane(axis)) => format!(
-                    "Scale in the {} plane",
-                    match axis {
+                Some(AxisConstraint::Axis(axis)) => tr!("scale_tool.axis_hint", axis = axis.label()),
+                Some(AxisConstraint::Plane(axis)) => tr!(
+                    "scale_tool.plane_hint",
+                    plane = match axis {
                         Axis::X => "YZ",
                         Axis::Y => "XZ",
                         Axis::Z => "XY",
                     }
                 ),
-                None => "Scale uniformly".into(),
+                None => tr!("scale_tool.uniform_hint").into(),
             };
             painter.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             if let Some(point) = self.doc.camera.project(grip.point, dv(rect.size())) {

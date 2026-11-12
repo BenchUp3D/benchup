@@ -106,7 +106,7 @@ pub(crate) fn encode(json: &str) -> Result<Vec<u8>, String> {
         let mut png: Vec<u8> = serde_json::from_value(preview).map_err(|e| e.to_string())?;
         // Insert a private ancillary chunk immediately before IEND. Standard PNG
         // readers ignore it and display the saved GPU viewport thumbnail.
-        let end = png.len().checked_sub(12).ok_or("Invalid project preview")?;
+        let end = png.len().checked_sub(12).ok_or(tr!("project_files.invalid_preview"))?;
         let mut chunk = Vec::with_capacity(compressed.len() + 12);
         chunk.extend_from_slice(&(u32::try_from(compressed.len()).map_err(|e| e.to_string())?).to_be_bytes());
         chunk.extend_from_slice(b"buPd");
@@ -307,7 +307,7 @@ pub(super) fn save_preview(
     save_payload(ctx, path, name, async move {
         loop {
             if let Some(pages) = capture.poll(&parent)? {
-                let page = pages.into_iter().next().ok_or("The viewport preview is empty.")?;
+                let page = pages.into_iter().next().ok_or(tr!("project_files.empty_preview"))?;
                 return encode(&with_preview(&contents, page)?);
             }
             let delay = js_sys::Promise::new(&mut |resolve, _reject| {
@@ -468,7 +468,7 @@ impl PdfViewer {
     pub(crate) fn show(mut self, contents: &[u8]) -> Result<(), String> {
         let window = web_sys::window().ok_or_else(|| tr!("project_files.no_browser_window").to_string())?;
         let tab = self.0.as_ref().unwrap();
-        if tab.closed().unwrap_or(true) { return Err("The PDF viewer was closed before generation finished.".into()); }
+        if tab.closed().unwrap_or(true) { return Err(tr!("project_files.pdf_viewer_closed").into()); }
         let url = blob_url(contents, "application/pdf").map_err(|error| format!("{error:?}"))?;
         if let Err(error) = js_sys::Reflect::set(tab, &"location".into(), &url.clone().into()) {
             let _ = web_sys::Url::revoke_object_url(&url);
@@ -777,7 +777,7 @@ pub(crate) fn with_preview(json: &str, image: image::RgbaImage) -> Result<String
 pub fn extract_preview(path: &std::path::Path, output: &std::path::Path) -> Result<(), String> {
     let input = std::fs::read(path).map_err(|e| e.to_string())?;
     if !input.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Err("This project has no saved viewport preview. Save it in BenchUp first.".into());
+        return Err(tr!("project_files.no_saved_preview").into());
     }
     let image = image::load_from_memory_with_format(&input, image::ImageFormat::Png).map_err(|e| e.to_string())?;
     image.save_with_format(output, image::ImageFormat::Png).map_err(|e| e.to_string())
@@ -797,14 +797,14 @@ fn project_payload(bytes: &[u8]) -> Result<&[u8], String> {
     let mut position = 8usize;
     while let Some(header) = bytes.get(position..position.saturating_add(8)) {
         let length = u32::from_be_bytes(header[..4].try_into().unwrap()) as usize;
-        let end = position.checked_add(12).and_then(|v| v.checked_add(length)).ok_or("Invalid project chunk size")?;
-        let chunk = bytes.get(position..end).ok_or("Truncated project chunk")?;
+        let end = position.checked_add(12).and_then(|v| v.checked_add(length)).ok_or(tr!("project_files.invalid_chunk_size"))?;
+        let chunk = bytes.get(position..end).ok_or(tr!("project_files.truncated_chunk"))?;
         if &header[4..8] == b"buPd" {
             let checksum = u32::from_be_bytes(chunk[8 + length..].try_into().unwrap());
-            if png_crc(&chunk[4..8 + length]) != checksum { return Err("The project data checksum is invalid.".into()); }
+            if png_crc(&chunk[4..8 + length]) != checksum { return Err(tr!("project_files.invalid_checksum").into()); }
             return Ok(&chunk[8..8 + length]);
         }
         position = end;
     }
-    Err("This PNG does not contain a BenchUp project.".into())
+    Err(tr!("project_files.png_has_no_project").into())
 }

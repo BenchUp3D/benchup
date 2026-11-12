@@ -380,7 +380,7 @@ impl Model {
 
     fn editable_surface(&self, face: u64) -> Result<(), &'static str> {
         if self.reference_images.contains_key(&face) {
-            return Err("Use image Properties, Move, Rotate or Scale to edit a reference image.");
+            return Err(tr!("core.modeling.edit_reference_image_tools"));
         }
         if self.is_locked(face) {
             return Err(tr!("core.modeling.unlock_the_object_before_editing_it"));

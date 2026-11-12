@@ -1,5 +1,4 @@
 use benchup_core::Document;
-#[cfg(not(target_arch = "wasm32"))]
 use benchup_core::tr;
 
 use std::{
@@ -64,7 +63,7 @@ fn restore_autosave(
     remember_base(&doc);
     if let Some(json) = edits {
         let saved: SavedEdits = serde_json::from_str(json)
-            .map_err(|error| format!("Cannot restore autosave edits: {error}"))?;
+            .map_err(|error| tr!("storage.cannot_restore_edits", error = error))?;
         if saved.token == token {
             doc = saved.checkpoint.restore(&doc.model, &doc.history)?;
         }
@@ -118,7 +117,7 @@ pub(crate) fn data_dir() -> Result<std::path::PathBuf, String> {
         .ok_or_else(|| tr!("storage.cannot_locate_the_application_data_directory").to_owned())?;
     if let Some(old) = directories::ProjectDirs::from("", "Ketchup", "Ketchup") {
         crate::identity::migrate_directory(&new, old.data_local_dir())
-            .map_err(|error| format!("Cannot migrate workspace: {error}"))?;
+            .map_err(|error| tr!("storage.cannot_migrate_workspace", error = error))?;
     }
     Ok(new)
 }

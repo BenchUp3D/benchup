@@ -715,12 +715,12 @@ impl DocumentCheckpoint {
         let mut doc = self.metadata;
         doc.model = base_model.clone();
         if !self.model.apply_checked(&mut doc.model, true) {
-            return Err("Autosave edits do not match the saved project.".into());
+            return Err(tr!("core.document.autosave_edits_mismatch").into());
         }
         doc.history = self
             .history
             .restore(base_history)
-            .ok_or("Autosave history does not match the saved project.")?;
+            .ok_or(tr!("core.document.autosave_history_mismatch"))?;
         doc.restore_loaded()?;
         Ok(doc)
     }

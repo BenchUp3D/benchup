@@ -71,7 +71,7 @@ pub(super) fn start(ctx: &egui::Context, _name: String, request: Request, viewer
         let result = match promise {
             Ok(promise) => wasm_bindgen_futures::JsFuture::from(promise).await.map_err(js_error)
                 .and_then(|value| value.dyn_into::<js_sys::Uint8Array>()
-                    .map_err(|_| "Could not read the generated PDF.".to_string()))
+                    .map_err(|_| tr!("pdf_export.could_not_read").to_string()))
                 .and_then(|bytes| viewer.show(&bytes.to_vec())).map(|_| Outcome::Exported),
             Err(error) => Err(error),
         };
@@ -84,5 +84,5 @@ pub(super) fn start(ctx: &egui::Context, _name: String, request: Request, viewer
 #[cfg(target_arch = "wasm32")]
 fn js_error(error: eframe::wasm_bindgen::JsValue) -> String {
     error.as_string().or_else(|| js_sys::Reflect::get(&error, &"message".into()).ok()
-        .and_then(|message| message.as_string())).unwrap_or_else(|| "Could not generate the PDF.".into())
+        .and_then(|message| message.as_string())).unwrap_or_else(|| tr!("pdf_export.could_not_generate").into())
 }

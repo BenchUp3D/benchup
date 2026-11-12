@@ -805,9 +805,9 @@ impl BenchUpApp {
                                     visuals.bg_fill = fill;
                                     visuals.weak_bg_fill = fill;
                                 }
-                                if ui.add(egui::Button::new("Set focus").selected(self.setting_orbit_focus)
+                                if ui.add(egui::Button::new(tr!("orbit.set_focus")).selected(self.setting_orbit_focus)
                                     .min_size(egui::vec2(0., control_height)))
-                                    .on_hover_text("Click a point in the viewport to set the orbit focus. Right-click to cancel. Focused uses the view center until a focus is set.")
+                                    .on_hover_text(tr!("orbit.set_focus_hint"))
                                     .clicked()
                                 {
                                     self.setting_orbit_focus = !self.setting_orbit_focus;
@@ -821,7 +821,7 @@ impl BenchUpApp {
                                         }
                                     })
                                     .response
-                                    .on_hover_text("Choose the orbit pivot. Selection center uses the visible model center when nothing is selected.");
+                                    .on_hover_text(tr!("orbit.pivot_hint"));
                             });
                         });
                     });

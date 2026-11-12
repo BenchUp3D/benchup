@@ -81,6 +81,18 @@ for (const [language, file] of [['Chinese', 'zh_CN'], ['Brazilian Portuguese', '
     });
 }
 
+test('Chinese tool and material controls contain translated text', () => {
+    const translated = require('../assets/i18n/zh_CN.json');
+    // Catalog shape and placeholder checks alone also accept English copied
+    // into another language. Guard the feature families that had such gaps.
+    const families = /^(?:router\.|wood_glue\.|finish_settings\.|time_estimates\.router|orbit\.|space_mouse\.|scale_tool\.|core\.reference_images\.|app\.arc|app\.draw_arc$|app\.snap_only_visible|tools\.arc|measurement_tools\.(?:add_angle|adjust_angle|undefined_angle)|outliner\.angle_dimension$)/;
+    for (const [key, message] of Object.entries(catalog)) {
+        if (families.test(key) && typeof message === 'string' && /[A-Za-z]{3}/.test(message)) {
+            assert.notEqual(translated[key], message, `${key}: untranslated English`);
+        }
+    }
+});
+
 test('runtime translations are formatted before being passed to Rust output macros', () => {
     const rustFiles = directory => fs.readdirSync(directory, {withFileTypes: true}).flatMap(entry => {
         const file = path.join(directory, entry.name);
@@ -88,6 +100,9 @@ test('runtime translations are formatted before being passed to Rust output macr
     });
     for (const file of rustFiles(path.join(__dirname, '../crates'))) {
         const source = fs.readFileSync(file, 'utf8');
+        for (const [, key] of source.matchAll(/\btr!\(\s*"([^"]+)"/g)) {
+            assert.ok(Object.hasOwn(catalog, key), `${file}: unknown message ${key}`);
+        }
         // tr! now expands to a runtime expression; format-string positions require literals.
         assert.doesNotMatch(source,
             /\b(?:format|format_args|print|println|eprint|eprintln|panic)!\(\s*(?:benchup_core::)?tr!\(/,

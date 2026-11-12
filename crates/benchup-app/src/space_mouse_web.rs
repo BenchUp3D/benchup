@@ -86,7 +86,7 @@ impl Browser {
     }
 
     pub fn status(&self) -> String {
-        self.connection.status()
+        super::browser_status_label(&self.connection.status(), self.connection.device().as_deref())
     }
 }
 

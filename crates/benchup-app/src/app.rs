@@ -3919,10 +3919,10 @@ impl BenchUpApp {
             match result {
                 Some(Ok(summary)) => self.background_selection_properties(ui, &summary),
                 Some(Err(_)) => {
-                    ui.text_weak("Measurements unavailable.");
+                    ui.text_weak(tr!("app.measurements_unavailable"));
                 }
                 None => {
-                    ui.text_weak("Calculating measurements…");
+                    ui.text_weak(tr!("app.calculating_measurements"));
                 }
             }
         } else {

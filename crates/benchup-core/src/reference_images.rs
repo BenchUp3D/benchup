@@ -14,9 +14,9 @@ pub enum ImageFit {
 impl ImageFit {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Contain => "Contain",
-            Self::Cover => "Cover",
-            Self::Stretch => "Stretch",
+            Self::Contain => tr!("core.reference_images.contain"),
+            Self::Cover => tr!("core.reference_images.cover"),
+            Self::Stretch => tr!("core.reference_images.stretch"),
         }
     }
 }
@@ -157,7 +157,7 @@ impl Model {
             || !valid_reference(&image)
             || !asset.valid()
         {
-            return Err("Invalid reference image or rectangle.");
+            return Err(tr!("core.reference_images.invalid_rectangle"));
         }
         // Never split or paint the model surface under the reference image.
         let vertices = points.map(|position| {
@@ -214,7 +214,7 @@ impl Model {
     pub(crate) fn validate_reference_images(&self) -> Result<(), &'static str> {
         for (id, image) in &self.reference_images {
             let Some(face) = self.faces.get(id) else {
-                return Err("Reference image frame is missing.");
+                return Err(tr!("core.reference_images.missing_frame"));
             };
             if !valid_reference(image)
                 || !self
@@ -224,7 +224,7 @@ impl Model {
                 || image.vertices.iter().any(|id| !face.vertices.contains(id))
                 || image.vertices.iter().collect::<BTreeSet<_>>().len() != 4
             {
-                return Err("Invalid reference image.");
+                return Err(tr!("core.reference_images.invalid_image"));
             }
         }
         Ok(())

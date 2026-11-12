@@ -37,11 +37,11 @@ impl OrbitOrigin {
 
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::VisibleModel => "Visible model center",
-            Self::Selection => "Selection center",
-            Self::World => "World origin",
-            Self::View => "View center",
-            Self::Focused => "Focused",
+            Self::VisibleModel => tr!("orbit.visible_model_center"),
+            Self::Selection => tr!("orbit.selection_center"),
+            Self::World => tr!("orbit.world_origin"),
+            Self::View => tr!("orbit.view_center"),
+            Self::Focused => tr!("orbit.focused"),
         }
     }
 }
@@ -3115,7 +3115,11 @@ mod preference_tests {
         let saved: InspectorPreferences = crate::identity::preference_value(&storage, PREFERENCE_KEY).unwrap();
         assert_eq!(saved.general.language, "zh_CN");
         assert_eq!(restored.general_settings.language, "zh_CN");
+        assert_eq!(OrbitOrigin::VisibleModel.label(), "可见模型中心");
+        assert_eq!(OrbitOrigin::Focused.label(), "焦点");
+        assert_eq!(serde_json::to_string(&OrbitOrigin::Selection).unwrap(), "\"Selection\"");
         benchup_core::i18n::set_language("en");
+        assert_eq!(OrbitOrigin::VisibleModel.label(), "Visible model center");
     }
 
     #[test]
@@ -5498,7 +5502,7 @@ impl BenchUpApp {
         Self::menu_checkbox(
             ui,
             &mut d.move_wireframe,
-            "Wireframe other objects while moving",
+            tr!("sidebar.move_wireframe"),
         );
         ui.separator();
 
@@ -5515,7 +5519,7 @@ impl BenchUpApp {
         for (value, label) in [
             (&mut d.group_names, tr!("sidebar.group_names")),
             (&mut d.dimensions, tr!("sidebar.dimensions")),
-            (&mut d.face_side_lengths, "Selected Edge Lengths"),
+            (&mut d.face_side_lengths, tr!("sidebar.selected_edge_lengths")),
             (&mut d.grain_direction, tr!("grain_direction.show")),
             (&mut d.wood_joinery, tr!("sidebar.wood_joinery")),
         ] {

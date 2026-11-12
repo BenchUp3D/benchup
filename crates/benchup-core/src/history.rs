@@ -426,7 +426,7 @@ impl History {
         let mut after = before.clone();
         after.settings = settings;
         self.push_change(
-            "Edit reference image",
+            tr!("image_tools.edit_reference_image"),
             ModelChange {
                 reference_images: vec![(id, Some(before), Some(after))],
                 ..Default::default()
@@ -510,21 +510,23 @@ impl History {
     pub fn redo(&mut self, model: &mut Model) -> bool {
         Self::transfer(&mut self.redo, &mut self.undo, model, true)
     }
-    /// Labels in chronological order, including edits currently undone.
+    /// Localized display labels in chronological order, including undone edits.
     pub fn labels(&self) -> impl Iterator<Item = &str> {
         self.undo
             .iter()
             .chain(self.redo.iter().rev())
-            .map(|entry| entry.label.as_str())
+            .map(|entry| crate::i18n::history_label(&entry.label))
     }
-    /// Metadata is chronological like labels; missing legacy attribution stays unknown.
+    /// Display labels and metadata are chronological; legacy attribution stays unknown.
     pub fn attributed_labels(
         &self,
     ) -> impl Iterator<Item = (&str, Option<&HistoryAuthor>, Option<u64>)> {
         self.undo
             .iter()
             .chain(self.redo.iter().rev())
-            .map(|entry| (entry.label.as_str(), entry.author.as_ref(), entry.timestamp))
+            .map(|entry| {
+                (crate::i18n::history_label(&entry.label), entry.author.as_ref(), entry.timestamp)
+            })
     }
     pub fn actions(&self) -> &[HistoryAction] {
         &self.actions
@@ -691,10 +693,10 @@ impl History {
         true
     }
     pub fn undo_label(&self) -> Option<&str> {
-        self.undo.last().map(|entry| entry.label.as_str())
+        self.undo.last().map(|entry| crate::i18n::history_label(&entry.label))
     }
     pub fn redo_label(&self) -> Option<&str> {
-        self.redo.last().map(|entry| entry.label.as_str())
+        self.redo.last().map(|entry| crate::i18n::history_label(&entry.label))
     }
     pub(crate) fn restore(&mut self, model: &Model) {
         if self.format_version != history_version() {
@@ -747,6 +749,54 @@ mod tests {
             .unwrap();
         doc.history.record(label, before, &doc.model);
     }
+    #[test]
+    fn saved_history_labels_follow_language_without_rewriting_operations_or_attribution() {
+        struct ResetLanguage;
+        impl Drop for ResetLanguage {
+            fn drop(&mut self) {
+                crate::i18n::set_language("en");
+            }
+        }
+        let _reset = ResetLanguage;
+        for saved_label in [
+            "Glue contact surfaces",
+            "为接触面涂胶",
+            "Colar superfícies de contato",
+            "wood_glue.contacts_applied",
+        ] {
+            let mut doc = Document::default();
+            line(&mut doc, 0., "Workshop cleanup");
+            line(&mut doc, 1., saved_label);
+            let author = HistoryAuthor {
+                id: "test-author".into(), name: "Lin".into(),
+                kind: "account".into(), verified: true,
+            };
+            let entry = doc.history.undo.last_mut().unwrap();
+            entry.author = Some(author.clone());
+            entry.timestamp = Some(123);
+            entry.signature = Some("preserved-signature".into());
+            let saved = serde_json::to_string(&doc.history).unwrap();
+            let mut history: History = serde_json::from_str(&saved).unwrap();
+            for (language, label) in [
+                ("en", "Glue contact surfaces"),
+                ("zh_CN", "为接触面涂胶"),
+                ("pt_BR", "Colar superfícies de contato"),
+                ("zh_CN", "为接触面涂胶"),
+            ] {
+                crate::i18n::set_language(language);
+                assert_eq!(history.labels().collect::<Vec<_>>(), ["Workshop cleanup", label]);
+                assert_eq!(history.undo_label(), Some(label));
+                assert_eq!(history.attributed_labels().last(), Some((label, Some(&author), Some(123))));
+                assert_eq!(serde_json::to_string(&history).unwrap(), saved);
+                assert!(history.undo(&mut doc.model));
+                assert_eq!(history.redo_label(), Some(label));
+                assert_eq!(history.labels().last(), Some(label));
+                assert!(history.redo(&mut doc.model));
+                assert_eq!(serde_json::to_string(&history).unwrap(), saved);
+            }
+        }
+    }
+
     #[test]
     fn timeline_navigation_restores_every_state_and_branches_after_reload() {
         let mut doc = Document::default();

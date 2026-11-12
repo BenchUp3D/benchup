@@ -15,7 +15,7 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 fn prepare_update(update: &mut UpdateInfo, installed_id: &str) -> Result<(), String> {
     let id = &update.TargetFullRelease.PackageId;
     if id != crate::identity::APP_ID && id != crate::identity::LEGACY_APP_ID {
-        return Err(format!("Unexpected update package identity: {id}"));
+        return Err(tr!("updates.unexpected_package_identity", id = id));
     }
     // Renaming the application/executable requires a complete replacement.
     // Velopack applies the new manifest and restarts its new main executable.

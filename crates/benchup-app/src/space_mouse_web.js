@@ -29,7 +29,8 @@ class SpaceMouseConnection {
         // Serialize opens and closes, including when disable/re-enable races
         // with a permission prompt or a device's asynchronous open().
         this.io = Promise.resolve();
-        this.status = this.supported ? "Disabled" : this.unsupportedMessage();
+        // Return stable states; Rust resolves display text in the current language.
+        this.status = this.supported ? "disabled" : this.unsupportedMessage();
         this.input = event => this.inputReport(event);
         this.connected = event => {
             if (this.enabled && isSpaceMouse(event.device)) void this.scan();
@@ -39,7 +40,7 @@ class SpaceMouseConnection {
             ++this.generation;
             this.busy = false;
             this.detach();
-            this.publish("3D Mouse disconnected. Reconnect it or select Connect 3D Mouse.");
+            this.publish("disconnected");
         };
         this.focusChanged = () => this.setFocused(this.pageFocused());
         if (this.supported) {
@@ -53,8 +54,8 @@ class SpaceMouseConnection {
 
     unsupportedMessage() {
         return this.env.isSecureContext
-            ? "This browser does not support 3D Mouse access. Use Chrome or Edge with WebHID support."
-            : "Open BenchUp over HTTPS or localhost to connect a 3D Mouse.";
+            ? "unsupported"
+            : "insecure";
     }
 
     get device() {
@@ -121,7 +122,7 @@ class SpaceMouseConnection {
         this.busy = false;
         if (!enabled) {
             this.detach();
-            this.publish("Disabled");
+            this.publish("disabled");
         } else if (!this.supported) {
             this.publish(this.unsupportedMessage());
         } else {
@@ -133,7 +134,7 @@ class SpaceMouseConnection {
         if (!this.supported || !this.enabled || this.active || this.busy || this.disposed) return;
         const generation = ++this.generation;
         this.busy = true;
-        this.publish("Looking for a previously connected 3D Mouse...");
+        this.publish("scanning");
         try {
             const devices = await this.hid.getDevices();
             await this.attach(devices, generation, false);
@@ -146,7 +147,7 @@ class SpaceMouseConnection {
         if (!this.canConnect) return;
         const generation = ++this.generation;
         this.busy = true;
-        this.publish("Choose a 3D Mouse in your browser.");
+        this.publish("choosing");
         try {
             // Invoke synchronously from the Connect button, before any await,
             // while the browser's transient user activation is still active.
@@ -183,7 +184,7 @@ class SpaceMouseConnection {
                 if (!this.current(generation)) return;
                 if (opened) {
                     this.busy = false;
-                    this.publish(`Connected: ${this.device}`);
+                    this.publish("connected");
                     return;
                 }
             } catch (error) {
@@ -196,8 +197,8 @@ class SpaceMouseConnection {
         } else {
             this.busy = false;
             this.publish(requested
-                ? "No 3D Mouse selected. Select Connect 3D Mouse to try again."
-                : "No 3D Mouse connected. Select Connect 3D Mouse.");
+                ? "no_selection"
+                : "no_device");
         }
     }
 
@@ -210,8 +211,8 @@ class SpaceMouseConnection {
         const denied = !opening &&
             (error?.name === "SecurityError" || error?.name === "NotAllowedError");
         this.publish(denied
-            ? "3D Mouse access was not allowed. Check this site's device permissions and try again."
-            : "Could not open the 3D Mouse. Quit other apps or drivers using it, such as 3DxWare, and try again.");
+            ? "denied"
+            : "open_failed");
     }
 
     inputReport(event) {

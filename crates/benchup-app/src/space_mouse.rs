@@ -11,6 +11,29 @@ use std::sync::{Arc, Mutex};
 #[path = "space_mouse_web.rs"]
 mod browser;
 
+// Resolve browser connection states at display time so changing language also
+// updates messages for an existing device without reconnecting it.
+#[cfg(any(target_arch = "wasm32", test))]
+fn browser_status_label(status: &str, device: Option<&str>) -> String {
+    match status {
+        "disabled" => tr!("settings.disabled").into(),
+        "connected" => tr!(
+            "settings.connected",
+            device = device.unwrap_or("3Dconnexion SpaceMouse")
+        ),
+        "disconnected" => tr!("space_mouse.disconnected").into(),
+        "unsupported" => tr!("space_mouse.unsupported").into(),
+        "insecure" => tr!("space_mouse.insecure").into(),
+        "scanning" => tr!("space_mouse.scanning").into(),
+        "choosing" => tr!("space_mouse.choosing").into(),
+        "no_selection" => tr!("space_mouse.no_selection").into(),
+        "no_device" => tr!("space_mouse.no_device").into(),
+        "denied" => tr!("space_mouse.denied").into(),
+        "open_failed" => tr!("space_mouse.open_failed").into(),
+        _ => tr!("space_mouse.connect_hint").into(),
+    }
+}
+
 /// Fit button on SpaceMouse Compact, Wireless, and Pro button reports.
 const FIT_BUTTON: u32 = 1 << 1;
 /// Typical full deflection of the cap in raw HID counts.
@@ -303,7 +326,7 @@ impl SpaceMouse {
     #[cfg(target_arch = "wasm32")]
     pub fn browser_status(&self) -> String {
         self.browser.as_ref().map_or_else(
-            || "Select Connect 3D Mouse to grant access to your device.".to_owned(),
+            || tr!("space_mouse.connect_hint").to_owned(),
             browser::Browser::status,
         )
     }
@@ -827,6 +850,27 @@ fn product_name(product: u32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_status_changes_language_without_reconnecting_or_renaming_the_device() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                benchup_core::i18n::set_language("en");
+            }
+        }
+        let _reset = Reset;
+        for (language, connected, denied) in [
+            ("zh_CN", "已连接：My SpaceMouse", "未获准访问 3D 鼠标"),
+            ("pt_BR", "Conectado: My SpaceMouse", "O acesso ao mouse 3D não foi permitido"),
+            ("en", "Connected: My SpaceMouse", "3D Mouse access was not allowed"),
+        ] {
+            benchup_core::i18n::set_language(language);
+            assert_eq!(browser_status_label("connected", Some("My SpaceMouse")), connected);
+            assert!(browser_status_label("denied", None).starts_with(denied));
+            assert_eq!(browser_status_label("disabled", None), tr!("settings.disabled"));
+        }
+    }
 
     fn report(id: u8, values: &[i16]) -> Vec<u8> {
         std::iter::once(id)

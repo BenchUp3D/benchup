@@ -24,7 +24,7 @@ fn error(value: JsValue) -> String {
         .ok()
         .and_then(|v| v.as_string())
         .or_else(|| value.as_string());
-    message.unwrap_or_else(|| format!("Browser workspace storage is unavailable: {value:?}"))
+    message.unwrap_or_else(|| tr!("storage.browser_unavailable", error = format!("{value:?}")))
 }
 pub async fn prepare() {
     if let Err(value) = wasm_bindgen_futures::JsFuture::from(load_recovery()).await {
