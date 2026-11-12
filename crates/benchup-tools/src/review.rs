@@ -1,7 +1,7 @@
 //! Read-only reviews an agent cannot do by looking at the model: a cut list and
 //! a check for problems such as overlapping boards without a joint.
 use crate::scene::{self, mm, point_mm};
-use benchup_core::{DVec3, Model, connections::ConnectionOperation};
+use benchup_core::{DVec3, Model, connections::ConnectionOperation, joinery::JointSettings};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -43,8 +43,26 @@ fn blank(model: &Model, id: u64) -> Option<[f64; 3]> {
     Some([extent[thickness], extent[width], extent[length]])
 }
 
+/// The board's stock material, or the nearest one set on a group around it.
 fn material_name(model: &Model, id: u64) -> Option<String> {
-    model.object_stock_material(&model.objects[&id]).map(|m| m.name.clone())
+    let mut current = Some(id);
+    while let Some(object) = current.and_then(|c| model.objects.get(&c)) {
+        if let Some(material) = model.object_stock_material(object) {
+            return Some(material.name.clone());
+        }
+        current = model.parent(object.id);
+    }
+    None
+}
+
+fn board_bounds(model: &Model, id: u64) -> Option<(DVec3, DVec3)> {
+    model.selection_bounds(&BTreeSet::from([id]))
+}
+
+/// Axes along which the shared region spans the whole board.
+fn full_axes(board: (DVec3, DVec3), shared: DVec3) -> usize {
+    let size = board.1 - board.0;
+    (0..3).filter(|i| shared[*i] >= size[*i] - 1.0e-4).count()
 }
 
 /// Boards grouped by material and blank size, with totals per material.
@@ -87,6 +105,8 @@ pub fn cut_list(model: &Model) -> Value {
                 let stock_area = w * l / 1.0e6;
                 entry["stock_mm"] = json!({"width": w, "length": l});
                 entry["minimum_stock_pieces"] = json!((area / stock_area).ceil() as u64);
+            } else if name == "unassigned" {
+                entry["note"] = json!("Assign a stock material with sizes (create_stock_material, set_material) to get minimum_stock_pieces.");
             }
             entry
         })
@@ -136,8 +156,12 @@ pub fn check(model: &Model) -> Value {
             if joined.contains(&[(*a).min(*b), (*a).max(*b)]) {
                 continue;
             }
+            // Bounding boxes overlap; a notch around the other board means the solids do not.
+            if model.joinery_options([*a, *b], &JointSettings::default()).0.is_none() {
+                continue;
+            }
             let (name_a, name_b) = (&model.objects[a].name, &model.objects[b].name);
-            let approximate = if *aligned_a && *aligned_b { "" } else { " (bounding boxes; a board is rotated, so this may be a false alarm)" };
+            let approximate = if *aligned_a && *aligned_b { "" } else { " (measured on bounding boxes; a board is rotated)" };
             issue(
                 "warning",
                 "overlap_without_joint",
@@ -152,6 +176,21 @@ pub fn check(model: &Model) -> Value {
         issue("error", "joint_not_cut", format!("Joint {id} cannot be cut: {error}"), members);
     }
     for (id, connection) in &model.connections {
+        let [a, b] = connection.members;
+        if let (ConnectionOperation::Joinery(_), Some(box_a), Some(box_b)) = (&connection.operation, board_bounds(model, a), board_bounds(model, b)) {
+            // The board that goes into the other is spanned by the shared region across its section.
+            if let Some(shared) = overlap(box_a, box_b) {
+                if full_axes(box_b, shared) > full_axes(box_a, shared) {
+                    issue(
+                        "warning",
+                        "joint_roles_reversed",
+                        format!("Joint {id} looks reversed: {} goes into {}, so it should be a and {} b (remove_joint, then add_joint).",
+                            model.objects[&b].name, model.objects[&a].name, model.objects[&a].name),
+                        vec![*id, a, b],
+                    );
+                }
+            }
+        }
         let missing: Vec<u64> = connection.members.iter().copied().filter(|m| !model.contains_entity(m)).collect();
         if !missing.is_empty() && matches!(connection.operation, ConnectionOperation::Joinery(_)) {
             issue("error", "joint_without_board", format!("Joint {id} refers to erased boards {missing:?}; remove it with remove_joint."), vec![*id]);
@@ -167,7 +206,7 @@ pub fn check(model: &Model) -> Value {
         issue("info", "loose_geometry", format!("{} loose edges and faces at the top level; group them into a part or erase them.", loose.len()),
             loose.into_iter().take(20).collect());
     }
-    let unassigned: Vec<u64> = all.iter().copied().filter(|id| model.objects[id].stock_material_id.is_none()).collect();
+    let unassigned: Vec<u64> = all.iter().copied().filter(|id| material_name(model, *id).is_none()).collect();
     if !unassigned.is_empty() {
         issue("info", "no_material", format!("{} boards have no stock material.", unassigned.len()), unassigned.into_iter().take(20).collect());
     }
@@ -182,8 +221,10 @@ pub fn check(model: &Model) -> Value {
     if all.len() > MAX_CHECKED_BOARDS {
         out["note"] = json!(format!("Only the first {MAX_CHECKED_BOARDS} boards were compared for overlaps."));
     }
-    if let Some(bounds) = model.bounds() {
-        out["model_bounds_mm"] = json!({"min": point_mm(bounds.0), "max": point_mm(bounds.1)});
+    // The furniture's size: boards only, not dimensions or texts drawn around them.
+    let extents = all.iter().filter_map(|id| board_bounds(model, *id)).reduce(|x, y| (x.0.min(y.0), x.1.max(y.1)));
+    if let Some((lo, hi)) = extents {
+        out["model_bounds_mm"] = json!({"min": point_mm(lo), "max": point_mm(hi), "size": point_mm(hi - lo)});
     }
     out
 }

@@ -331,6 +331,8 @@ fn dry_run_and_brief_output() {
     let result = json_out(&benchup(&["call", &path, "create_board", &args, "--brief"], None));
     assert!(result["objects"].is_null() && result["bounds_mm"].is_null());
     assert_eq!(result["created"].as_array().unwrap().len(), 1);
+    let scene = json_out(&benchup(&["call", &path, "get_scene", "--brief"], None));
+    assert_eq!(scene["objects"].as_array().unwrap().len(), 1, "a brief scene keeps its objects");
 }
 
 #[test]

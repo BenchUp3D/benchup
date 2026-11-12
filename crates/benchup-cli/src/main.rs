@@ -165,6 +165,10 @@ fn run_calls(project: &mut Project, calls: &[(String, Value)], save: bool) -> Re
 /// Drops the bulky parts of tool results, keeping ids, errors and answers.
 fn brief(value: &mut Value) {
     if let Some(map) = value.as_object_mut() {
+        // A scene's object list is the answer, not a summary.
+        if map.contains_key("object_count") {
+            return;
+        }
         map.remove("objects");
         map.remove("bounds_mm");
         for key in ["results", "result"] {

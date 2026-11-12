@@ -246,16 +246,16 @@ pub fn definitions() -> Vec<ToolDefinition> {
         def("create_stock_material", "Add a stock material (sheet or board) to this project and return its id for material_id. Sizes in mm; length runs along the grain.",
             json!({"name": text(), "thickness_mm": number(), "width_mm": number(), "length_mm": number()}),
             &["name", "thickness_mm", "width_mm", "length_mm"]),
-        def("create_board", "Create one rectangular board as a named group. origin_mm is the minimum corner; size_mm is [x, y, z] extents. Prefer this over drawing.",
+        def("create_board", "Create one rectangular board as a named group. origin_mm is the minimum corner; size_mm is [x, y, z] extents. Prefer this over drawing. Returns the board id in created[0].",
             json!({"name": text(), "origin_mm": vec3(), "size_mm": vec3(),
                 "material_id": {"type": "string", "format": "uuid", "description": "id from list_stock_materials or create_stock_material"},
                 "grain_axis": axis_enum(), "tag": tag_name(false)}),
             &["name", "origin_mm", "size_mm"]),
-        def("create_copy", "Copy an object or group, shifted by offset_mm. Returns the new ids.",
+        def("create_copy", "Copy an object or group, shifted by offset_mm; a copy of a component is a linked instance. Returns the copy in created[0]. Joints inside a copied object come along; joints with boards outside it do not.",
             json!({"id": id(), "offset_mm": vec3()}), &["id", "offset_mm"]),
         def("draw_polyline", "Draw connected edges through points in the current scope; a closed flat loop makes a face (face_id in the result). Drawn on a board's face (inside it, via enter_object), a line splits that face. To make a shaped board, draw its closed outline, push_pull the face to the thickness, then group created ids.",
             json!({"points_mm": {"type": "array", "items": vec3(), "minItems": 2}, "close": {"type": "boolean"}}), &["points_mm"]),
-        def("move", "Translate objects by delta_mm.", json!({"ids": ids(), "delta_mm": vec3()}), &["ids", "delta_mm"]),
+        def("move", "Translate objects by delta_mm. Joints follow the boards.", json!({"ids": ids(), "delta_mm": vec3()}), &["ids", "delta_mm"]),
         def("move_to", "Move an object so the minimum corner of its bounding box lands on origin_mm.",
             json!({"id": id(), "origin_mm": vec3()}), &["id", "origin_mm"]),
         def("rotate", "Rotate objects about an axis through pivot_mm. Positive degrees follow the right-hand rule: looking from the positive end of the axis, counter-clockwise (about x, +y turns towards +z; about z, +x turns towards +y).",
@@ -265,7 +265,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
         def("resize_board", "Resize a board to size_mm (world-axis extents). anchor says which side stays put on each axis: min (default), center or max; one value for all axes or [x, y, z]. Joints follow the board.",
             json!({"id": id(), "size_mm": vec3(), "anchor": {"oneOf": [anchor_enum(),
                 {"type": "array", "items": anchor_enum(), "minItems": 3, "maxItems": 3}]}}), &["id", "size_mm"]),
-        def("push_pull", "Extrude a face outward by distance_mm (see get_object for face ids). Negative cuts into the part; cutting by the full thickness removes that material. Works on faces inside groups without enter_object. Returns the ids it created.",
+        def("push_pull", "Extrude a face outward by distance_mm (see get_object for face ids). Negative cuts into the part; cutting by the full thickness removes that material. Works on faces inside groups without enter_object. Returns the moved face as face_id and everything it made in created.",
             json!({"face_id": id(), "distance_mm": number()}), &["face_id", "distance_mm"]),
         def("rename", "Rename an object.", json!({"id": id(), "name": text()}), &["id", "name"]),
         def("set_material", "Assign a stock material to objects, or null to clear.",
@@ -273,7 +273,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
                 "description": "id from list_stock_materials or create_stock_material"}}), &["ids", "material_id"]),
         def("set_grain", "Set the grain direction of an object along a world axis, or null to clear.",
             json!({"id": id(), "axis": {"type": ["string", "null"], "enum": ["x", "y", "z", null]}}), &["id", "axis"]),
-        def("group", "Group entities into one object, or make that object a component. Several ids become ONE group or component; for linked copies, make one component and use create_copy. Faces bring their edges along. Member ids change; see the result.",
+        def("group", "Group entities into one object, or make that object a component. Several ids become ONE group or component; for linked copies, make one component and use create_copy. Faces bring their edges along. Member ids change: the group is created[0] and its objects are listed in members.",
             json!({"ids": ids(), "name": text(), "component": {"type": "boolean"}}), &["ids", "name", "component"]),
         def("ungroup", "Dissolve groups/components one level.", json!({"ids": ids()}), &["ids"]),
         def("tag", "Assign a tag by name (created if missing), or null to clear.",
@@ -281,7 +281,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
         def("paint", "Paint objects or faces with an RGB color.",
             json!({"ids": ids(), "rgb": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 255}, "minItems": 3, "maxItems": 3}}), &["ids", "rgb"]),
         def("erase", "Delete entities (objects, faces, edges, dimensions, texts). Joints that use an erased board are removed with it; use remove_joint to delete a joint alone.", json!({"ids": ids()}), &["ids"]),
-        def("add_joint", "Add a wood joint between two boards that already overlap where they meet; the overlap is the joint's depth. a carries the tenon, tongue, tails, fingers or lap: the board that goes into the other (shelf, apron, drawer side). b receives the mortise, groove or sockets (side, leg, drawer front). params.depth_axis is the direction a goes into b; width_axis is the axis across which the tongue, tenon or fingers are spread (width_ratio of it); the third axis is the height (height_ratio, mortise_tenon only). Axes are 0=x, 1=y, 2=z (a's own axes if it is rotated). Omit them and the first orientation that can be cut is chosen. Ranges: ratios 0.1-0.9 (0.5), fingers 2-16 (4), dovetails 1-16 (1), taper_degrees 0-30 (8), clearance_mm 0-5 (0.1). The joint must be cuttable or the call fails; get_object on a joint shows its settings and supported orientations.",
+        def("add_joint", "Add a wood joint between two boards that already overlap where they meet; the overlap is the joint's depth. a carries the tenon, tongue, tails, fingers or lap: the board that goes into the other (shelf, apron, drawer side). b receives the mortise, groove or sockets (side, leg, drawer front). params.depth_axis is the direction a goes into b; width_axis is the axis across which the tongue, tenon or fingers are spread (width_ratio of it); the third axis is the height (height_ratio, mortise_tenon only). Axes are 0=x, 1=y, 2=z (a's own axes if it is rotated). Omit them and the first orientation that can be cut is chosen. Ranges: ratios 0.1-0.9 (0.5), fingers 2-16 (4), dovetails 1-16 (1), taper_degrees 0-30 (8), clearance_mm 0-5 (0.1). The joint must be cuttable or the call fails; joints on one board must not cross, touch or end in the same plane. Both boards must be at the same group level. Returns joint_id and the orientation used; get_object on a joint shows its settings and supported orientations.",
             json!({"a": id(), "b": id(), "kind": {"type": "string", "enum": joint_kinds},
                 "params": {"type": "object", "properties": {
                     "width_ratio": number(), "height_ratio": number(),
@@ -864,6 +864,7 @@ fn push_pull(model: &mut Model, a: PushPullArgs) -> Res {
     }
     if model.faces.contains_key(&new_face) {
         done.extra.insert("new_face_id".into(), json!(new_face));
+        done.extra.insert("face_id".into(), json!(new_face));
     }
     Ok(done)
 }
@@ -927,7 +928,12 @@ fn group(model: &mut Model, a: GroupArgs) -> Res {
         "members".into(),
         Value::Array(members.iter().filter_map(|id| scene::object_entry(model, *id)).collect()),
     );
-    done.extra.insert("note".into(), json!("Member ids may have changed; use the ids in members."));
+    let note = if done.extra["members"].as_array().is_some_and(Vec::is_empty) {
+        "The group holds loose faces and edges; it is created[0]."
+    } else {
+        "Member ids may have changed; use the ids in members."
+    };
+    done.extra.insert("note".into(), json!(note));
     Ok(done)
 }
 fn ungroup(model: &mut Model, a: IdsArg) -> Res {
@@ -1048,7 +1054,22 @@ fn add_joint(model: &mut Model, a: JointArgs) -> Res {
     if a.a == a.b {
         return Err(fail("a and b must differ", "A joint connects two different boards."));
     }
+    if model.contains_entity(&a.a) && model.contains_entity(&a.b) && model.parent(a.a) != model.parent(a.b) {
+        return Err(fail(
+            format!("{} and {} are in different groups", a.a, a.b),
+            "A joint connects boards at the same level: a board inside a group or component instance cannot be joined \
+             to one outside it. Join them before grouping (grouping keeps joints), or keep them as separate boards.",
+        ));
+    }
     let set = objects(model, &[a.a, a.b], true)?;
+    for id in [a.a, a.b] {
+        if let Err(error) = model.joinery_frame(id) {
+            return Err(fail(
+                format!("{id} is not a single board: {error}"),
+                "Join the boards themselves; get_object on a group lists its children.",
+            ));
+        }
+    }
     let mut settings = JointSettings { kind: a.kind.kind(), ..Default::default() };
     let mut chosen_axes = false;
     if let Some(p) = a.params {
@@ -1138,14 +1159,28 @@ fn add_joint(model: &mut Model, a: JointArgs) -> Res {
         operation: ConnectionOperation::Joinery(settings.clone()),
     })?;
     if let Some(error) = scene::joint_errors(model).remove(&joint) {
-        return Err(fail(
-            format!("the joint cannot be cut: {error}"),
-            format!("Orientations that fit: {}. Check the overlap and params.", orientations(model, &settings)),
-        ));
+        let others: Vec<String> = model
+            .connections
+            .iter()
+            .filter(|(id, c)| **id != joint && c.members.iter().any(|m| members.contains(m)))
+            .map(|(id, c)| format!("{id} ({} between {} and {})", scene::joint_kind(c), c.members[0], c.members[1]))
+            .collect();
+        let hint = if others.is_empty() {
+            format!("Orientations that fit: {}. Check the overlap and params.", orientations(model, &settings))
+        } else {
+            format!(
+                "These boards already have joints {}. Joints on one board must not cross, touch or end in the same plane: \
+                 keep 1 to 2 mm of wood between them (for example, stop a shelf short of the back).",
+                others.join(", ")
+            )
+        };
+        return Err(fail(format!("the joint cannot be cut: {error}"), hint));
     }
     let mut done = modified(&set);
     done.joints.push(joint);
     done.extra.insert("joint_id".into(), json!(joint));
+    done.extra.insert("a".into(), json!(a.a));
+    done.extra.insert("b".into(), json!(a.b));
     done.extra.insert("orientation".into(), json!({"depth_axis": settings.depth_axis, "width_axis": settings.width_axis}));
     Ok(done)
 }

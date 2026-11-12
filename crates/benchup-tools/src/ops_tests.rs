@@ -280,7 +280,7 @@ fn joints_connect_two_boards() {
         other => panic!("{other:?}"),
     }
     let scene = ok(&mut model, &mut env, "get_scene", json!({})).result;
-    assert_eq!(scene["joints"][0]["kind"], "MortiseTenon");
+    assert_eq!(scene["joints"][0]["kind"], "mortise_tenon");
     // A second joint between the same boards is refused by the core.
     err(&mut model, &mut env, "add_joint", json!({"a": leg, "b": apron, "kind": "half_lap"}));
     err(&mut model, &mut env, "add_joint", json!({"a": leg, "b": leg, "kind": "half_lap"}));
@@ -792,4 +792,55 @@ fn the_scene_lists_annotations_axes_and_component_definitions() {
     assert_eq!(definition(component), definition(copy));
     let guide = ok(&mut model, &mut env, "get_guide", json!({})).result;
     assert!(guide["guide"].as_str().unwrap().contains("front of a piece faces -Y"));
+}
+
+#[test]
+fn check_model_flags_reversed_roles_and_trusts_real_geometry() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let side = board(&mut model, &mut env, "Side", [0., 0., 0.], [18., 300., 900.]);
+    let shelf = board(&mut model, &mut env, "Shelf", [9., 0., 400.], [500., 300., 18.]);
+    // Side as a: the side would carry the tongue.
+    ok(&mut model, &mut env, "add_joint", json!({"a": side, "b": shelf, "kind": "tongue_groove"}));
+    let check = ok(&mut model, &mut env, "check_model", json!({})).result;
+    assert_eq!(check["issues"][0]["kind"], "joint_roles_reversed", "{check}");
+    // A notched board around a post: the boxes overlap, the solids do not.
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    board(&mut model, &mut env, "Post", [0., 0., 0.], [50., 50., 800.]);
+    let outline = ok(&mut model, &mut env, "draw_polyline", json!({
+        "points_mm": [[50, 0, 700], [400, 0, 700], [400, 300, 700], [0, 300, 700], [0, 50, 700], [50, 50, 700]], "close": true}));
+    let face = outline.result["face_id"].as_u64().unwrap();
+    let pushed = ok(&mut model, &mut env, "push_pull", json!({"face_id": face, "distance_mm": 30}));
+    assert_eq!(pushed.result["face_id"], pushed.result["new_face_id"]);
+    let mut ids = outline.created.clone();
+    ids.extend(pushed.created.iter().copied().filter(|id| model.contains_entity(id)));
+    ok(&mut model, &mut env, "group", json!({"ids": ids, "name": "Top", "component": false}));
+    let check = ok(&mut model, &mut env, "check_model", json!({})).result;
+    assert_eq!(check["warnings"], 0, "{check}");
+    assert_eq!(check["model_bounds_mm"]["size"], json!([400.0, 300.0, 800.0]));
+}
+
+#[test]
+fn joints_explain_level_and_assembly_mistakes() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let side = board(&mut model, &mut env, "Side", [0., 0., 0.], [18., 300., 900.]);
+    let shelf = board(&mut model, &mut env, "Shelf", [9., 0., 400.], [500., 300., 18.]);
+    let module = ok(&mut model, &mut env, "group", json!({"ids": [shelf], "name": "Module", "component": false})).created[0];
+    let inner = model.objects[&module].entities.iter().copied().find(|id| model.objects.contains_key(id)).unwrap();
+    assert!(err(&mut model, &mut env, "add_joint", json!({"a": inner, "b": side, "kind": "tongue_groove"})).contains("different groups"));
+    assert!(err(&mut model, &mut env, "add_joint", json!({"a": module, "b": side, "kind": "tongue_groove"})).contains("not a single board"));
+}
+
+#[test]
+fn cut_list_uses_materials_set_on_groups() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let shelf = board(&mut model, &mut env, "Shelf", [0., 0., 0.], [500., 300., 18.]);
+    let unassigned = ok(&mut model, &mut env, "get_cut_list", json!({})).result;
+    assert!(unassigned["materials"][0]["note"].as_str().unwrap().contains("create_stock_material"));
+    let id = ok(&mut model, &mut env, "create_stock_material", json!({"name": "Birch 18", "thickness_mm": 18, "width_mm": 1220, "length_mm": 2440})).result["material_id"].clone();
+    let group = ok(&mut model, &mut env, "group", json!({"ids": [shelf], "name": "Unit", "component": false})).created[0];
+    ok(&mut model, &mut env, "set_material", json!({"ids": [group], "material_id": id}));
+    let cut = ok(&mut model, &mut env, "get_cut_list", json!({})).result;
+    assert_eq!(cut["pieces"][0]["material"], "Birch 18");
+    let check = ok(&mut model, &mut env, "check_model", json!({})).result;
+    assert!(check["issues"].as_array().unwrap().iter().all(|i| i["kind"] != "no_material"), "{check}");
 }

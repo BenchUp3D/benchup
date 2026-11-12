@@ -163,12 +163,25 @@ pub fn joint_detail(model: &Model, id: u64) -> Option<Value> {
     Some(joint)
 }
 
+/// The joint kind as add_joint names it (mortise_tenon, tongue_groove, ...).
+pub fn joint_kind(connection: &benchup_core::connections::Connection) -> &'static str {
+    use benchup_core::joinery::JointKind;
+    match &connection.operation {
+        ConnectionOperation::Joinery(settings) => match settings.kind {
+            JointKind::MortiseTenon => "mortise_tenon",
+            JointKind::HalfLap => "half_lap",
+            JointKind::TongueGroove => "tongue_groove",
+            JointKind::Rabbet => "rabbet",
+            JointKind::Dovetail => "dovetail",
+            JointKind::Finger => "finger",
+        },
+        ConnectionOperation::Fasteners(_) => "fasteners",
+    }
+}
+
 fn joint_json(model: &Model, id: u64) -> Option<Value> {
     let connection = model.connections.get(&id)?;
-    let kind = match &connection.operation {
-        ConnectionOperation::Joinery(settings) => json!(format!("{:?}", settings.kind)),
-        ConnectionOperation::Fasteners(_) => json!("Fasteners"),
-    };
+    let kind = json!(joint_kind(connection));
     let mut joint = json!({"id": id, "a": connection.members[0], "b": connection.members[1], "kind": kind});
     let missing: Vec<u64> = connection.members.iter().copied().filter(|m| !model.contains_entity(m)).collect();
     if !missing.is_empty() {
