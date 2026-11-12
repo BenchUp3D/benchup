@@ -798,8 +798,7 @@ impl BenchUpApp {
                                     visuals.bg_fill = fill;
                                     visuals.weak_bg_fill = fill;
                                 }
-                                if ui.add(egui::Button::new("Set focus").selected(self.setting_orbit_focus)
-                                    .stroke(egui::Stroke::new(1., colors.ink.gamma_multiply(0.5))))
+                                if ui.add(egui::Button::new("Set focus").selected(self.setting_orbit_focus))
                                     .on_hover_text("Click a point in the viewport to set the orbit focus. Right-click to cancel. Focused uses the view center until a focus is set.")
                                     .clicked()
                                 {
