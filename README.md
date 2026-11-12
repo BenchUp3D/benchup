@@ -61,10 +61,6 @@ Cutting plans and labels can cover selected parts or all visible parts in the pr
 This README covers developer installation, building, verification, and deployment.
 For instructions on using BenchUp, see the [user documentation](docs/README.md).
 
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request guidelines
-
 ## Prerequisites
 
 - Rust installed with rustup. `rust-toolchain.toml` pins Rust 1.97.1 for development and CI; the workspace minimum supported version is 1.95.
@@ -292,46 +288,6 @@ trunk build --release --locked
 
 Serve the resulting `dist/` directory with a static web server. Use HTTPS for WebGPU (localhost is also supported). `public_url = "./"` allows serving from a subdirectory. There is no service worker or external asset dependency.
 
-### GitHub Pages website
-
-The presentation page lives in [`site/`](site/index.html). The
-[Deploy GitHub Pages](.github/workflows/pages.yml) workflow downloads the
-`benchup-wasm` artifact from the successful release run and extracts it into
-`dist/site/play/`. Each tagged release compiles the browser app once; GitHub
-Releases and Pages use the same bundle. Manual Pages runs build the browser app
-from the selected ref instead. The workflow adds the landing page and existing
-branding and screenshot assets to `dist/site/`, and deploys them together. The
-main browser entry point (`index.html`) and `trunk serve` continue to open the
-editor directly.
-
-To enable publishing for `BenchUp3D/editor`:
-
-1. In the repository, open **Settings → Pages → Build and deployment** and set
-   **Source** to **GitHub Actions**. See the
-   [GitHub Pages setup guide](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site#publishing-with-a-custom-github-actions-workflow).
-2. Push a `v*` tag (for example, `git push origin v0.1.0`), or run
-   **Deploy GitHub Pages** from the Actions tab with `main` selected. Version
-   tag pushes start the release workflow. Pages packages and deploys the
-   same commit only after that workflow succeeds, including publishing the
-   desktop and WebAssembly release. The updated Pages workflow must be on the default branch
-   for this automatic trigger to work. Ordinary branch pushes do not trigger
-   either workflow.
-3. After the deployment succeeds, the landing page is at
-   <https://benchup3d.github.io/editor/> and its **Try in browser** links open
-   <https://benchup3d.github.io/editor/play/>.
-
-Local page and editor asset links are relative. Public website URLs always use
-`https://benchup3d.github.io/editor/`. GitHub Pages supplies HTTPS. The editor
-uses browser-local autosave; visitors should download `.bup` projects they
-want to keep. GitHub Pages is not cloud model storage.
-
-The landing page includes a canonical URL, Open Graph image metadata, and a
-large-image Twitter/X card using the editor screenshot. These absolute URLs stay on
-`https://benchup3d.github.io/editor/` regardless of the deployment repository or
-Pages configuration. Social previews require the deployed
-public HTTPS page and image; the local preview URL cannot be fetched by social
-networks.
-
 ## Development and verification
 
 Refresh the README screenshot from an existing desktop executable:
@@ -453,3 +409,7 @@ Verified during implementation: native Linux and browser WASM Cargo checks; core
 - `index.html` and `Trunk.toml`: static browser host and WASM development configuration.
 
 The viewport uses depth-tested filled triangles and antialiased triangle strips for consistent edge widths, CPU projection/clipping, and the same shader and editor behavior on every target. Rendering is event-driven rather than a continuous idle loop.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request guidelines
