@@ -1,5 +1,5 @@
 //! Retained viewport buffers, split at triangle boundaries for device limits.
-use super::Vertex;
+use super::{MaterialVertex, Vertex};
 use eframe::wgpu;
 use std::{collections::HashMap, ops::Range};
 
@@ -10,6 +10,7 @@ pub(super) struct GpuBuffers {
 pub(super) struct GpuChunk {
     pub(super) vertices: wgpu::Buffer,
     pub(super) indices: wgpu::Buffer,
+    materials: Option<wgpu::Buffer>,
     index_range: Range<u32>,
 }
 
@@ -30,6 +31,7 @@ impl GpuBuffers {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         vertices: &[Vertex],
+        materials: &[MaterialVertex],
         indices: &[u32],
         cached: Option<Self>,
     ) -> Self {
@@ -38,12 +40,13 @@ impl GpuBuffers {
         let mut chunks = Vec::new();
         for_each_batch(
             vertices,
+            materials,
             indices,
             limit,
-            |index_start, vertices, indices| {
+            |index_start, vertices, materials, indices| {
                 let old = cached.next();
-                let (old_vertices, old_indices) = old
-                    .map(|chunk| (Some(chunk.vertices), Some(chunk.indices)))
+                let (old_vertices, old_indices, old_materials) = old
+                    .map(|chunk| (Some(chunk.vertices), Some(chunk.indices), chunk.materials))
                     .unwrap_or_default();
                 let upload = |data: &[u8], old: Option<wgpu::Buffer>, usage, label| {
                     let buffer = old
@@ -76,6 +79,12 @@ impl GpuBuffers {
                         wgpu::BufferUsages::INDEX,
                         "BenchUp indices",
                     ),
+                    materials: (!materials.is_empty()).then(|| upload(
+                        bytemuck::cast_slice(materials),
+                        old_materials,
+                        wgpu::BufferUsages::VERTEX,
+                        "BenchUp procedural face attributes",
+                    )),
                     index_range: index_start..index_start + indices.len() as u32,
                 });
             },
@@ -87,6 +96,9 @@ impl GpuBuffers {
         for chunk in &self.chunks {
             if let Some(local) = local_range(&chunk.index_range, &range) {
                 pass.set_vertex_buffer(0, chunk.vertices.slice(..));
+                if let Some(materials) = &chunk.materials {
+                    pass.set_vertex_buffer(1, materials.slice(..));
+                }
                 pass.set_index_buffer(chunk.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(local, 0, 0..1);
             }
@@ -102,15 +114,17 @@ fn local_range(chunk: &Range<u32>, requested: &Range<u32>) -> Option<Range<u32>>
 
 fn for_each_batch(
     vertices: &[Vertex],
+    materials: &[MaterialVertex],
     indices: &[u32],
     limit: u64,
-    mut emit: impl FnMut(u32, &[Vertex], &[u32]),
+    mut emit: impl FnMut(u32, &[Vertex], &[MaterialVertex], &[u32]),
 ) {
+    debug_assert!(materials.is_empty() || materials.len() == vertices.len());
     if std::mem::size_of_val(vertices) as u64 <= limit
         && std::mem::size_of_val(indices) as u64 <= limit
     {
         // Ordinary scenes keep their original upload, with no remapping/copy.
-        emit(0, vertices, indices);
+        emit(0, vertices, materials, indices);
         return;
     }
     // Only oversized scenes need remapping. Bound temporary CPU storage and
@@ -122,6 +136,7 @@ fn for_each_batch(
     let mut remap = HashMap::<u32, u32>::new();
     let mut batch_vertices = Vec::new();
     let mut batch_indices = Vec::new();
+    let mut batch_materials = Vec::new();
     let mut index_start = 0;
     for triangle in indices.chunks(3) {
         let new_vertices = triangle
@@ -132,23 +147,27 @@ fn for_each_batch(
         if batch_vertices.len() + new_vertices > max_vertices
             || batch_indices.len() + triangle.len() > max_indices
         {
-            emit(index_start, &batch_vertices, &batch_indices);
+            emit(index_start, &batch_vertices, &batch_materials, &batch_indices);
             index_start += batch_indices.len() as u32;
             batch_vertices.clear();
             batch_indices.clear();
+            batch_materials.clear();
             remap.clear();
         }
         for &index in triangle {
             let local = *remap.entry(index).or_insert_with(|| {
                 let local = batch_vertices.len() as u32;
                 batch_vertices.push(vertices[index as usize]);
+                if !materials.is_empty() {
+                    batch_materials.push(materials[index as usize]);
+                }
                 local
             });
             batch_indices.push(local);
         }
     }
     if !batch_indices.is_empty() {
-        emit(index_start, &batch_vertices, &batch_indices);
+        emit(index_start, &batch_vertices, &batch_materials, &batch_indices);
     }
 }
 
@@ -184,7 +203,7 @@ mod tests {
         let vertices = vertices(6);
         let indices = [5, 0, 4];
         let mut count = 0;
-        for_each_batch(&vertices, &indices, 168, |start, v, i| {
+        for_each_batch(&vertices, &[], &indices, 168, |start, v, _, i| {
             assert_eq!(start, 0);
             assert_eq!(v.as_ptr(), vertices.as_ptr());
             assert_eq!(i.as_ptr(), indices.as_ptr());
@@ -196,7 +215,7 @@ mod tests {
     #[test]
     fn empty_meshes_keep_a_valid_empty_upload() {
         let mut count = 0;
-        for_each_batch(&[], &[], 84, |start, v, i| {
+        for_each_batch(&[], &[], &[], 84, |start, v, _, i| {
             assert_eq!(start, 0);
             assert!(v.is_empty() && i.is_empty());
             count += 1;
@@ -213,7 +232,7 @@ mod tests {
         let mut restored = [Vec::new(), Vec::new(), Vec::new()];
         let mut next = 0;
         let mut count = 0;
-        for_each_batch(&vertices, &indices, 84, |start, v, i| {
+        for_each_batch(&vertices, &[], &indices, 84, |start, v, _, i| {
             assert_eq!(start, next);
             assert_eq!(i.len() % 3, 0);
             assert!(std::mem::size_of_val(v) <= 84);
@@ -245,11 +264,26 @@ mod tests {
         let vertices = vertices(3);
         let indices = [0, 1, 2].repeat(20);
         let mut sizes = Vec::new();
-        for_each_batch(&vertices, &indices, 84, |_, v, i| {
+        for_each_batch(&vertices, &[], &indices, 84, |_, v, _, i| {
             assert_eq!(v.len(), 3);
             sizes.push(i.len());
         });
         assert_eq!(sizes, [21, 21, 18]);
+    }
+
+    #[test]
+    fn split_meshes_keep_procedural_attributes_with_their_vertices() {
+        let vertices = vertices(6);
+        let materials: Vec<_> = vertices.iter().map(|vertex| MaterialVertex {
+            grain: [vertex.position[0], 0., 0., 1.],
+            finish: [128, 0, 0, 0],
+        }).collect();
+        for_each_batch(&vertices, &materials, &[5, 1, 2, 4, 3, 0], 84, |_, vertices, materials, _| {
+            assert_eq!(vertices.len(), materials.len());
+            for (vertex, material) in vertices.iter().zip(materials) {
+                assert_eq!(vertex.position[0], material.grain[0]);
+            }
+        });
     }
 
     #[test]

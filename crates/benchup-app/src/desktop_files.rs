@@ -119,7 +119,7 @@ fn register() -> Result<(), Box<dyn std::error::Error>> {
         (
             "applications/io.github.BenchUp3D.BenchUp.desktop",
             format!(
-                "[Desktop Entry]\nType=Application\nName=BenchUp\nExec={quoted} %f\nIcon=io.github.BenchUp3D.BenchUp\nMimeType=application/x-benchup;\nCategories=Graphics;3DGraphics;\nTerminal=false\n"
+                "[Desktop Entry]\nType=Application\nName=BenchUp\nExec={quoted} %f\nIcon=io.github.BenchUp3D.BenchUp\nMimeType=application/x-benchup;\nCategories=Graphics;3DGraphics;\nTerminal=false\nStartupWMClass=io.github.BenchUp3D.BenchUp\n"
             ),
         ),
         (
@@ -141,6 +141,20 @@ fn register() -> Result<(), Box<dyn std::error::Error>> {
             std::fs::write(target, contents)?;
             changed = true;
         }
+    }
+    // Wayland shells resolve the taskbar icon through the desktop entry's
+    // app ID; the window icon alone is insufficient. Install into the standard
+    // fallback theme so this also works when launching an unpackaged binary.
+    let icon = data.join("icons/hicolor/256x256/apps/io.github.BenchUp3D.BenchUp.png");
+    let icon_bytes = include_bytes!("../../../assets/branding/icon-256.png");
+    if std::fs::read(&icon).ok().as_deref() != Some(icon_bytes.as_slice()) {
+        std::fs::create_dir_all(icon.parent().unwrap())?;
+        std::fs::write(&icon, icon_bytes)?;
+        changed = true;
+        let _ = std::process::Command::new("gtk-update-icon-cache")
+            .args(["--force", "--ignore-theme-index"])
+            .arg(data.join("icons/hicolor"))
+            .status();
     }
     if changed {
         for (command, directory) in [

@@ -24,7 +24,7 @@ pub(super) fn effective_display(display: &DisplaySettings, model: &Model, dark: 
 
 /// A soft upper-left key light travels with the view, keeping depth legible as
 /// the camera orbits. Prepare its basis once per frame rather than per face.
-pub(super) struct FaceLighting {
+pub(crate) struct FaceLighting {
     eye: DVec3,
     direction: DVec3,
     parallel: Option<DVec3>,
@@ -44,7 +44,7 @@ impl FaceLighting {
         }
     }
 
-    pub(super) fn shade(&self, color: Color32, normal: DVec3, point: DVec3) -> Color32 {
+    pub(crate) fn shade(&self, color: Color32, normal: DVec3, point: DVec3) -> Color32 {
         // Light the visible side of open faces and imported geometry, even
         // when their winding differs. Monochrome keeps its distinct back color.
         let normal = if normal.dot(self.parallel.unwrap_or(self.eye - point)) < 0. {
@@ -56,6 +56,19 @@ impl FaceLighting {
         let [r, g, b, alpha] = color.to_srgba_unmultiplied();
         let channel = |value| (f64::from(value) * brightness).round() as u8;
         Color32::from_rgba_unmultiplied(channel(r), channel(g), channel(b), alpha)
+    }
+
+    // Match the retained shader for faces that already use CPU projection
+    // (for example when section planes are active).
+    pub(super) fn finish_highlight(&self, sheen: u8, normal: DVec3, point: DVec3) -> u8 {
+        if sheen == 0 {
+            return 0;
+        }
+        let eye = self.parallel.unwrap_or(self.eye - point).normalize_or_zero();
+        let half = (eye + self.direction).normalize_or_zero();
+        let normal = if normal.dot(eye) < 0. { -normal } else { normal };
+        let sheen = f64::from(sheen) / 255.;
+        (255. * 0.65 * sheen * normal.dot(half).max(0.).powf(5. + 31. * sheen)).round() as u8
     }
 }
 

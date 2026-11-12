@@ -71,6 +71,10 @@ pub struct Model {
     #[serde(default)]
     #[serde(deserialize_with = "deserialize_map_or_empty_sequence")]
     pub connections: BTreeMap<u64, crate::connections::Connection>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "deserialize_map_or_empty_sequence")]
+    pub routes: BTreeMap<u64, crate::router::Settings>,
+    #[serde(skip)]
+    pub routing_appearance: crate::router::Appearance,
     #[serde(deserialize_with = "deserialize_map_or_empty_sequence")]
     pub vertices: BTreeMap<u64, Vertex>,
     #[serde(deserialize_with = "deserialize_map_or_empty_sequence")]
@@ -81,6 +85,8 @@ pub struct Model {
     #[serde(default)]
     #[serde(deserialize_with = "deserialize_map_or_empty_sequence")]
     pub face_colors: BTreeMap<u64, [u8; 3]>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "deserialize_map_or_empty_sequence")]
+    pub wood_glue: BTreeMap<u64, crate::wood_glue::Coverage>,
     #[serde(default, deserialize_with = "deserialize_map_or_empty_sequence")]
     pub reference_images: BTreeMap<u64, crate::ReferenceImage>,
     #[serde(default, deserialize_with = "deserialize_map_or_empty_sequence")]
@@ -123,6 +129,8 @@ impl Model {
     pub fn same_scene_geometry(&self, other: &Self) -> bool {
         self.guides == other.guides
             && self.connections == other.connections
+            && self.routes == other.routes
+            && self.routing_appearance == other.routing_appearance
             && self.vertices == other.vertices
             && self.edges == other.edges
             && self.faces == other.faces
@@ -137,6 +145,7 @@ impl Model {
                 })
             })
             && self.face_colors == other.face_colors
+            && self.wood_glue == other.wood_glue
             && self.dimensions == other.dimensions
             && self.texts == other.texts
             && self.objects == other.objects
@@ -213,8 +222,13 @@ impl Model {
             }
             self.edges.remove(&edge.id);
             drawing_edges.remove(&edge.id);
-            drawing_edges.insert(self.insert_edge(edge.a, vertex));
-            drawing_edges.insert(self.insert_edge(vertex, edge.b));
+            let first = self.insert_edge(edge.a, vertex);
+            let second = self.insert_edge(vertex, edge.b);
+            drawing_edges.extend([first, second]);
+            if let Some(settings) = self.routes.remove(&edge.id) {
+                self.routes.insert(first, settings);
+                self.routes.insert(second, settings);
+            }
         }
     }
     pub fn add_edge(&mut self, start: DVec3, end: DVec3) -> Result<u64, &'static str> {
@@ -361,10 +375,12 @@ impl Model {
         for id in &removed_faces {
             self.faces.remove(id);
             self.face_colors.remove(id);
+            self.wood_glue.remove(id);
         }
         self.face_colors.retain(|id, _| self.faces.contains_key(id));
         self.reference_images.retain(|id, _| self.faces.contains_key(id));
         self.edges.retain(|id, _| !ids.contains(id));
+        self.routes.retain(|id, _| !ids.contains(id));
         let used: std::collections::HashSet<_> = self
             .edges
             .values()
@@ -456,6 +472,7 @@ impl Model {
         }) {
             return Err(tr!("core.document.invalid_connection_parameters"));
         }
+        self.validate_routes()?;
         let max_id = self
             .vertices
             .keys()
@@ -532,6 +549,12 @@ impl Model {
         self.validate_dimensions()?;
         self.validate_texts()?;
         self.validate_reference_images()?;
+        if self.wood_glue.iter().any(|(id, coverage)| {
+            self.reference_images.contains_key(id)
+                || self.faces.get(id).is_none_or(|face| !coverage.valid(face))
+        }) {
+            return Err(tr!("wood_glue.invalid_coverage"));
+        }
         if self
             .face_colors
             .keys()
@@ -581,6 +604,9 @@ pub struct Document {
     )]
     pub history: History,
     pub camera: Camera,
+    /// User-picked orbit pivot, scoped to this project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orbit_focus: Option<DVec3>,
     /// Per-viewport framing belongs to this project, unlike reusable layout preferences.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(deserialize_with = "deserialize_map_or_empty_sequence")]
@@ -611,6 +637,7 @@ impl Default for Document {
             model: Model::default(),
             history: History::default(),
             camera: Camera::default(),
+            orbit_focus: None,
             viewport_cameras: BTreeMap::new(),
             selection: BTreeSet::new(),
             selection_context: None,
@@ -633,6 +660,7 @@ impl Document {
             model: Model::default(),
             history: History::default(),
             camera: self.camera.clone(),
+            orbit_focus: self.orbit_focus,
             viewport_cameras: self.viewport_cameras.clone(),
             selection: self.selection.clone(),
             selection_context: self.selection_context,

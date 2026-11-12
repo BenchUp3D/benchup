@@ -98,7 +98,7 @@ jobs:
             libxkbcommon-dev libwayland-dev libegl1-mesa-dev libudev-dev
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: ${{ matrix.target }}
 
@@ -130,26 +130,27 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: python scripts/configure_macos_signing.py
 
+      - name: Set up compiler cache
+        uses: ./.github/actions/setup-compiler-cache
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: desktop-${{ matrix.target }}
+          # Restore dependencies warmed on main; tag-scoped caches cannot be
+          # reused by the next release tag.
+          shared-key: desktop-${{ matrix.target }}
+          save-if: 'false'
 
       - name: Build release executable
-        run: cargo build -p benchup-app --bin benchup-app --release --locked --target "${{ matrix.target }}"
-
-      - name: Test updates, identity migration, and project compatibility
-        run: |
-          cargo test -p benchup-app --lib --release --locked --target "${{ matrix.target }}" -- \
-            updates:: update_repository:: identity:: storage:: project_files:: server_config::
+        run: bash scripts/ci_cargo.sh build -p benchup-app --bin benchup-app --release --locked --target "${{ matrix.target }}"
 
       - name: Stage distribution
         run: |
           mkdir -p dist package/licenses/skp
           cp "target/${{ matrix.target }}/release/${{ matrix.executable }}" package/
           cp LICENSE README.md package/
-          cp crates/benchup-app/vendor/skp/LICENSE* package/licenses/skp/
-          cp crates/benchup-app/vendor/skp/native/miniz/LICENSE package/licenses/skp/LICENSE-miniz
+          cp crates/benchup-io/vendor/skp/LICENSE* package/licenses/skp/
+          cp crates/benchup-skp/vendor/openskp/miniz/LICENSE package/licenses/skp/LICENSE-miniz
 
       - name: Create installer and update feed
         run: python scripts/desktop_release.py package --tag "$TAG_NAME" --platform "${{ matrix.platform }}"
@@ -170,6 +171,70 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+  test:
+    name: Test ${{ matrix.platform }} release compatibility
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+          - platform: macos-arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+          - platform: macos-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+          - platform: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo python3 scripts/install_linux_dependencies.py \
+            build-essential pkg-config libx11-dev libxcb1-dev \
+            libxkbcommon-dev libwayland-dev libegl1-mesa-dev libudev-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/setup-compiler-cache
+
+      - name: Cache Rust test dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: desktop-${{ matrix.target }}
+          save-if: 'false'
+
+      - name: Test updates, identity migration, and project compatibility
+        run: |
+          bash scripts/ci_cargo.sh test -p benchup-app --lib --profile ci-test --locked --target "${{ matrix.target }}" -- \
+            updates:: update_repository:: identity:: storage:: project_files:: server_config::
+
+      - name: Test native import and export fixtures
+        run: bash scripts/ci_cargo.sh test -p benchup-io -p benchup-skp --profile ci-test --locked --target "${{ matrix.target }}"
+
   wasm:
     name: Build WebAssembly
     needs: validate
@@ -183,14 +248,18 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust and WebAssembly target
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
         with:
           targets: wasm32-unknown-unknown
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/setup-compiler-cache
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          key: release-wasm
+          shared-key: release-wasm
+          save-if: 'false'
 
       - uses: actions/setup-python@v6
         with:
@@ -217,8 +286,8 @@ jobs:
           test -n "$(find dist/wasm -name '*.js' -size +0c -print -quit)"
           cp LICENSE README.md dist/wasm/
           mkdir -p dist/wasm/licenses/skp
-          cp crates/benchup-app/vendor/skp/LICENSE* dist/wasm/licenses/skp/
-          cp crates/benchup-app/vendor/skp/native/miniz/LICENSE dist/wasm/licenses/skp/LICENSE-miniz
+          cp crates/benchup-io/vendor/skp/LICENSE* dist/wasm/licenses/skp/
+          cp crates/benchup-skp/vendor/openskp/miniz/LICENSE dist/wasm/licenses/skp/LICENSE-miniz
           python3 - <<'PY'
           import os
           import shutil
@@ -236,7 +305,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [build, wasm]
+    needs: [build, test, wasm]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

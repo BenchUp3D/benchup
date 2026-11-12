@@ -32,6 +32,7 @@ pub(super) struct Project {
     pub recent: Vec<RecentProject>,
     pub import_format: String,
     pub export_stl: bool,
+    pub export_scale_open: bool,
     pub modified: bool,
     pub pending: Option<project_files::Pending>,
     pub preview_save: Option<(super::screenshot_dialog::Capture, Option<PathBuf>, String)>,
@@ -52,6 +53,7 @@ impl Default for Project {
             recent: Vec::new(),
             import_format: "skp".into(),
             export_stl: false,
+            export_scale_open: false,
             modified: false,
             pending: None,
             preview_save: None,
@@ -176,6 +178,7 @@ impl BenchUpApp {
         ctx: &egui::Context,
     ) {
         self.reset_image_project();
+        self.router_editor = Default::default();
         self.fasteners.open=false;
         self.fastener_dialog=Default::default();
         self.release_shared_selection(ctx);
@@ -187,6 +190,7 @@ impl BenchUpApp {
         }
         doc.display.group_emphasis = self.doc.display.group_emphasis;
         doc.display.grain_direction = self.doc.display.grain_direction;
+        doc.display.router_preview = self.doc.display.router_preview;
         // Snapping targets are app preferences, including when an older project
         // carries the former geometry master switch in its document.
         doc.snap_to_geometry =
@@ -300,13 +304,35 @@ impl BenchUpApp {
         if self.project.blocked() {
             return;
         }
+        if self.project.export_stl {
+            self.project.export_scale_open = true;
+            return;
+        }
+        self.export_model_at_scale(ctx, 1.);
+    }
+
+    pub(super) fn export_model_at_scale(&mut self, ctx: &egui::Context, scale: f64) {
+        if self.project.blocked() {
+            return;
+        }
         let geometry=self.doc.model.evaluate_joinery();
         if !geometry.errors.is_empty() {
-            self.project.error=Some(geometry.errors.into_iter().map(|(id,error)|tr!("projects.wood_joint", id = id, error = error)).collect::<Vec<_>>().join(tr!("projects.joint_error_separator")));
+            let errors = geometry.errors.into_iter().map(|(id, error)| {
+                if self.doc.model.routes.contains_key(&id) {
+                    tr!("router.suspended", id = id, error = error)
+                } else {
+                    tr!("projects.wood_joint", id = id, error = error)
+                }
+            }).collect::<Vec<_>>();
+            self.project.error = Some(errors.join(tr!("projects.joint_error_separator")));
             return;
         }
         match if self.project.export_stl {
-            crate::mesh_exchange::export_stl(&geometry.model)
+            if scale == 1. {
+                crate::mesh_exchange::export_stl(&geometry.model)
+            } else {
+                crate::mesh_exchange::export_stl_scaled(&geometry.model, scale)
+            }
         } else {
             crate::interchange::export_obj(&geometry.model).map(String::into_bytes)
         } {
@@ -507,7 +533,7 @@ impl BenchUpApp {
                     }
                 }
             }
-            Ok(Outcome::Imported(model, selected)) => {
+            Ok(Outcome::Imported { model, selected, recovered }) => {
                 let before = std::mem::replace(&mut self.doc.model, *model);
                 self.set_tool(Tool::Select);
                 self.selected = selected;
@@ -521,7 +547,11 @@ impl BenchUpApp {
                     ctx,
                 );
                 self.fit(ctx);
-                self.say(ctx, tr!("projects.geometry_imported_as_editable_groups"));
+                self.say(ctx, if recovered {
+                    tr!("projects.geometry_recovered_from_a_damaged_sketchup_archive")
+                } else {
+                    tr!("projects.geometry_imported_as_editable_groups")
+                });
             }
             Ok(Outcome::Exported) => self.say(
                 ctx,
@@ -590,6 +620,10 @@ impl BenchUpApp {
                         });
                         ui.checkbox(&mut self.project.cutting_plan_layout.allow_rotation, tr!("projects.allow_rotating_pieces_90_degrees"))
                             .on_hover_text(tr!("projects.leave_off_when_the_length_must_follow_the"));
+                        ui.checkbox(&mut self.project.cutting_plan_layout.respect_grain, tr!("projects.respect_wood_grain_direction"))
+                            .on_hover_text(tr!("projects.align_part_grain_with_stock_length"));
+                        ui.checkbox(&mut self.project.cutting_plan_layout.show_joinery, tr!("projects.show_wood_joinery"))
+                            .on_hover_text(tr!("projects.show_joinery_as_dashed_outlines"));
                     }
                     ui.text_weak(tr!("projects.only_visible_parts_with_assigned_stock_materials_are"));
                     if report == CutReport::CuttingPlan {

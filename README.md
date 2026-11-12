@@ -30,6 +30,8 @@ Create mortise-and-tenon, half-lap, tongue-and-groove, rabbet, dovetail, and fin
 
 Set the grain direction on groups and components and show grain-direction guides directly on the model. Review how the grain runs across each board and through the full assembly before building. Grain orientation is saved with the project and follows the parts when they rotate.
 
+In the Materials face style, parts with assigned wood stock show procedural grain and the result of their sanding and finishing steps. Set the wood color and product appearance in the material catalog, then adjust the recipe and appearance overrides in the part's inspector. Work rates and drying times affect estimates only. Explicit face colors and Color by Tag take precedence over the finish preview.
+
 ### Plan materials and workshop work
 
 Assign stock materials and wood types to parts, configure sanding and finishing products, and prepare cut lists, cutting plans, and workshop labels. Export cutting plans and time and cost estimates to PDF to take the design into the workshop.
@@ -39,9 +41,13 @@ Assign stock materials and wood types to parts, configure sanding and finishing 
 This README covers developer installation, building, verification, and deployment.
 For instructions on using BenchUp, see the [user documentation](docs/README.md).
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for pull request guidelines
+
 ## Prerequisites
 
-- Rust 1.95 or newer, installed with rustup; the repository was checked with Rust 1.97.1.
+- Rust installed with rustup. `rust-toolchain.toml` pins Rust 1.97.1 for development and CI; the workspace minimum supported version is 1.95.
 - A C/C++17 compiler for the native SketchUp reader (GCC/Clang on Linux, Xcode Clang on macOS, or MSVC on Windows). Browser builds do not require it.
 - A GPU/driver supported by wgpu. The browser prefers WebGPU and falls back to WebGL2.
 - On Linux, development libraries for X11/Wayland, xkbcommon, and libudev. For Debian/Ubuntu: `sudo apt install build-essential pkg-config libx11-dev libxcb1-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libudev-dev`.
@@ -53,16 +59,39 @@ Linux desktop builds use libudev through the `hidapi` dependency to discover Spa
 ## Run on desktop
 
 ```sh
-cargo run -p benchup-app
+cargo run -p benchup-app --profile dev-desktop
 ```
+
+The `dev-desktop` profile enables incremental application compilation for faster
+rebuilds after edits. It preserves the usual development optimizations, full debug
+symbols, debug assertions, and overflow checks. The executable is
+`target/dev-desktop/benchup-app` (`benchup-app.exe` on Windows).
+
+To rebuild and relaunch automatically after changes, install a
+[prebuilt Watchexec executable](https://github.com/watchexec/watchexec/releases)
+and put it on your `PATH`, then run from the repository root:
+
+```sh
+watchexec --restart --debounce 1s --shell none \
+  --watch crates --watch assets --watch Cargo.toml --watch Cargo.lock \
+  -- cargo run -p benchup-app --profile dev-desktop --locked
+```
+
+This watches all workspace crates (including native reader sources and shaders),
+embedded assets, and dependency manifests. Saves within one second are grouped
+into one restart. Build output stays in the terminal; after a compilation error,
+the watcher retries on the next edit. Stop it with Ctrl+C. Each restart terminates
+the current app process, so save model edits before changing source files; only
+persisted state survives. This command watches application inputs; restart it
+manually after changing `.env`, Cargo configuration, or the Rust toolchain.
 
 On Linux, register the application launcher and icons once after compiling:
 
 ```sh
-python3 scripts/install_linux_desktop.py
+python3 scripts/install_linux_desktop.py target/dev-desktop/benchup-app
 ```
 
-This installs into your user data directory (`$XDG_DATA_HOME`, or `~/.local/share`) without root access. GNOME on Wayland uses the application's ID and matching desktop entry to find its icon. Restart BenchUp after installing. The launcher points to `target/debug/benchup-app`, so later development compilations update the same executable. For a release installation, pass its path: `python3 scripts/install_linux_desktop.py target/release/benchup-app`. Keep that executable in place, or rerun the installer with its new path if you move it.
+This installs into your user data directory (`$XDG_DATA_HOME`, or `~/.local/share`) without root access. GNOME on Wayland uses the application's ID and matching desktop entry to find its icon. Restart BenchUp after installing. The launcher points to the executable you pass, so later compilations with the same profile update it. For a release installation, pass its path: `python3 scripts/install_linux_desktop.py target/release/benchup-app`. Keep that executable in place, or rerun the installer with its new path if you move it. Omitting the path still selects `target/debug/benchup-app` for the standard `dev` profile.
 
 ## Run in a browser
 
@@ -82,6 +111,17 @@ trunk serve
 Open <http://127.0.0.1:8080>. Keep the app on the same origin/port to restore the same saved model. No Node.js, JavaScript application framework, or backend is required. Trunk generates the JavaScript needed to load the Rust WebAssembly program.
 
 Development builds use light optimization for application code and stronger optimization for dependencies and the geometry core, on both desktop and WebAssembly. Debug symbols, debug assertions, and overflow checks remain enabled. These optimizations target the cost of menu hovering, scrolling, and rendering in debug mode. The profile takes effect on the next development compilation; changing it recompiles affected dependencies once.
+
+`trunk serve` continues to use the standard `dev` profile, which disables
+incremental compilation for `benchup-app` to avoid a WebAssembly linker issue.
+Use `dev-desktop` only for native development. Its first build populates a
+separate target directory; later edits reuse that profile's compilation artifacts.
+
+The workspace keeps geometry formats and the embedded browser SketchUp reader
+in `benchup-io`, with the C/C++ reader and its safe Rust boundary in `benchup-skp`.
+The application depends on these crates, so UI edits reuse their compiled
+artifacts. The native reader compiles C/C++ files in parallel and no
+longer rebuilds when application server or update configuration changes.
 
 ## Application messages
 
@@ -112,8 +152,8 @@ The executable is `target/release/benchup-app` (`benchup-app.exe` on Windows). T
 [Build releases](.github/workflows/build.yml) runs when a `v*` tag is pushed
 (for example, `git push origin v0.1.0`). The tag must be a stable `vX.Y.Z`
 version matching `[workspace.package].version` in `Cargo.toml`. It builds with
-stable Rust and the committed `Cargo.lock`, runs update regression tests, then
-packages the desktop app with Velopack and the browser app with Trunk:
+the pinned Rust toolchain and committed `Cargo.lock`, runs update regression
+tests, and packages the desktop app with Velopack and the browser app with Trunk:
 
 | Artifact | Platform | Install / run |
 |---|---|---|
@@ -128,8 +168,34 @@ The macOS builds run natively on `macos-15` (Apple Silicon) and
 signing and notarization secrets, with separate `osx-arm64` and `osx-x64`
 update channels.
 
-After all desktop and WebAssembly builds succeed, the workflow creates a GitHub Release for the
-pushed tag with the prepared release notes, installers, portable packages, full
+[Warm release caches](.github/workflows/cache.yml) populates dependency caches
+on relevant pushes to `main`, or manually from that branch. It uses the same Rust
+toolchain, runners, profiles, targets, and shared cache keys as releases. It also
+refreshes an sccache compiler cache for workspace Rust libraries and the native
+SketchUp reader, even when the dependency cache already matches. It warms release
+libraries without linking the final application, plus the desktop compatibility
+test dependencies. Release tags restore compiler-cache entries from `main`
+without writing duplicate tag caches. Branch and PR runs also populate their
+own scoped compiler caches for subsequent runs. The shared
+[compiler-cache action](.github/actions/setup-compiler-cache/action.yml) pins
+sccache and prints cache statistics at the end of each job.
+
+Desktop compatibility tests run in parallel with packaging, on all four desktop
+targets, using `ci-test`: release assertion and overflow behavior, optimization
+level 1, and no LTO. Shipped applications retain release optimization level 2 and
+Thin LTO. Both profiles are warmed on `main`. To change Rust, update
+`rust-toolchain.toml` and the matching toolchain action versions in the release,
+cache-warming, Pages, and PR workflows together, then rewarm the caches.
+
+Release tags and manual Pages builds restore the dependency caches without
+saving duplicate tag caches. GitHub permits tags to
+restore caches from the default branch, but not from other tags. Keep `main` as
+the default branch and let cache warming finish before tagging a release to get
+the benefit. Cache warming does not package or publish a release.
+
+After all desktop builds, compatibility tests, and WebAssembly builds succeed,
+the workflow creates a GitHub Release for the pushed tag with the prepared
+release notes, installers, portable packages, full
 `.nupkg` updates, one `releases.<platform>.json` feed per OS/architecture, the browser app ZIP, and
 `SHA256SUMS`. It validates the packages against their feed hashes and publishes
 only after every platform succeeds and all assets have uploaded. Reruns can
@@ -277,6 +343,8 @@ explicitly. It launches the desktop app in an isolated temporary profile, loads
 camera and display settings, dismisses open dialogs and popups, captures the
 settled window at 1920 × 1080, and updates `assets/screenshots/benchup.jpg` and its
 README link. Visually verify that no modal remains open before using the image.
+For a release, update the landing page and its social preview references to
+the same capture.
 It never compiles the app, runs tests, or starts benchmarks. The screenshot
 reflects the existing executable; a missing executable is reported without
 building one.

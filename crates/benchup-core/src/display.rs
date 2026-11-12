@@ -32,6 +32,8 @@ impl FaceStyle {
 #[serde(default)]
 pub struct DisplaySettings {
     pub joinery_preview: bool,
+    /// Legacy saved preference; Router profiles now apply only on activation.
+    pub router_preview: bool,
     /// Show clickable markers at saved wood joints.
     pub wood_joinery: bool,
     pub fasteners: bool,
@@ -53,6 +55,8 @@ pub struct DisplaySettings {
     pub axes: bool,
     pub guides: bool,
     pub dimensions: bool,
+    /// Show selected edge lengths in the viewport (legacy serialized key).
+    pub face_side_lengths: bool,
     pub hidden_geometry: bool,
     pub hidden_objects: bool,
     pub group_emphasis: bool,
@@ -61,6 +65,8 @@ pub struct DisplaySettings {
     pub grain_direction: bool,
     pub face_style: FaceStyle,
     pub x_ray: bool,
+    /// Show surrounding geometry as wireframe while using the Move tool.
+    pub move_wireframe: bool,
     pub edges: bool,
     pub back_edges: bool,
     pub profiles: bool,
@@ -93,6 +99,7 @@ impl Default for DisplaySettings {
     fn default() -> Self {
         Self {
             joinery_preview: true,
+            router_preview: true,
             wood_joinery: true,
             fasteners: true,
             fastener_preview: false,
@@ -110,6 +117,7 @@ impl Default for DisplaySettings {
             axes: true,
             guides: true,
             dimensions: true,
+            face_side_lengths: false,
             hidden_geometry: false,
             hidden_objects: false,
             group_emphasis: true,
@@ -117,6 +125,7 @@ impl Default for DisplaySettings {
             grain_direction: true,
             face_style: FaceStyle::Materials,
             x_ray: false,
+            move_wireframe: false,
             edges: true,
             back_edges: false,
             profiles: false,

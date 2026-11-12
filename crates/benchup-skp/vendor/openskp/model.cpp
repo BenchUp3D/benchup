@@ -1,0 +1,338 @@
+#include <algorithm>
+#include <charconv>
+#include <cmath>
+#include <fstream>
+#include <iomanip>
+#include <limits>
+#include <locale>
+#include <sstream>
+
+#include "internal.hpp"
+
+namespace openskp {
+
+double ArcCurve::radius() const {
+  return std::sqrt(x_axis[0] * x_axis[0] + x_axis[1] * x_axis[1] + x_axis[2] * x_axis[2]);
+}
+
+bool ArcCurve::is_full_circle() const {
+  const double two_pi = 2.0 * std::acos(-1.0);
+  double sweep = std::fmod(end_angle - start_angle, two_pi);
+  if (sweep < 0) sweep += two_pi;
+  return std::min(sweep, two_pi - sweep) < 1e-9;
+}
+
+namespace {
+
+std::string format_double(double v) {
+#if defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && \
+    __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 130300
+  // Apple libc++ provides floating-point to_chars starting with macOS 13.3.
+  std::ostringstream out;
+  out.imbue(std::locale::classic());
+  out << std::setprecision(std::numeric_limits<double>::max_digits10) << v;
+  return out.str();
+#else
+  char buf[32];
+  auto result = std::to_chars(buf, buf + sizeof(buf), v);
+  return std::string(buf, result.ptr);
+#endif
+}
+
+}  // namespace
+
+std::string ParsedAttribute::to_string() const {
+  switch (kind) {
+    case Kind::Null:
+      return "";
+    case Kind::String:
+      return text;
+    case Kind::Integer:
+    case Kind::Boolean:
+      return std::to_string(integer);
+    case Kind::Float:
+    case Kind::Length:
+      return format_double(number);
+    case Kind::Vec:
+      return format_double(vec[0]) + "," + format_double(vec[1]) + "," + format_double(vec[2]);
+    case Kind::Array: {
+      std::string joined;
+      for (const auto& item : array) {
+        if (!joined.empty()) joined += ",";
+        joined += item.to_string();
+      }
+      return joined;
+    }
+  }
+  return "";
+}
+
+bool ParsedAttribute::operator==(const ParsedAttribute& o) const {
+  if (kind != o.kind) return false;
+  switch (kind) {
+    case Kind::Null:
+      return true;
+    case Kind::String:
+      return text == o.text;
+    case Kind::Integer:
+    case Kind::Boolean:
+      return integer == o.integer;
+    case Kind::Float:
+    case Kind::Length:
+      return number == o.number;
+    case Kind::Vec:
+      return vec == o.vec;
+    case Kind::Array:
+      return array == o.array;
+  }
+  return false;
+}
+
+std::map<std::string, std::string> stringify_attr_dict(const ParsedAttrDict& src) {
+  std::map<std::string, std::string> out;
+  for (const auto& kv : src) out.emplace(kv.first, kv.second.to_string());
+  return out;
+}
+
+std::map<std::string, std::map<std::string, std::string>> stringify_attr_dictionaries(
+    const ParsedAttrDictionaries& src) {
+  std::map<std::string, std::map<std::string, std::string>> out;
+  for (const auto& d : src) out.emplace(d.first, stringify_attr_dict(d.second));
+  return out;
+}
+
+Definition& SkpModel::root() noexcept { return root_; }
+
+const Definition& SkpModel::root() const noexcept { return root_; }
+
+void Texture::save(const std::filesystem::path& p) const {
+  if (!data) throw std::logic_error("Texture '" + filename + "' has no image data");
+  std::ofstream f(p, std::ios::binary);
+  if (!f) throw std::runtime_error("Cannot open texture output: " + p.string());
+  f.write(reinterpret_cast<const char*>(data->data()), static_cast<std::streamsize>(data->size()));
+  if (!f) throw std::runtime_error("Failed to write texture: " + p.string());
+}
+
+Material* SkpModel::material_by_id(EntityId id) noexcept {
+  auto i = material_indices_.find(id);
+  return i == material_indices_.end() ? nullptr : &materials[i->second];
+}
+
+const Material* SkpModel::material_by_id(EntityId id) const noexcept {
+  auto i = material_indices_.find(id);
+  return i == material_indices_.end() ? nullptr : &materials[i->second];
+}
+
+std::map<EntityId, Material*> SkpModel::materials_by_id() {
+  std::map<EntityId, Material*> result;
+  for (auto& entry : material_indices_) {
+    result[entry.first] = &materials[entry.second];
+  }
+  return result;
+}
+
+std::map<EntityId, const Material*> SkpModel::materials_by_id() const {
+  std::map<EntityId, const Material*> result;
+  for (const auto& entry : material_indices_) {
+    result[entry.first] = &materials[entry.second];
+  }
+  return result;
+}
+
+// Takes the raw definition by value so its builder maps are freed as soon as this one is
+// converted: holding every raw definition until build_model returns doubles peak memory.
+static Definition definition(EntityId id, RawDefinition r) {
+  Definition d;
+  d.id = id;
+  d.guid = std::move(r.guid);
+  d.name = std::move(r.name);
+  d.persistent_id = r.native_pid;
+  d.description = std::move(r.description);
+  d.path = std::move(r.path);
+  d.load_time = r.load_time;
+  d.hidden = r.hidden;
+  d.thumbnail_camera = r.thumbnail_camera;
+  d.always_faces_camera = r.always_faces_camera;
+  d.shadows_face_sun = r.shadows_face_sun;
+  d.is_image = r.is_image;
+  d.is_group = r.is_group;
+  d.type_known = r.type_known;
+  d.parsed_dictionaries = std::move(r.parsed_dictionaries);
+  for (auto& v : r.builder.vertices)
+    d.vertices.emplace(v.first, Vertex{v.first, v.second[0], v.second[1], v.second[2],
+                                       r.builder.persistent_ids[v.first]});
+  for (auto& e : r.builder.edges) {
+    auto flags =
+        r.builder.edge_flags.count(e.first) ? r.builder.edge_flags.at(e.first) : kDrawDefault;
+    Edge edge{e.first,         e.second.first.value_or(0), e.second.second.value_or(0),
+              bool(flags & 8), bool(flags & 16),           bool(flags & 1)};
+    edge.persistent_id = r.builder.persistent_ids[e.first];
+    edge.locked = (flags & kDrawLocked) != 0;
+    edge.casts_shadows = (flags & kDrawCastsShadows) != 0;
+    edge.receives_shadows = (flags & kDrawReceivesShadows) != 0;
+    edge.attribute_dictionaries = std::move(r.builder.edge_dictionaries[e.first]);
+    auto curve = r.builder.edge_curves.find(e.first);
+    if (curve != r.builder.edge_curves.end()) edge.curve_id = curve->second;
+    d.edges.emplace(e.first, edge);
+  }
+  for (auto& a : r.builder.arc_curves) {
+    ArcCurve arc;
+    arc.persistent_id = r.builder.persistent_ids[a.first];
+    arc.center = a.second.center;
+    arc.normal = a.second.normal;
+    arc.x_axis = a.second.x_axis;
+    arc.y_axis = a.second.y_axis;
+    arc.start_angle = a.second.start_angle;
+    arc.end_angle = a.second.end_angle;
+    d.arcs.emplace(a.first, arc);
+  }
+  for (auto& f : r.builder.faces) {
+    Face x;
+    x.id = f.first;
+    x.persistent_id = r.builder.persistent_ids[f.first];
+    x.locked = f.second.locked;
+    x.casts_shadows = f.second.casts_shadows;
+    x.receives_shadows = f.second.receives_shadows;
+    x.attribute_dictionaries = std::move(f.second.attribute_dictionaries);
+    x.loops = std::move(f.second.loops);
+    x.normal = f.second.normal;
+    x.material_id = f.second.material_id;
+    x.back_material_id = f.second.back_material_id;
+    x.uv_transform = f.second.uv_transform;
+    x.uv_transform_back = f.second.uv_transform_back;
+    x.uv_projected = f.second.uv_projected;
+    x.uv_projected_back = f.second.uv_projected_back;
+    x.hidden = f.second.hidden;
+    x.layer = std::move(f.second.layer);
+    d.faces.emplace(f.first, std::move(x));
+  }
+  for (auto& i : r.builder.instances)
+    d.instances.push_back({std::move(i.name), i.ref_idx, std::move(i.ref_guid), std::move(i.matrix),
+                           std::move(i.layer), std::move(i.properties),
+                           std::move(i.attribute_dicts), i.material_id, i.hidden, i.id, i.locked,
+                           i.casts_shadows, i.receives_shadows});
+  d.section_planes = std::move(r.builder.section_planes);
+  d.texts = std::move(r.builder.texts);
+  d.dimensions = std::move(r.builder.dimensions);
+  d.construction_lines = std::move(r.builder.construction_lines);
+  d.construction_points = std::move(r.builder.construction_points);
+  return d;
+}
+
+SkpModel build_model(RawParsed&& p, const ParseOptions& o) {
+  SkpModel m;
+  m.version = std::move(p.version);
+  m.units = std::move(p.units);
+  m.attribute_dictionaries = std::move(p.model_attribute_dicts);
+  auto resolve_layer = [&](std::string& layer) {
+    if (!layer.empty()) try {
+        auto l = p.layer_id_to_name.find(std::stoll(layer));
+        if (l != p.layer_id_to_name.end()) layer = l->second;
+      } catch (...) {
+        emit_log(o, LogLevel::debug, "Failed to resolve layer id '" + layer + "' to a name");
+      };
+  };
+  auto resolve_layers = [&](RawDefinition& d) {
+    for (auto& i : d.builder.instances) resolve_layer(i.layer);
+    for (auto& f : d.builder.faces) resolve_layer(f.second.layer);
+    for (auto& section : d.builder.section_planes) resolve_layer(section.layer);
+    for (auto& cl : d.builder.construction_lines) resolve_layer(cl.layer);
+    for (auto& cp : d.builder.construction_points) resolve_layer(cp.layer);
+    for (auto& dim : d.builder.dimensions) resolve_layer(dim.layer);
+    for (auto& text : d.builder.texts) resolve_layer(text.layer);
+  };
+  for (auto& d : p.definitions) {
+    resolve_layers(d.second);
+    m.definitions.emplace(d.first, definition(d.first, std::move(d.second)));
+  }
+  resolve_layers(p.root);
+  m.root_ = definition(0, std::move(p.root));
+  for (auto& name : p.layer_order) {
+    auto color_it = p.layer_colors.find(name);
+    if (color_it == p.layer_colors.end()) continue;
+    auto hidden_it = p.layer_hidden.find(name);
+    bool hidden = hidden_it != p.layer_hidden.end() && hidden_it->second;
+    Layer layer{name, color_it->second, hidden};
+    layer.persistent_id = p.layer_persistent_ids[name];
+    const auto& aliases = p.layer_persistent_id_aliases[name];
+    layer.persistent_id_aliases.assign(aliases.begin(), aliases.end());
+    layer.parsed_dictionaries = std::move(p.layer_parsed_dictionaries[name]);
+    layer.line_style = p.layer_line_styles[name];
+    auto dicts_it = p.layer_attribute_dictionaries.find(name);
+    if (dicts_it != p.layer_attribute_dictionaries.end())
+      layer.attribute_dictionaries = dicts_it->second;
+    m.layers.push_back(std::move(layer));
+  }
+  // Convert pages (saved scenes) - hidden layer ids resolve to names;
+  // unknown ids (stale refs) are dropped.
+  for (auto& pg : p.pages) {
+    Page page;
+    page.name = pg.name;
+    page.eye = pg.eye;
+    page.target = pg.target;
+    page.up = pg.up;
+    page.fov = pg.fov;
+    page.parallel = pg.parallel;
+    page.ortho_height = pg.ortho_height;
+    page.selected = pg.selected;
+    for (auto id : pg.hidden_layer_ids) {
+      auto it = p.layer_id_to_name.find(id);
+      if (it != p.layer_id_to_name.end()) page.hidden_layers.push_back(it->second);
+    }
+    m.pages.push_back(std::move(page));
+  }
+  m.camera = p.camera;
+  // Convert model-level linear dimensions (VFF; world space).
+  for (auto& dm : p.dimensions) {
+    Dimension dim;
+    dim.persistent_id = dm.native_pid;
+    dim.a = dm.a;
+    dim.b = dm.b;
+    dim.offset = dm.offset;
+    dim.plane_x = dm.plane_x;
+    dim.normal = dm.normal;
+    dim.offset_vector = dm.offset_vector;
+    dim.text = dm.text;
+    dim.layer = dm.layer;
+    resolve_layer(dim.layer);
+    dim.hidden = dm.hidden;
+    m.dimensions.push_back(std::move(dim));
+  }
+  std::map<const RawMaterial*, std::size_t> raw_index;
+  for (auto& v : p.materials) {
+    auto& r = *v.second;
+    Material x;
+    x.persistent_id = r.native_pid;
+    x.name = r.name;
+    x.color = {std::uint8_t(r.r), std::uint8_t(r.g), std::uint8_t(r.b), std::uint8_t(r.a)};
+    x.transparency = r.transparency;
+    x.colorized = r.colorized;
+    x.colorize_type = r.colorize_type;
+    if (r.texture)
+      x.texture = Texture{r.texture->filename, r.texture->x_scale, r.texture->y_scale,
+                          std::move(r.texture->data)};
+    raw_index[&r] = m.materials.size();
+    m.materials.push_back(std::move(x));
+  }
+  for (auto& v : p.material_id_to_name) {
+    std::shared_ptr<RawMaterial> r;
+    auto a = p.materials.find(v.second);
+    if (a != p.materials.end())
+      r = a->second;
+    else {
+      auto b = p.materials_by_folder.find(v.second);
+      if (b != p.materials_by_folder.end()) r = b->second;
+    }
+    if (r && raw_index.count(r.get())) {
+      auto i = raw_index[r.get()];
+      if (!m.materials[i].id) m.materials[i].id = v.first;
+      m.material_indices_[v.first] = i;
+    }
+  }
+  for (auto& s : p.styles)
+    m.styles.push_back({std::move(s.name), std::move(s.description), s.front_color, s.back_color,
+                        std::move(s.items), std::move(s.watermarks), std::move(s.folder), s.active,
+                        s.working_copy, s.modified});
+  return m;
+}
+}  // namespace openskp

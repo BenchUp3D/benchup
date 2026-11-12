@@ -6,6 +6,7 @@ fn piece(mark: usize, length: u64, width: u64, quantity: usize) -> Piece {
         length,
         width,
         quantity,
+        grain_along_length: false,
     }
 }
 fn settings(length: f64, width: f64, kerf: f64) -> Settings {
@@ -15,6 +16,7 @@ fn settings(length: f64, width: f64, kerf: f64) -> Settings {
         board_length_mm: length,
         kerf_mm: kerf,
         allow_rotation: false,
+        ..Settings::default()
     }
 }
 

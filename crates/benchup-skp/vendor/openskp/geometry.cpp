@@ -1,0 +1,580 @@
+#include <algorithm>
+#include <cmath>
+#include <functional>
+#include <sstream>
+
+#include "internal.hpp"
+
+namespace openskp {
+static const TlvNode* find_node(const std::vector<TlvNode>& ns, const std::string& t) {
+  for (auto& n : ns) {
+    if (n.tag == t) return &n;
+    if (auto* r = find_node(n.children, t)) return r;
+  }
+  return nullptr;
+}
+
+static void find_all(const std::vector<TlvNode>& ns, const std::string& t,
+                     std::vector<const TlvNode*>& out) {
+  for (auto& n : ns) {
+    if (n.tag == t) out.push_back(&n);
+    find_all(n.children, t, out);
+  }
+}
+
+static std::optional<EntityId> entity_id(const TlvNode& n) {
+  for (auto& c : n.children) {
+    if (c.tag == "DE05" && !c.payload.empty())
+      return static_cast<EntityId>(parse_varint(c.payload, 0, c.payload.size()));
+    if (c.tag == "DC05" && c.payload.size() >= 6 && c.payload[0] == 0xde && c.payload[1] == 5) {
+      auto z = read_u32(c.payload, 2);
+      if (z <= c.payload.size() - 6) return static_cast<EntityId>(parse_varint(c.payload, 6, z));
+    }
+  }
+  for (auto& c : n.children)
+    if (auto v = entity_id(c)) return v;
+  return {};
+}
+
+// Guides (6942 / 6C42) wrap the usual drawing-element base in 6842: its
+// D007 container holds D307 (display flags, base 0x06, +0x01 hidden) and
+// D207 (layer entity id), the same leaves edges/faces/instances carry.
+template <typename Guide>
+static void read_guide_drawbase(const TlvNode& e, Guide& g) {
+  if (auto* flags = find_node(e.children, "D307"); flags && !flags->payload.empty())
+    g.hidden = (flags->payload[0] & 0x01) != 0;
+  if (auto* layer = find_node(e.children, "D207"); layer && !layer->payload.empty())
+    g.layer = std::to_string(parse_varint(layer->payload, 0, layer->payload.size()));
+}
+
+static EntityId dc_id(const ByteBuffer& p) {
+  if (p.size() >= 6 && p[0] == 0xde && p[1] == 5) {
+    auto z = read_u32(p, 2);
+    if (z <= p.size() - 6) return parse_varint(p, 6, z);
+  }
+  return parse_varint(p, 0, p.size());
+}
+
+static std::string text(const ByteBuffer& p) {
+  return {reinterpret_cast<const char*>(p.data()), p.size()};
+}
+
+static std::string hex(const ByteBuffer& p) {
+  static char h[] = "0123456789ABCDEF";
+  std::string s;
+  s.reserve(p.size() * 2);
+  for (auto b : p) {
+    s += h[b >> 4];
+    s += h[b & 15];
+  }
+  return s;
+}
+
+static const ByteBuffer* flat_find(const std::vector<std::pair<std::string, ByteBuffer>>& s,
+                                   const std::string& t) {
+  for (auto& v : s)
+    if (v.first == t) return &v.second;
+  return nullptr;
+}
+
+static std::pair<std::optional<std::array<double, 9>>, std::optional<std::array<double, 9>>> uv(
+    const ByteBuffer& p) {
+  auto a = parse_flat(p);
+  auto q = flat_find(a, "DD05");
+  if (!q) return {};
+  auto b = parse_flat(*q);
+  q = flat_find(b, "B136");
+  if (!q) return {};
+  auto c = parse_flat(*q);
+  q = flat_find(c, "B236");
+  if (!q) return {};
+  auto d = parse_flat(*q);
+  q = flat_find(d, "1027");
+  if (!q) return {};
+  auto sides = parse_flat(*q);
+  auto side = [&](const char* t) -> std::optional<std::array<double, 9>> {
+    auto x = flat_find(sides, t);
+    if (!x) return {};
+    auto s1 = parse_flat(*x);
+    x = flat_find(s1, "1327");
+    if (!x) return {};
+    auto s2 = parse_flat(*x);
+    x = flat_find(s2, "1527");
+    if (!x || x->size() != 72) return {};
+    std::array<double, 9> m{};
+    for (int i = 0; i < 9; ++i) m[i] = read_f64(*x, i * 8);
+    return m;
+  };
+  return {side("1127"), side("1227")};
+}
+
+// Decode a flat span of the DC05 payload into (tag, offset, size) triples -
+// same shape as Python's _core.parse_flat, used below to walk siblings at
+// one level without recursing into their children automatically (needed to
+// find a dictionary's own entries container, which is a SIBLING of its
+// B436 name node, not a child of it - see extract_attribute_dictionaries's
+// own docstring in _core.py for the exact same structure).
+static std::vector<std::pair<std::string, std::pair<size_t, size_t>>> parse_flat_spans(
+    const ByteBuffer& p, size_t a, size_t z) {
+  std::vector<std::pair<std::string, std::pair<size_t, size_t>>> out;
+  while (a + 6 <= z) {
+    auto n = read_u32(p, a + 2);
+    if (n > z - a - 6) break;
+    std::string t;
+    static char h[] = "0123456789ABCDEF";
+    t += h[p[a] >> 4];
+    t += h[p[a] & 15];
+    t += h[p[a + 1] >> 4];
+    t += h[p[a + 1] & 15];
+    out.emplace_back(t, std::make_pair(a + 6, a + 6 + n));
+    a += 6 + n;
+  }
+  return out;
+}
+
+// Tags parse_tlv_recursive treats as worth descending into when building
+// the real tree (mirrors Python's _PROP_CONTAINER_TAGS exactly) - anything
+// else's payload is raw data (a string, a number), never more nested TLV
+// structure, so recursing into it would misinterpret arbitrary bytes as
+// tags/lengths.
+static bool is_prop_container_tag(const std::string& t) {
+  return t == "DD05" || t == "B536" || t == "B136" || t == "B236" || t == "B336" || t == "B036" ||
+         t == "A438" || t == "AE38";
+}
+
+// A438 wraps exactly one attribute value: its payload holds a single
+// nested span whose OWN tag says the real type (AD38 string, A938 Float /
+// AF38 Length double, A738 int32, B438/B538 a 3xf64 point/vector, AE38 a
+// nested array) - matching Python's _decode_vff_attr_value (openskp#285).
+// AA38 is a native boolean: one byte, 0/1. It was not in that table, but a
+// SketchUp 2024 file with `face.set_attribute("d", "k", true)` stores exactly
+// that (`A438 { AA38 01 }`); it used to decode as Null. Length keeps its own
+// kind so it can be written back as a Length. No time_t tag has been seen.
+//
+// Python's SkpModel.Instance.attribute_dictionaries keeps these native
+// types (`int`/`float`/`None`/3-tuple/list). C++ used to decode AND
+// stringify in one pass because scene/JSON/IFC take strings - that
+// discarded the type SketchUp stored (A738 integer became "-7"). The
+// typed value lives on Instance::attribute_dictionaries;
+// stringify_attr_dictionaries() is for scene/JSON/IFC strings. An A438
+// with no children (Python: None) or an unrecognized value tag is Null
+// - a real, present key, not a missing key.
+static ParsedAttribute decode_a438_value(const ByteBuffer& p, size_t a, size_t z, int depth = 0) {
+  // Arrays nest A438 inside AE38 inside A438 ...; a hostile payload can nest
+  // them tens of thousands deep, so stop at the same limit as the TLV tree.
+  if (depth > kMaxTlvDepth) throw_tlv_too_deep("A438", a);
+  auto spans = parse_flat_spans(p, a, z);
+  if (spans.empty()) return ParsedAttribute::null();
+  auto& [tag, span] = spans[0];
+  auto [sa, sz] = span;
+  if (tag == "AD38") {
+    return ParsedAttribute::from_string(
+        std::string(reinterpret_cast<const char*>(p.data() + sa), sz - sa));
+  }
+  if (tag == "AA38" && sz - sa == 1) {
+    return ParsedAttribute::from_boolean(p[sa] != 0);
+  }
+  if (tag == "AF38" && sz - sa == 8) {
+    return ParsedAttribute::from_length(read_f64(p, sa));
+  }
+  if (tag == "A938" && sz - sa == 8) {
+    return ParsedAttribute::from_float(read_f64(p, sa));
+  }
+  if (tag == "A738" && sz - sa == 4) {
+    return ParsedAttribute::from_integer(read_i32(p, sa));
+  }
+  if ((tag == "B438" || tag == "B538") && sz - sa == 24) {
+    return ParsedAttribute::from_vec({read_f64(p, sa), read_f64(p, sa + 8), read_f64(p, sa + 16)});
+  }
+  if (tag == "AE38") {
+    std::vector<ParsedAttribute> items;
+    for (auto& [ctag, cspan] : parse_flat_spans(p, sa, sz)) {
+      if (ctag != "A438") continue;
+      auto [ca, cz] = cspan;
+      items.push_back(decode_a438_value(p, ca, cz, depth + 1));
+    }
+    return ParsedAttribute::from_array(std::move(items));
+  }
+  return ParsedAttribute::null();
+}
+
+// Extract every attribute dictionary attached to a DC05 payload, keyed by
+// the dictionary's own declared name (tag B436) rather than merged into
+// one flat map (matches _core.extract_attribute_dictionaries exactly).
+// Each dictionary is a B436 (name) node immediately followed by a sibling
+// entries container (typically B536) holding that dictionary's own B636
+// (key name) / A438 (value wrapper) pairs - and, same as Python, B436 can
+// occur at any depth reachable purely through container tags, not only at
+// the payload's own top level, so both the dictionary search and the
+// entries walk recurse into every container-tagged node, not just scan
+// one level.
+static void extract_attribute_dictionaries(const ByteBuffer& p, ParsedAttrDictionaries& out) {
+  std::function<void(size_t, size_t, ParsedAttrDict&, int)> extract_entries;
+  extract_entries = [&](size_t a, size_t z, ParsedAttrDict& entries, int depth) {
+    if (depth > kMaxTlvDepth) throw_tlv_too_deep("B536", a);
+    std::string key;
+    for (auto& [tag, span] : parse_flat_spans(p, a, z)) {
+      auto [sa, sz] = span;
+      if (tag == "B636") {
+        key = std::string(reinterpret_cast<const char*>(p.data() + sa), sz - sa);
+      } else if (tag == "A438" && !key.empty()) {
+        entries[key] = decode_a438_value(p, sa, sz);
+        key.clear();
+      } else if (is_prop_container_tag(tag)) {
+        extract_entries(sa, sz, entries, depth + 1);
+      }
+    }
+  };
+
+  std::function<void(size_t, size_t, int)> walk_dicts;
+  walk_dicts = [&](size_t a, size_t z, int depth) {
+    if (depth > kMaxTlvDepth) throw_tlv_too_deep("DD05", a);
+    auto here = parse_flat_spans(p, a, z);
+    for (std::size_t i = 0; i < here.size(); ++i) {
+      auto& [tag, span] = here[i];
+      auto [sa, sz] = span;
+      if (tag == "B436") {
+        std::string name(reinterpret_cast<const char*>(p.data() + sa), sz - sa);
+        ParsedAttrDict entries;
+        if (i + 1 < here.size()) {
+          auto [ea, ez] = here[i + 1].second;
+          extract_entries(ea, ez, entries, depth + 1);
+        }
+        out[name] = std::move(entries);
+      } else if (is_prop_container_tag(tag)) {
+        walk_dicts(sa, sz, depth + 1);
+      }
+    }
+  };
+
+  walk_dicts(0, p.size(), 0);
+}
+
+void collect_geometry(const std::vector<TlvNode>& es, GeometryBuilder& b) {
+  for (auto& e : es) {
+    if (e.tag == "C409") {
+      auto id = entity_id(e);
+      if (id) b.persistent_ids[*id] = *id;
+      auto* p = find_node(e.children, "C509");
+      if (id && p && p->payload.size() >= 24)
+        b.vertices[*id] = {read_f64(p->payload, 0), read_f64(p->payload, 8),
+                           read_f64(p->payload, 16)};
+    } else if (e.tag == "B80B") {
+      auto id = entity_id(e);
+      if (id) b.persistent_ids[*id] = *id;
+      if (id) {
+        auto *x = find_node(e.children, "B90B"), *y = find_node(e.children, "BA0B");
+        std::optional<EntityId> a, c;
+        if (x && !x->payload.empty()) a = parse_varint(x->payload, 0, x->payload.size());
+        if (y && !y->payload.empty()) c = parse_varint(y->payload, 0, y->payload.size());
+        b.edges[*id] = {a, c};
+        if (auto* drawing = find_node(e.children, "D007"))
+          if (auto* attrs = find_node(drawing->children, "DC05"))
+            extract_attribute_dictionaries(attrs->payload, b.edge_dictionaries[*id]);
+        for (auto& z : e.children)
+          if (z.tag == "D007")
+            for (auto& w : z.children)
+              if (w.tag == "D307" && !w.payload.empty()) b.edge_flags[*id] = w.payload[0];
+        // BB0B = the parent Curve's entity id (Edge#curve).
+        auto* bb = find_node(e.children, "BB0B");
+        if (bb && !bb->payload.empty()) {
+          auto curve_id = parse_varint(bb->payload, 0, bb->payload.size());
+          if (curve_id) b.edge_curves[*id] = curve_id;
+        }
+      }
+    } else if (e.tag == "2C4C") {
+      // A Curve (384A: its entity id and edge count) and, when the curve is an arc, 2D4C: 16
+      // doubles - center, normal, the plane constant, x axis, y axis, radius, start angle, end
+      // angle. Checked against SketchUp 2025's own SUArcCurve getters.
+      auto* curve = find_node(e.children, "384A");
+      auto* arc = find_node(e.children, "2D4C");
+      if (curve && arc && arc->payload.size() == 128) {
+        auto id = entity_id(*curve);
+        if (id) {
+          auto f = [&](int i) { return read_f64(arc->payload, i * 8); };
+          RawArcFrame a;
+          a.center = {f(0), f(1), f(2)};
+          a.normal = {f(3), f(4), f(5)};
+          a.x_axis = {f(7), f(8), f(9)};
+          a.y_axis = {f(10), f(11), f(12)};
+          a.start_angle = f(14);
+          a.end_angle = f(15);
+          b.arc_curves[*id] = a;
+          b.persistent_ids[*id] = *id;
+        }
+      }
+    } else if (e.tag == "AC0D") {
+      auto id = entity_id(e);
+      if (id) b.persistent_ids[*id] = *id;
+      if (id) {
+        RawFace f;
+        auto* n = find_node(e.children, "AD0D");
+        if (n && n->payload.size() >= 24)
+          f.normal = {read_f64(n->payload, 0), read_f64(n->payload, 8), read_f64(n->payload, 16)};
+        auto* l = find_node(e.children, "AE0D");
+        if (l) {
+          std::vector<const TlvNode*> loops;
+          find_all(l->children, "9411", loops);
+          for (auto* ln : loops) {
+            std::vector<CoEdge> co;
+            std::vector<const TlvNode*> cs;
+            find_all(ln->children, "A00F", cs);
+            for (auto* cn : cs) {
+              std::optional<EntityId> eid;
+              std::optional<std::int64_t> ori;
+              for (auto& v : parse_flat(cn->payload)) {
+                if (v.first == "A10F")
+                  eid = parse_varint(v.second, 0, v.second.size());
+                else if (v.first == "A20F") {
+                  const auto raw_orientation = parse_varint(v.second, 0, v.second.size());
+                  ori = raw_orientation == 0 ? 1 : -1;
+                }
+              }
+              if (eid && ori) co.push_back({*eid, *ori});
+            }
+            if (!co.empty()) f.loops.push_back(std::move(co));
+          }
+        }
+        for (auto& d : e.children)
+          if (d.tag == "D007")
+            for (auto& x : d.children) {
+              if (x.tag == "D107" && !x.payload.empty())
+                f.material_id = parse_varint(x.payload, 0, x.payload.size());
+              else if (x.tag == "DC05") {
+                std::tie(f.uv_transform, f.uv_transform_back) = uv(x.payload);
+                extract_attribute_dictionaries(x.payload, f.attribute_dictionaries);
+              }
+              // D307 = display flags, same record edges already read (base
+              // 0x06, +0x01 hidden) - faces carry the identical tag under
+              // their own D007 container.
+              else if (x.tag == "D307" && !x.payload.empty()) {
+                f.hidden = (x.payload[0] & kDrawHidden) != 0;
+                f.locked = (x.payload[0] & kDrawLocked) != 0;
+                f.casts_shadows = (x.payload[0] & kDrawCastsShadows) != 0;
+                f.receives_shadows = (x.payload[0] & kDrawReceivesShadows) != 0;
+              } else if (x.tag == "D207" && !x.payload.empty())
+                f.layer = std::to_string(parse_varint(x.payload, 0, x.payload.size()));
+            }
+        for (auto& x : e.children)
+          if (x.tag == "AF0D" && !x.payload.empty())
+            f.back_material_id = parse_varint(x.payload, 0, x.payload.size());
+        b.faces[*id] = std::move(f);
+      }
+    } else if (e.tag == "6419") {
+      RawInstance i;
+      i.offset = e.offset;
+      i.id = entity_id(e);
+      auto* d007 = find_node(e.children, "D007");
+      auto* dc05 = d007 ? find_node(d007->children, "DC05") : nullptr;
+      if (dc05 && !dc05->payload.empty()) {
+        ByteBuffer idb = dc05->payload;
+        if (idb.size() >= 6 && idb[0] == 0xde && idb[1] == 5) {
+          const auto z = read_u32(idb, 2);
+          if (z <= idb.size() - 6) idb = ByteBuffer(idb.begin() + 6, idb.begin() + 6 + z);
+        }
+        i.persistent_id = bytes_to_upper_hex(idb);
+      }
+      auto* g = find_node(e.children, "6819");
+      if (g && g->payload.size() == 16) i.ref_guid = guid_from_windows_bytes(g->payload);
+      auto* r = find_node(e.children, "6719");
+      if (r && !r->payload.empty()) i.ref_idx = parse_varint(r->payload, 0, r->payload.size());
+      auto* n = find_node(e.children, "6519");
+      if (n) i.name = text(n->payload);
+      auto* m = find_node(e.children, "6619");
+      if (m && m->payload.size() >= 104)
+        for (int q = 0; q < 13; ++q) i.matrix.push_back(read_f64(m->payload, q * 8));
+      for (auto& d : e.children)
+        if (d.tag == "D007")
+          for (auto& x : d.children) {
+            if (x.tag == "D107" && !x.payload.empty())
+              i.material_id = parse_varint(x.payload, 0, x.payload.size());
+            else if (x.tag == "D207" && !x.payload.empty())
+              i.layer = std::to_string(parse_varint(x.payload, 0, x.payload.size()));
+            else if (x.tag == "DC05") {
+              ParsedAttrDictionaries all_dicts;
+              extract_attribute_dictionaries(x.payload, all_dicts);
+              for (auto& [dict_name, entries] : all_dicts) {
+                if (dict_name == "dynamic_attributes") {
+                  i.properties = stringify_attr_dict(entries);
+                }
+                i.attribute_dicts[dict_name] = std::move(entries);
+              }
+            }
+            // D307 = display flags, same record edges/faces already read
+            // (base 0x06, +0x01 hidden).
+            else if (x.tag == "D307" && !x.payload.empty()) {
+              i.hidden = (x.payload[0] & kDrawHidden) != 0;
+              i.locked = (x.payload[0] & kDrawLocked) != 0;
+              i.casts_shadows = (x.payload[0] & kDrawCastsShadows) != 0;
+              i.receives_shadows = (x.payload[0] & kDrawReceivesShadows) != 0;
+            }
+          }
+      b.instances.push_back(std::move(i));
+    } else if (e.tag == "6942") {
+      // VFF CConstructionLine (list `9113`). Same 8-double body as legacy:
+      // point + unit direction + start/end params; |param| ≥ 1e20 is unbounded.
+      auto* p = find_node(e.children, "6A42");
+      if (p && p->payload.size() >= 64) {
+        ConstructionLine cl;
+        cl.persistent_id = entity_id(e).value_or(0);
+        cl.point = {read_f64(p->payload, 0), read_f64(p->payload, 8), read_f64(p->payload, 16)};
+        cl.direction = {read_f64(p->payload, 24), read_f64(p->payload, 32),
+                        read_f64(p->payload, 40)};
+        constexpr double kHugeParam = 1e20;
+        const double start_param = read_f64(p->payload, 48);
+        const double end_param = read_f64(p->payload, 56);
+        if (std::abs(start_param) < kHugeParam) {
+          cl.start = Vec3{cl.point[0] + cl.direction[0] * start_param,
+                          cl.point[1] + cl.direction[1] * start_param,
+                          cl.point[2] + cl.direction[2] * start_param};
+        }
+        if (std::abs(end_param) < kHugeParam) {
+          cl.end = Vec3{cl.point[0] + cl.direction[0] * end_param,
+                        cl.point[1] + cl.direction[1] * end_param,
+                        cl.point[2] + cl.direction[2] * end_param};
+        }
+        read_guide_drawbase(e, cl);
+        b.construction_lines.push_back(std::move(cl));
+      }
+    } else if (e.tag == "6C42") {
+      // VFF CConstructionPoint (list `9213`): 6D42 position, 6E42 a second
+      // 3×f64 block (often zeros, not decoded), 6F42 u8.
+      auto* p = find_node(e.children, "6D42");
+      if (p && p->payload.size() >= 24) {
+        ConstructionPoint cp;
+        cp.persistent_id = entity_id(e).value_or(0);
+        cp.position = {read_f64(p->payload, 0), read_f64(p->payload, 8), read_f64(p->payload, 16)};
+        read_guide_drawbase(e, cp);
+        b.construction_points.push_back(std::move(cp));
+      }
+    } else if (!e.children.empty())
+      collect_geometry(e.children, b);
+  }
+}
+
+void collect_layers(const std::vector<TlvNode>& ns, std::map<EntityId, std::string>& out,
+                    std::map<std::string, bool>& hidden) {
+  std::map<std::string, EntityId> unused;
+  collect_layers(ns, out, hidden, unused);
+}
+
+void collect_layers(const std::vector<TlvNode>& ns, std::map<EntityId, std::string>& out,
+                    std::map<std::string, bool>& hidden,
+                    std::map<std::string, EntityId>& style_ids) {
+  for (auto& e : ns) {
+    if (e.tag == "993A") {
+      for (auto& c : e.children)
+        if (c.tag == "8C3C") {
+          const TlvNode *d = nullptr, *n = nullptr, *h = nullptr, *s = nullptr;
+          for (auto& x : c.children) {
+            if (x.tag == "DC05")
+              d = &x;
+            else if (x.tag == "8D3C")
+              n = &x;
+            else if (x.tag == "8E3C")
+              h = &x;
+            else if (x.tag == "903C")
+              s = &x;
+          }
+          if (d && n && !d->payload.empty()) {
+            const std::string name = text(n->payload);
+            out[dc_id(d->payload)] = name;
+            if (h && !h->payload.empty()) hidden[name] = h->payload[0] == 1;
+            if (s && s->payload.size() >= 4) {
+              const auto sid = read_u32(s->payload, 0);
+              if (sid) style_ids[name] = static_cast<EntityId>(sid);
+            }
+          }
+        }
+      continue;
+    }
+    collect_layers(e.children, out, hidden, style_ids);
+  }
+}
+
+static void collect_line_styles_buf(const ByteBuffer& p, std::map<EntityId, std::string>& out) {
+  for (auto& rec : parse_flat(p)) {
+    if (rec.first == "7640") {
+      EntityId id = 0;
+      std::string name;
+      for (auto& c : parse_flat(rec.second)) {
+        if (c.first == "DC05")
+          id = dc_id(c.second);
+        else if (c.first == "7740")
+          name = text(c.second);
+      }
+      if (id && !name.empty()) out[id] = std::move(name);
+    } else if (!rec.second.empty())
+      collect_line_styles_buf(rec.second, out);
+  }
+}
+
+void collect_line_styles(const std::vector<TlvNode>& ns, std::map<EntityId, std::string>& out) {
+  for (auto& e : ns) {
+    if (e.tag == "0802" && !e.payload.empty())
+      collect_line_styles_buf(e.payload, out);
+    else
+      collect_line_styles(e.children, out);
+  }
+}
+
+// The model record (F601) carries the model entity's own attributes the same
+// way an instance does: an 8813 entity base holding a D007 container whose
+// DC05 payload lists the named dictionaries.
+void collect_model_attribute_dictionaries(const TlvNode& model, ParsedAttrDictionaries& out) {
+  auto* entity = find_node(model.children, "8813");
+  if (!entity) return;
+  for (auto& d : entity->children)
+    if (d.tag == "D007")
+      for (auto& x : d.children)
+        if (x.tag == "DC05") extract_attribute_dictionaries(x.payload, out);
+}
+
+void collect_material_ids(const std::vector<TlvNode>& ns, std::map<EntityId, std::string>& out) {
+  for (auto& e : ns) {
+    if (e.tag == "C832") {
+      auto *d = find_node(e.children, "DC05"), *n = find_node(e.children, "CC32");
+      if (d && n && !d->payload.empty()) out[dc_id(d->payload)] = text(n->payload);
+    }
+    collect_material_ids(e.children, out);
+  }
+}
+
+void collect_definitions(const std::vector<TlvNode>& ns, std::map<EntityId, RawDefinition>& out) {
+  for (auto& e : ns) {
+    if (e.tag == "7C15") {
+      RawDefinition d;
+      d.native_pid = entity_id(e).value_or(0);
+      for (auto& c : e.children) {
+        if (c.tag == "7D15" && c.payload.size() == 16)
+          d.guid = guid_from_windows_bytes(c.payload);
+        else if (c.tag == "7E15")
+          d.name = text(c.payload);
+        else if (c.tag == "7F15")
+          d.description = text(c.payload);
+        else if (c.tag == "8015")
+          d.path = text(c.payload);
+        else if (c.tag == "8315" && !c.payload.empty()) {
+          // Definition kind: 0 for a component, 1 for a group (what SketchUp's own
+          // API reports too), 2 for the quad definition backing an Image entity.
+          d.type_known = true;
+          auto kind = parse_varint(c.payload, 0, c.payload.size());
+          d.is_image = kind == 2;
+          d.is_group = kind == 1;
+        } else if (c.tag == "581B")
+          for (auto& v : parse_flat(c.payload)) {
+            if (v.first == "5D1B" && !v.second.empty())
+              d.always_faces_camera = parse_varint(v.second, 0, v.second.size()) == 1;
+            else if (v.first == "5E1B" && !v.second.empty())
+              d.shadows_face_sun = parse_varint(v.second, 0, v.second.size()) == 1;
+          }
+      }
+      collect_geometry(e.children, d.builder);
+      // Only the definition's own entity base, never dictionaries on child instances/faces.
+      collect_model_attribute_dictionaries(e, d.parsed_dictionaries);
+      if (auto id = entity_id(e)) out[*id] = std::move(d);
+    }
+    collect_definitions(e.children, out);
+  }
+}
+}  // namespace openskp

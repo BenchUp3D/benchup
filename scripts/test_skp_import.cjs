@@ -3,7 +3,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const base = path.resolve(__dirname, '../crates/benchup-app');
+const base = path.resolve(__dirname, '../crates/benchup-io');
 const rust = fs.readFileSync(path.join(base, 'src/interchange.rs'), 'utf8');
 const concat = rust.split('const SKP_READER: &str = concat!(')[1].split('\n);')[0];
 // Read the very same concat/include_str inputs that Rust embeds.
@@ -59,6 +59,24 @@ if (process.argv.includes('--generate-fixture')) {
     assert(offset >= 0 && preciseBytes.indexOf(vertexBytes, offset+1) < 0);
     preciseBytes.writeDoubleLE(0.0004, offset+16);
     fs.writeFileSync(path.join(base,'tests/fixtures/precision-faces.skp'), preciseBytes);
+
+    // Two filled triangles touch at a shared vertex, represented by one
+    // SketchUp face loop. Include a duplicate surface as well: House Double.skp
+    // contains both patterns.
+    const pinched = sdk.create();
+    const pinchColor = pinched.addMaterial('Pinch color', [210,45,30]);
+    const pinchedPanel = pinched.addComponentDefinition('Pinched panel', def => {
+        // Register the shared vertex before the writer walks the face loop.
+        def.addPolyline([[1,1,0], [0,0,0]]);
+        def.addFace([[0,0,0],[2,0,0],[1,1,0],[2,2,0],[0,2,0],[1,1,0]], {
+            material: pinchColor,
+        });
+        def.addFace([[0,0,0],[2,0,0],[1,1,0],[2,2,0],[0,2,0],[1,1,0]], {
+            material: pinchColor,
+        });
+    });
+    pinched.addInstance(pinchedPanel, {name: 'Placed pinched panel', translation: [10,20,30]});
+    fs.writeFileSync(path.join(base,'tests/fixtures/pinched-face.skp'), pinched.toBytes());
 }
 
 test('actual SKP bytes preserve holes, nested placement, mirrored placement, colors, and units', () => {
@@ -92,6 +110,36 @@ test('invalid and truncated files fail', () => {
     assert.throws(()=>read(new Uint8Array(fs.readFileSync(fixture).subarray(0,100))));
 });
 
+test('legacy tag line style objects preserve the geometry that follows them', () => {
+    for (const version of [2019, 2020]) {
+        const bytes = fs.readFileSync(path.join(base, `tests/fixtures/tag-line-styles-${version}.skp`));
+        const model = read(new Uint8Array(bytes));
+        assert.equal(Object.keys(model.faces).length, 6);
+        assert.equal(Object.keys(model.edges).length, 18);
+    }
+});
+
+test('a legacy text record with a zero flag keeps the faces after it', () => {
+    const builder = sdk.create();
+    const label = 'Audit label';
+    builder.addText(label, [0, 0, 0]);
+    builder.addFace([[0, 0, 0], [10, 0, 0], [0, 10, 0]]);
+    const bytes = Buffer.from(builder.toBytes());
+    const record = Buffer.concat([Buffer.from([255, 254, 255, label.length]), Buffer.from(label, 'utf16le')]);
+    const start = bytes.indexOf(record);
+    assert(start > 0);
+    assert.equal(bytes[start - 1], 1);
+    bytes[start - 1] = 0;
+    assert.equal(Object.keys(read(new Uint8Array(bytes)).faces).length, 1);
+});
+
+test('a legacy guide at the end of a definition preserves its following name and geometry', () => {
+    const bytes = fs.readFileSync(path.join(base, 'tests/fixtures/legacy-guide-options.skp'));
+    const model = read(new Uint8Array(bytes));
+    assert.equal(Object.keys(model.faces).length, 2);
+    assert(Object.values(model.objects).some(object => object.name === 'GuideDef'));
+});
+
 test('precision fixture passes tiny faces and warped holed boundaries to shared Rust normalization', () => {
     const m = read(new Uint8Array(fs.readFileSync(path.join(base,'tests/fixtures/precision-faces.skp'))));
     assert.equal(Object.keys(m.vertices).length, 11);
@@ -100,6 +148,21 @@ test('precision fixture passes tiny faces and warped holed boundaries to shared 
     assert(Object.values(m.vertices).some(v => Math.abs(v.position[2] - 0.00001016) < 1e-12));
     assert.equal(Object.values(m.faces).filter(f => f.holes.length === 1).length, 1);
     assert(Object.values(m.face_colors).every(c => JSON.stringify(c) === '[210,45,30]'));
+});
+
+test('duplicate pinched SKP faces reach shared normalization with shared vertices and placement intact', () => {
+    const m = read(new Uint8Array(fs.readFileSync(path.join(base,'tests/fixtures/pinched-face.skp'))));
+    assert.equal(Object.keys(m.vertices).length, 5);
+    assert.equal(Object.keys(m.edges).length, 6);
+    assert.equal(Object.keys(m.faces).length, 2);
+    assert.equal(Object.keys(m.objects).length, 2);
+    const face = Object.values(m.faces)[0];
+    assert.equal(face.vertices.length, 6);
+    assert.equal(new Set(face.vertices).size, 5);
+    assert.equal(face.vertices[2], face.vertices[5]);
+    assert.deepEqual(m.face_colors[face.id], [210,45,30]);
+    const p = m.vertices[face.vertices[2]].position;
+    assert(p.every((v,i) => Math.abs(v - [11,21,30][i]*0.0254) < 1e-12));
 });
 
 test('recursive definitions and missing references fail', () => {

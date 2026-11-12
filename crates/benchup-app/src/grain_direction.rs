@@ -238,12 +238,7 @@ impl BenchUpApp {
     }
 
     pub(super) fn grain_uses_evaluated_geometry(&self) -> bool {
-        self.doc.model.connections.values().any(|connection| {
-            matches!(
-                connection.operation,
-                benchup_core::connections::ConnectionOperation::Joinery(_)
-            )
-        })
+        self.doc.model.has_machining()
     }
 
     fn edit_grain(
@@ -458,6 +453,8 @@ mod tests {
                         face,
                         cached: cache.get(face.id),
                         color: Color32::WHITE,
+                        surface: None,
+                        smooth: None,
                         shadow: None,
                     })
                     .collect();
@@ -523,6 +520,8 @@ mod tests {
                 face: &model.faces[&id],
                 cached: face,
                 color: Color32::WHITE,
+                surface: None,
+                smooth: None,
                 shadow: None,
             }]);
             mesh.set_entity(None);
@@ -607,6 +606,8 @@ mod tests {
                 face,
                 cached: cache.get(face.id),
                 color: Color32::WHITE,
+                surface: None,
+                smooth: None,
                 shadow: None,
             })
             .collect();

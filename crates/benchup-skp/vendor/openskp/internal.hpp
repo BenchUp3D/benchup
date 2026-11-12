@@ -1,0 +1,498 @@
+#pragma once
+
+#include <chrono>
+#include <cstring>
+#include <functional>
+#include <limits>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <string>
+#include <tuple>
+#include <unordered_map>
+#include <vector>
+
+#include <openskp/openskp.hpp>
+
+namespace openskp {
+// Packed D307 / `edge_flags` (VFF). Default 0x06 = casts + receives shadows.
+constexpr int kDrawHidden = 1;
+constexpr int kDrawCastsShadows = 2;
+constexpr int kDrawReceivesShadows = 4;
+constexpr int kDrawSoft = 8;
+constexpr int kDrawSmooth = 16;
+constexpr int kDrawLocked = 32;
+constexpr int kDrawDefault = kDrawCastsShadows | kDrawReceivesShadows;
+
+inline int pack_draw(bool hidden, bool soft, bool smooth, bool locked, bool casts, bool receives) {
+  return (hidden ? kDrawHidden : 0) | (casts ? kDrawCastsShadows : 0) |
+         (receives ? kDrawReceivesShadows : 0) | (soft ? kDrawSoft : 0) |
+         (smooth ? kDrawSmooth : 0) | (locked ? kDrawLocked : 0);
+}
+
+struct TlvNode {
+  std::uint64_t offset{};
+  std::uint64_t size{};
+  std::string tag;
+  std::vector<TlvNode> children;
+  ByteBuffer payload;
+};
+
+struct RawFace {
+  std::vector<std::vector<CoEdge>> loops;
+  Vec3 normal{0, 0, 1};
+  std::optional<EntityId> material_id;
+  std::optional<EntityId> back_material_id;
+  std::optional<std::array<double, 9>> uv_transform;
+  std::optional<std::array<double, 9>> uv_transform_back;
+  bool uv_projected{};
+  bool uv_projected_back{};
+  bool hidden{};
+  // Layer entity id as a string until build_model resolves it to a name,
+  // same as RawInstance::layer.
+  std::string layer;
+  bool locked{};
+  bool casts_shadows{true};
+  bool receives_shadows{true};
+  ParsedAttrDictionaries attribute_dictionaries;
+};
+
+struct RawInstance {
+  std::string persistent_id;
+  std::uint64_t offset{};
+  std::optional<EntityId> id;
+  std::string ref_guid;
+  std::string name;
+  std::optional<EntityId> ref_idx;
+  std::optional<EntityId> material_id;
+  std::vector<double> matrix;
+  std::string layer;
+  // The "dynamic_attributes" dictionary only (SketchUp's own Dynamic
+  // Components data) - the same backward-compatible view Python's
+  // extract_dynamic_properties() exposes as `properties`.
+  std::map<std::string, std::string> properties;
+  // Every named dictionary this instance carries, keyed by VFF tag
+  // B436 / CAttributeNamed's declared name. Values keep native types.
+  // The reader does not special-case dictionary names.
+  ParsedAttrDictionaries attribute_dicts;
+  bool hidden{};
+  bool locked{};
+  bool casts_shadows{true};
+  bool receives_shadows{true};
+};
+
+// The analytic frame of a Curve that is one arc: the points
+// center + cos(t) * x_axis + sin(t) * y_axis for t from start_angle to end_angle.
+struct RawArcFrame {
+  Vec3 center{};
+  Vec3 normal{};
+  Vec3 x_axis{};
+  Vec3 y_axis{};
+  double start_angle{};
+  double end_angle{};
+};
+
+struct GeometryBuilder {
+  std::map<EntityId, Vec3> vertices;
+  std::map<EntityId, std::pair<std::optional<EntityId>, std::optional<EntityId>>> edges;
+  std::map<EntityId, int> edge_flags;
+  // Edge id -> entity id of the Curve the edge belongs to (SketchUp's Edge#curve).
+  std::map<EntityId, EntityId> edge_curves;
+  // Curve id -> its analytic arc, for the curves that are arcs.
+  std::map<EntityId, RawArcFrame> arc_curves;
+  std::map<EntityId, RawFace> faces;
+  std::vector<RawInstance> instances;
+  std::vector<SectionPlane> section_planes;
+  std::vector<TextEntity> texts;
+  std::vector<Dimension> dimensions;
+  std::vector<ConstructionLine> construction_lines;
+  std::vector<ConstructionPoint> construction_points;
+  std::map<EntityId, std::uint64_t> persistent_ids;
+  std::map<EntityId, ParsedAttrDictionaries> edge_dictionaries;
+};
+
+struct RawDefinition {
+  std::string guid;
+  std::string name;
+  bool always_faces_camera{};
+  bool shadows_face_sun{};
+  bool is_image{};
+  bool is_group{};
+  GeometryBuilder builder;
+  ParsedAttrDictionaries parsed_dictionaries;
+  std::uint64_t native_pid{};
+  std::string description;
+  std::string path;
+  std::uint32_t load_time{};
+  bool hidden{};
+  std::optional<ThumbnailCamera> thumbnail_camera;
+  /// Whether the file explicitly supplied component/group type information.
+  bool type_known{};
+};
+
+struct RawTexture {
+  std::string filename;
+  double x_scale{};
+  double y_scale{};
+  std::optional<ByteBuffer> data;
+};
+
+struct RawMaterial {
+  std::string name;
+  int r{128};
+  int g{128};
+  int b{128};
+  int a{255};
+  double transparency{1};
+  bool colorized{};
+  int colorize_type{};
+  std::optional<RawTexture> texture;
+  std::uint64_t native_pid{};
+};
+
+struct RawStyle {
+  std::string name;
+  std::string description;
+  std::optional<Color3> front_color;
+  std::optional<Color3> back_color;
+  std::map<int, StyleItem> items;
+  std::vector<StyleWatermark> watermarks;
+  std::string folder;
+  bool active{};
+  bool working_copy{};
+  bool modified{};
+};
+
+struct RawPage {
+  std::string name;
+  std::optional<Vec3> eye;
+  std::optional<Vec3> target;
+  std::optional<Vec3> up;
+  double fov{35.0};
+  bool parallel{};
+  double ortho_height{};
+  std::vector<EntityId> hidden_layer_ids;
+  bool selected{};
+};
+
+struct RawDimension {
+  Vec3 a{};
+  Vec3 b{};
+  double offset{};
+  std::optional<Vec3> plane_x;
+  std::optional<Vec3> normal;
+  std::optional<Vec3> offset_vector;
+  std::string layer;
+  bool hidden{};
+  std::string text;
+  std::uint64_t native_pid{};
+};
+
+struct RawParsed {
+  std::string version{"unknown"};
+  // The model's unit-system string (e.g. "Millimeter"), read from
+  // meta/meta.dat. Unset for legacy files or when the tag isn't found.
+  std::optional<std::string> units;
+  std::map<std::string, Color3> layer_colors;
+  // Layer names in the order they were first encountered in the source
+  // file (material.xml archive-entry order for VFF, slot-scan order for
+  // legacy) - layer_colors above is a std::map (sorted by name), so this
+  // is the only place file order survives; model.cpp's layer-building
+  // loop iterates this instead of layer_colors directly. Mirrors
+  // Python's plain dict for the same field, which preserves insertion
+  // order natively.
+  std::vector<std::string> layer_order;
+  // Modern (VFF) files derive layer COLOR from Layer_<name>-prefixed
+  // materials, which carry no visibility flag of their own - real
+  // visibility comes from the model.dat layer manager's own 8E3C byte
+  // (see geometry.cpp's collect_layers), read here into this same map.
+  std::map<std::string, bool> layer_hidden;
+  std::map<std::string, std::map<std::string, std::map<std::string, std::string>>>
+      layer_attribute_dictionaries;
+  std::map<EntityId, std::string> layer_id_to_name;
+  std::vector<RawPage> pages;
+  std::optional<ViewCamera> camera;
+  std::vector<RawDimension> dimensions;
+  std::map<EntityId, std::string> material_id_to_name;
+  std::map<std::string, std::shared_ptr<RawMaterial>> materials;
+  std::map<std::string, std::shared_ptr<RawMaterial>> materials_by_folder;
+  std::vector<RawStyle> styles;
+  std::map<EntityId, RawDefinition> definitions;
+  RawDefinition root{"ROOT", "ROOT_MODEL"};
+  // Dictionaries attached to the model entity itself (F601 -> 8813 -> D007
+  // -> DC05), not to anything placed in it.
+  ParsedAttrDictionaries model_attribute_dicts;
+  std::map<std::string, std::uint64_t> layer_persistent_ids;
+  std::map<std::string, std::set<std::uint64_t>> layer_persistent_id_aliases;
+  std::map<std::string, std::string> layer_line_styles;
+  std::map<std::string, ParsedAttrDictionaries> layer_parsed_dictionaries;
+};
+
+std::uint16_t read_u16(const ByteBuffer&, std::size_t);
+std::uint32_t read_u32(const ByteBuffer&, std::size_t);
+std::int32_t read_i32(const ByteBuffer&, std::size_t);
+double read_f64(const ByteBuffer&, std::size_t);
+std::uint64_t parse_varint(const ByteBuffer&, std::size_t, std::size_t);
+std::string tag_at(const ByteBuffer&, std::size_t);
+std::string bytes_to_upper_hex(const ByteBuffer&);
+// Exactly 16 Windows-order bytes to canonical uppercase, unhyphenated UUID.
+std::string guid_from_windows_bytes(const ByteBuffer&);
+
+// Deepest container nesting the parsers follow. A real model.dat nests about
+// a dozen levels (the deepest file checked reaches 11). A hostile file can
+// nest tens of thousands, which kills the process with a stack overflow
+// before anything can be reported, so deeper input throws a SkpParseError.
+inline constexpr int kMaxTlvDepth = 64;
+[[noreturn]] void throw_tlv_too_deep(const std::string& tag, std::size_t offset);
+std::vector<TlvNode> parse_tlv_recursive(const ByteBuffer&, std::size_t, std::size_t,
+                                         int depth = 0);
+std::vector<std::pair<std::string, ByteBuffer>> parse_flat(const ByteBuffer&);
+std::optional<std::string> read_meta_units(const ByteBuffer&);
+std::string extract_version(const ByteBuffer&);
+bool valid_header(const ByteBuffer&);
+bool is_legacy(const ByteBuffer&);
+bool legacy_instance_has_guid(int ver);
+
+/// What follows a legacy linear dimension's connection ref (openskp#384 /
+/// #412): [entity ref][u32 n1][n1 refs][u32 n2][n2 refs] - the instance paths
+/// of the anchored entity. Read from `pos`; `read_new_object(at)` is called
+/// for a path entry MFC wrote in full (the first time anything pointed at it)
+/// and returns {slot, position just past the object}.
+struct LegacyPathResult {
+  std::optional<std::uint64_t> extra;
+  std::vector<std::optional<std::uint64_t>> first;
+  std::vector<std::optional<std::uint64_t>> second;
+  /// Whether each entry of `first` / `second` was an object written in full.
+  std::vector<bool> first_new;
+  std::vector<bool> second_new;
+  std::size_t next{};
+};
+
+LegacyPathResult legacy_connection_paths(
+    const ByteBuffer& data, std::size_t pos,
+    const std::function<std::pair<std::uint64_t, std::size_t>(std::size_t)>& read_new_object);
+
+/// Result of `find_count_after_v20_filler`: the recovered count and the
+/// offset just past it.
+struct V20FillerHit {
+  std::uint32_t count;
+  std::size_t next;
+};
+
+std::optional<V20FillerHit> find_count_after_v20_filler(const ByteBuffer&, std::size_t,
+                                                        std::uint32_t);
+/// The offset of the root entity count behind a 2020 filler when the model has no definitions and
+/// no root entities (that count is 0, which `find_count_after_v20_filler` skips), else nullopt.
+std::optional<std::size_t> find_empty_root_after_v20_filler(const ByteBuffer&, std::size_t);
+RawParsed full_parse(const ByteBuffer&, const ParseOptions&);
+std::string decode_xml_entities(const std::string&);
+RawParsed parse_legacy(const ByteBuffer&, const ParseOptions&);
+
+// legacy.cpp's own MFC object-graph value type - one decoded entity
+// (material/layer/component/edge/face/... - `k` says which). Moved here
+// (out of legacy.cpp's own anonymous namespace, alongside LegacySlotEntry
+// below) rather than forward-declared only: a slot-table entry needs to
+// hold a real, complete shared_ptr<V>, and legacy.cpp's own code (which
+// sees this same type via ordinary unqualified lookup, exactly as before)
+// must keep resolving to this one definition, not a second, incomplete
+// one - two same-named types in nested scopes are different types in
+// C++, so this can't be split into "forward-declared here, defined
+// there" without every V-typed field silently binding to the wrong one.
+struct LegacyDimension {
+  Dimension geometry;
+  std::optional<std::uint64_t> connect1;
+  std::optional<std::uint64_t> connect2;
+};
+
+struct LegacyText {
+  TextEntity geometry;
+  std::optional<std::uint64_t> vertex;
+};
+
+struct V {
+  std::string k;
+  std::string name;
+  std::string label;
+  std::string text;
+  // Allocate annotation geometry only for dimensions, not for every mesh vertex.
+  std::shared_ptr<LegacyDimension> dimension;
+  std::shared_ptr<LegacyText> annotation_text;
+  std::string guid;
+  Vec3 xyz{};
+  // Only populated for k == "constructionline": the line's normalized
+  // direction, and its bounded segment's start/end (unset when unbounded
+  // in that direction) - see ConstructionLine's own doc comment.
+  Vec3 direction{};
+  std::optional<Vec3> start;
+  std::optional<Vec3> end;
+  std::vector<double> plane;
+  std::vector<double> xf;
+  std::vector<double> uvf;
+  std::vector<double> uvb;
+  bool front_projected{};
+  bool back_projected{};
+  std::uint64_t v1{};
+  std::uint64_t v2{};
+  // Only for k == "edge": the slot of its parent Curve, and the curve itself on the edge that
+  // first points at it (a back-ref to a curve already read carries none).
+  std::optional<std::uint64_t> curve;
+  std::shared_ptr<V> curve_value;
+  // Only for k == "arccurve".
+  RawArcFrame arc;
+  std::uint64_t edge{};
+  std::uint64_t def{};
+  // Slot of this entity's CAttributeContainer (resolved through
+  // Archive::slots), or nullopt when it has none. Not a bare slot number:
+  // slot 0 is a legitimate real slot (the first object allocated in the
+  // archive), so 0 can't double as a sentinel for "absent."
+  std::optional<std::uint64_t> attrs;
+  // Only populated for "dict" (CAttributeNamed) entities: this
+  // dictionary's own key/value pairs, already typed (see Archive::typed()).
+  ParsedAttrDict entries;
+  std::uint64_t tex_dib{};
+  // SketchUp 3: the texture image sits inline (bytes in `blob`), no store slot.
+  bool inline_tex{};
+  bool sense{};
+  bool faces_camera{};
+  bool shadows_face_sun{};
+  bool is_group{};
+  bool colorized{};
+  int colorize_type{};
+  int mat{};
+  int back_mat{};
+  int layer{};
+  int hidden{};
+  int soft{};
+  int smooth{};
+  int r{128};
+  int g{128};
+  int b{128};
+  int a{255};
+  double opacity{};
+  double tw{};
+  double th{};
+  std::string tex_file;
+  ByteBuffer blob;
+  std::vector<std::shared_ptr<V>> loops;
+  std::vector<std::shared_ptr<V>> uses;
+  std::vector<std::tuple<uint64_t, std::string, std::shared_ptr<V>>> ents;
+  std::uint64_t native_pid{};
+  std::string description;
+  std::string path;
+  std::uint32_t load_time{};
+  std::optional<ThumbnailCamera> camera;
+  bool locked{};
+  bool casts_shadows{true};
+  bool receives_shadows{true};
+  /// Whether the file explicitly supplied component/group type information.
+  bool type_known{};
+};
+
+/// One legacy MFC archive slot-table entry: either a class declaration
+/// (cls=true, name/schema identify the class, v unused) or a read
+/// object (cls=false, v holds its decoded value, possibly null for
+/// object kinds this port doesn't decode into V). Exposed here (moved
+/// out of legacy.cpp's own anonymous namespace) purely so
+/// scan_pages_for_layers below is unit-testable without needing
+/// legacy.cpp's full ~750-line Archive type - matches
+/// find_count_after_v20_filler's precedent just above.
+struct LegacySlotEntry {
+  bool cls{};
+  std::string name;
+  int schema{};
+  std::shared_ptr<V> v;
+};
+
+/// A minimal view into an Archive's slot-table bookkeeping - the only
+/// pieces legacy.cpp's page (scene) scanner needs, exposed narrowly
+/// (rather than the full Archive type) so that feature is unit-testable.
+/// A real caller (legacy.cpp's parse_legacy) wraps its own Archive's
+/// slots/class_slot/next members; a test can hand-build just the
+/// entries a specific case needs.
+struct LegacySlotTable {
+  std::unordered_map<std::uint64_t, LegacySlotEntry>& slots;
+  std::unordered_map<std::string, std::uint64_t>& class_slot;
+  std::uint64_t& next;
+
+  std::uint64_t alloc(LegacySlotEntry e) {
+    auto s = next++;
+    slots[s] = std::move(e);
+    return s;
+  }
+};
+
+/// Best-effort scan for CViewPage (scene) records in a legacy (pre-2021
+/// MFC) file: name + hidden-layer slot ids only, for the narrow
+/// CViewPage capture-flag combinations this reader understands. See
+/// legacy.cpp's own scan_pages for the full rationale and byte layout -
+/// mirrors Python's legacy._scan_pages exactly. `start_pos` is the byte
+/// offset to begin scanning from (the main entity walk's own stopping
+/// point in a real parse).
+std::vector<RawPage> scan_pages_for_layers(const ByteBuffer& data, std::size_t start_pos,
+                                           LegacySlotTable slots);
+
+/// Reads a legacy definition's entity list of `count` items at `pos`, with
+/// an archive of SketchUp version `ver` over `slots`: each item's slot and
+/// class name, and the offset just past the list. Exposed, like
+/// scan_pages_for_layers, so the list's bookkeeping is unit-testable: an
+/// instance a text label's connection path writes in full is one of the
+/// list's items whether or not the list names it again.
+struct LegacyEntityListResult {
+  std::vector<std::pair<std::uint64_t, std::string>> items;
+  std::size_t next{};
+};
+
+LegacyEntityListResult read_legacy_entity_list(const ByteBuffer& data, std::size_t pos, int ver,
+                                               std::uint32_t count, LegacySlotTable slots);
+void collect_geometry(const std::vector<TlvNode>&, GeometryBuilder&);
+void collect_layers(const std::vector<TlvNode>&, std::map<EntityId, std::string>&,
+                    std::map<std::string, bool>&);
+void collect_line_styles(const std::vector<TlvNode>&, std::map<EntityId, std::string>&);
+void collect_layers(const std::vector<TlvNode>&, std::map<EntityId, std::string>&,
+                    std::map<std::string, bool>&, std::map<std::string, EntityId>&);
+void assign_vff_sections(const ByteBuffer&, RawParsed&);
+void collect_material_ids(const std::vector<TlvNode>&, std::map<EntityId, std::string>&);
+void collect_definitions(const std::vector<TlvNode>&, std::map<EntityId, RawDefinition>&);
+void collect_model_attribute_dictionaries(const TlvNode&, ParsedAttrDictionaries&);
+SkpModel build_model(RawParsed&&, const ParseOptions& = {});
+Scene build_scene_raw(RawParsed&&, const ParseOptions&);
+InstancedScene build_instanced_scene_raw(RawParsed&&, const ParseOptions&);
+std::vector<double> fold_scale(const std::vector<double>&);
+std::array<double, 3> transform_point(const std::vector<double>&, const std::array<double, 3>&);
+std::array<double, 3> transform_normal(const std::vector<double>&, const std::array<double, 3>&);
+double transform_determinant(const std::vector<double>&);
+std::vector<double> multiply_matrices(const std::vector<double>&, const std::vector<double>&);
+void scan_vertex_positions(const TlvNode&, std::map<std::string, Vec3>&);
+void scan_instance_transforms(const TlvNode&, std::map<std::string, std::vector<double>>&);
+void assign_vff_annotations(const ByteBuffer&, const std::map<std::string, Vec3>&,
+                            const std::map<std::string, std::vector<double>>&, RawParsed&);
+void compose_instance_world(const RawDefinition&, const std::map<EntityId, RawDefinition>&,
+                            std::map<std::string, std::vector<double>>&);
+std::vector<RawDimension> parse_dimensions(const ByteBuffer&, const std::map<std::string, Vec3>&,
+                                           const std::map<std::string, std::vector<double>>&);
+const TlvNode* find_page_node(const TlvNode&);
+
+// A view camera record (34BC), as scenes and the model's current view store it.
+struct RawCamera {
+  std::optional<Vec3> eye;
+  std::optional<Vec3> target;
+  std::optional<Vec3> up;
+  double fov{35.0};
+  bool parallel{};
+  double ortho_height{};
+};
+
+RawCamera parse_camera(const ByteBuffer& record);
+std::vector<RawPage> parse_pages(const TlvNode*);
+
+struct EarPoint {
+  double x{};
+  double y{};
+  EntityId id{};
+};
+
+std::vector<std::array<EntityId, 3>> earcut_2d(std::vector<std::vector<EarPoint>> loops);
+void emit_log(const ParseOptions&, LogLevel, const std::string&);
+void emit_progress(const ParseOptions&, ParseStage, std::uint64_t, std::uint64_t);
+}  // namespace openskp

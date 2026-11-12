@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 benchup-core = { path = "../benchup-core" }
+benchup-io = { path = "../benchup-io" }
 serde.workspace = true
 serde_json.workspace = true
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
@@ -41,6 +42,3 @@ hidapi = { version = "2.4", default-features = false, features = ["linux-static-
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 pollster = "0.4"
 png = "0.18"
-
-[build-dependencies]
-cc = "1"

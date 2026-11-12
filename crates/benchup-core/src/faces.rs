@@ -462,7 +462,7 @@ impl Model {
             .iter()
             .map(|vertices| {
                 if replaced.is_empty() {
-                    return (None, None);
+                    return (None, None, vec![]);
                 }
                 let face = Face {
                     id: 0,
@@ -481,15 +481,17 @@ impl Model {
                 (
                     parent.and_then(|id| self.face_colors.get(id)).copied(),
                     parent.and_then(|id| self.entity_tags.get(id)).copied(),
+                    parent.map(|&id| self.glued_polygons(id)).unwrap_or_default(),
                 )
             })
             .collect();
         self.faces.retain(|id, _| !replaced.contains(id));
+        self.clean_wood_glue();
         self.face_colors.retain(|id, _| self.faces.contains_key(id));
         self.entity_tags.retain(|id, _| !replaced.contains(id));
         self.reference_images
             .retain(|id, _| self.faces.contains_key(id));
-        for (vertices, (color, tag)) in fresh.into_iter().zip(inherited) {
+        for (vertices, (color, tag, glue)) in fresh.into_iter().zip(inherited) {
             let id = self.id();
             self.faces.insert(
                 id,
@@ -502,6 +504,7 @@ impl Model {
             if let Some(color) = color {
                 self.face_colors.insert(id, color);
             }
+            self.transfer_glue(id, &glue);
             if let Some(tag) = tag {
                 self.entity_tags.insert(id, tag);
             }

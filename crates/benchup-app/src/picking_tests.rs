@@ -260,7 +260,7 @@ fn cached_queries_follow_geometry_visibility_and_editing_scope() {
 #[test]
 fn cached_polygon_queries_keep_holes_and_edge_precedence() {
     let model = crate::interchange::import_skp(
-        include_bytes!("../tests/fixtures/placed-window.skp"),
+        include_bytes!("../../benchup-io/tests/fixtures/placed-window.skp"),
         "Window",
     )
     .unwrap();

@@ -5,6 +5,8 @@ pub use reference_images::{ImageAsset, ImageFit, ImageSettings, ReferenceImage};
 
 pub mod connections;
 pub mod joinery;
+pub mod router;
+pub mod wood_glue;
 mod cleanup;
 pub mod annotations;
 pub mod camera;
@@ -78,6 +80,7 @@ pub enum Tool {
     Circle,
     Polygon,
     Freehand,
+    Arc,
     PushPull,
     Flip,
     OuterShell,
@@ -98,6 +101,8 @@ pub enum Tool {
     Orbit,
     GrainDirection,
     Walk,
+    WoodGlue,
+    Router,
 }
 
 impl Tool {
@@ -131,23 +136,25 @@ impl Tool {
         Self::Text,
         Self::Image,
     ];
-    pub const DRAWING: [Self; 5] = [
+    pub const DRAWING: [Self; 6] = [
         Self::Line,
         Self::Rectangle,
         Self::Circle,
         Self::Polygon,
+        Self::Arc,
         Self::Freehand,
     ];
     pub fn is_drawing(self) -> bool {
         self == Self::Image || Self::DRAWING.contains(&self)
     }
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 30] = [
         Self::Select,
         Self::Line,
         Self::Rectangle,
         Self::Circle,
         Self::Polygon,
         Self::Freehand,
+        Self::Arc,
         Self::PushPull,
         Self::Flip,
         Self::OuterShell,
@@ -169,8 +176,10 @@ impl Tool {
         Self::Orbit,
         Self::GrainDirection,
         Self::Walk,
+        Self::WoodGlue,
+        Self::Router,
     ];
-    pub const RAIL: [Self; 12] = [
+    pub const RAIL: [Self; 14] = [
         Self::Select,
         Self::Line,
         Self::Erase,
@@ -183,6 +192,8 @@ impl Tool {
         Self::Paint,
         Self::Dimensions,
         Self::Union,
+        Self::Router,
+        Self::WoodGlue,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -193,6 +204,7 @@ impl Tool {
             Self::Circle => tr!("tools.circle"),
             Self::Polygon => tr!("tools.polygon"),
             Self::Freehand => tr!("tools.freehand"),
+            Self::Arc => tr!("tools.arc"),
             Self::PushPull => tr!("tools.push_pull"),
             Self::Flip => tr!("tools.flip"),
             Self::OuterShell => tr!("tools.combine"),
@@ -213,6 +225,8 @@ impl Tool {
             Self::Orbit => tr!("tools.orbit"),
             Self::GrainDirection => tr!("tools.grain_direction"),
             Self::Walk => "Walk",
+            Self::WoodGlue => tr!("wood_glue.tool"),
+            Self::Router => tr!("router.router"),
         }
     }
     pub fn shortcut(self) -> &'static str {
@@ -239,7 +253,7 @@ impl Tool {
             Self::TapeMeasure => "T",
             Self::Protractor => "A",
             Self::Dimensions => "I",
-            Self::Text | Self::GrainDirection | Self::Walk => "",
+            Self::Arc | Self::Text | Self::GrainDirection | Self::Walk | Self::WoodGlue | Self::Router => "",
             Self::Erase => "E",
             Self::Orbit => "O",
         }
@@ -259,6 +273,7 @@ impl Tool {
             Self::Freehand => {
                 tr!("tools.drag_to_draw_release_to_finish_arrow_keys")
             }
+            Self::Arc => tr!("tools.arc_instructions"),
             Self::Erase => tr!("tools.click_or_drag_across_edges_or_faces_to"),
             Self::Flip => {
                 tr!("tools.select_geometry_choose_a_red_green_or_blue")
@@ -298,6 +313,8 @@ impl Tool {
             Self::Text => tr!("tools.click_an_object_then_click_to_place_its"),
             Self::Orbit => tr!("tools.drag_to_orbit_hold_shift_to_pan_scroll"),
             Self::GrainDirection => tr!("tools.place_the_grain_anchor"),
+            Self::WoodGlue => tr!("wood_glue.instructions"),
+            Self::Router => tr!("router.click_edges"),
             Self::Walk => "Click a floor face to start walking at eye level. Escape exits Walk.",
         }
     }

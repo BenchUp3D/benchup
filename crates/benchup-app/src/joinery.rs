@@ -107,6 +107,8 @@ pub(super) struct GeometryCache {
     #[cfg(test)]
     diagnostic_evaluations: usize,
     source: Option<Model>,
+    render_source_stamp: Option<(u64, Option<u64>, bool)>,
+    show_scoped_routes: bool,
     regions: Vec<(u64, highlight::Region)>,
     pub result: Option<GeometryEvaluation>,
     faces: crate::renderer::FaceCache,
@@ -128,9 +130,23 @@ fn joint_in_view(model: &Model, connection: &Connection) -> bool {
         || connection.members.iter().all(|member| model.entity_in_context(*member) == Some(*member))
 }
 
+pub(super) fn scope_joints_for_view(source: &mut Model) {
+    if source.edit_context.is_none() {
+        return;
+    }
+    let excluded: Vec<_> = source.connections.iter()
+        .filter(|(_, connection)| matches!(connection.operation, ConnectionOperation::Joinery(_))
+            && !joint_in_view(source, connection))
+        .map(|(&id, _)| id)
+        .collect();
+    for id in excluded {
+        source.connections.remove(&id);
+    }
+}
+
 impl GeometryCache {
     pub(super) fn clear_removed_connections(&mut self) {
-        if self.source.as_ref().is_some_and(|source| !source.connections.is_empty()) {
+        if self.source.as_ref().is_some_and(|source| !source.connections.is_empty() || !source.routes.is_empty()) {
             *self = Self::default();
         }
     }
@@ -139,14 +155,23 @@ impl GeometryCache {
     /// rather than queuing every intermediate position. Exact picking and the
     /// end of a gesture synchronize through update().
     pub fn update_render(&mut self, source: &Model, transient: bool, ctx: &egui::Context,
-        display: &benchup_core::DisplaySettings, shadows: &crate::shadows::ShadowCache) {
+        display: &benchup_core::DisplaySettings, shadows: &crate::shadows::ShadowCache,
+        committed_revision: Option<u64>, show_scoped_routes: bool) {
+        let stamp = committed_revision.map(|revision| (revision, source.edit_context, show_scoped_routes));
+        // A document revision already tracks the geometry and routing inputs.
+        // Include scope because opening stock does not change that revision.
+        if stamp.is_some() && self.render_source_stamp == stamp {
+            return;
+        }
+        self.render_source_stamp = None;
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.pending.as_ref().is_some_and(|job| job.is_finished()) {
                 self.finish_pending();
             }
             if transient && self.result.is_some() {
-                if self.pending.is_none() && self.source.as_ref() != Some(source) {
+                if self.pending.is_none() && (self.source.as_ref() != Some(source)
+                    || self.show_scoped_routes != show_scoped_routes) {
                     let source = source.clone();
                     let display = display.clone();
                     let mut shadows = shadows.clone();
@@ -160,7 +185,7 @@ impl GeometryCache {
                         ..Default::default()
                     };
                     self.pending = Some(benchup_core::i18n::spawn_localized(move || {
-                        worker.update(&source);
+                        worker.update_with_routing(&source, show_scoped_routes);
                         let model = &worker.result.as_ref().unwrap().model;
                         worker.faces.update(model);
                         worker.entities.update(model);
@@ -175,7 +200,8 @@ impl GeometryCache {
         }
         #[cfg(target_arch = "wasm32")]
         let _ = (transient, ctx, display, shadows);
-        self.update(source);
+        self.update_with_routing(source, show_scoped_routes);
+        self.render_source_stamp = stamp;
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -185,6 +211,7 @@ impl GeometryCache {
                 self.evaluation = worker.evaluation;
                 self.region_cache = worker.region_cache;
                 self.source = worker.source;
+                self.show_scoped_routes = worker.show_scoped_routes;
                 self.source_errors = worker.source_errors;
                 self.result = worker.result;
                 self.regions = worker.regions;
@@ -217,7 +244,11 @@ impl GeometryCache {
                 8.,
                 include_faces,
             )
-            .filter(|id| source.contains_entity(id))
+            .and_then(|id| {
+                let id = if source.contains_entity(&id) { id }
+                    else { *model.routing_appearance.sources.get(&id)? };
+                source.entity_in_context(id)
+            })
     }
 
     pub(super) fn evaluated_picking(
@@ -244,23 +275,30 @@ impl GeometryCache {
     }
 
     pub fn update(&mut self, source: &Model) {
+        self.update_with_routing(source, false);
+    }
+
+    fn update_with_routing(&mut self, source: &Model, show_scoped_routes: bool) {
         #[cfg(not(target_arch = "wasm32"))]
         self.finish_pending();
-        if self.source.as_ref() != Some(source) {
+        if self.source.as_ref() != Some(source) || self.show_scoped_routes != show_scoped_routes {
+            self.show_scoped_routes = show_scoped_routes;
+            self.render_source_stamp = None;
             self.prepared_shadows = None;
             // Scope machining and guides together without changing saved
             // relations or the fully assembled geometry used by exports.
             let mut viewport_source = source.clone();
-            viewport_source.connections.retain(|_, connection| {
-                !matches!(connection.operation, ConnectionOperation::Joinery(_))
-                    || joint_in_view(source, connection)
-            });
+            scope_joints_for_view(&mut viewport_source);
+            if !show_scoped_routes && let Some(board) = source.edit_context {
+                viewport_source.routes.retain(|edge, _| source.route_board(*edge) != Some(board));
+            }
             let evaluation = {
                 #[cfg(not(target_arch = "wasm32"))]
                 let _profile = super::viewport_benchmark::scope("joinery_evaluate");
                 self.evaluation.evaluate(&viewport_source)
             };
-            self.source_errors = (viewport_source.connections == source.connections)
+            self.source_errors = (viewport_source.connections == source.connections
+                && viewport_source.routes == source.routes)
                 .then(|| evaluation.errors.clone());
             #[cfg(test)] { self.revision = self.revision.wrapping_add(1); }
             let mut boards = highlight::BoardGeometryCache::default();
@@ -444,7 +482,7 @@ fn warning_colors(dark: bool) -> (Color32, Color32) {
         (Color32::from_rgb(94, 52, 0), Color32::from_rgba_unmultiplied(255, 239, 204, 235))
     }
 }
-fn warning(ui: &mut egui::Ui, message: impl Into<String>) {
+pub(super) fn warning(ui: &mut egui::Ui, message: impl Into<String>) {
     let (text, background) = warning_colors(ui.visuals().dark_mode);
     egui::Frame::new().fill(background).corner_radius(4).inner_margin(8).show(ui, |ui| {
         ui.add(egui::Label::new(RichText::new(message.into()).color(text)).wrap());
@@ -574,6 +612,7 @@ impl BenchUpApp {
             ..Default::default()
         };
         self.fasteners.open = false;
+        self.close_router();
         self.joinery.open = true;
         self.inspector = true;
         self.set_tool(Tool::Select);
@@ -781,7 +820,12 @@ impl BenchUpApp {
             let (text, background) = warning_colors(p.ctx().global_style().visuals.dark_mode);
             let mut position = rect.left_top() + egui::vec2(16., 18.);
             for (id, error) in evaluation.errors.iter().take(4) {
-                let galley = p.layout(tr!("joinery.wood_joint_suspended", id = id, error = error),
+                let message = if self.doc.model.routes.contains_key(id) {
+                    tr!("router.suspended", id = id, error = error)
+                } else {
+                    tr!("joinery.wood_joint_suspended", id = id, error = error)
+                };
+                let galley = p.layout(message,
                     FontId::proportional(12.), text, (rect.width() - 48.).max(1.));
                 let bounds = Rect::from_min_size(position, galley.size());
                 p.rect_filled(bounds.expand(6.), 4, background);
@@ -847,7 +891,7 @@ mod tests {
         for offset in [0.001, 0.003, 0.007] {
             latest = source.clone();
             latest.move_selection(&BTreeSet::from([members[0]]), DVec3::X * offset).unwrap();
-            cache.update_render(&latest, true, &ctx, &app.doc.display, &app.shadow_cache);
+            cache.update_render(&latest, true, &ctx, &app.doc.display, &app.shadow_cache, None, false);
             assert!(cache.pending.is_some());
             assert!(cache.result.is_some(), "the last complete preview stays drawable");
         }
@@ -857,11 +901,11 @@ mod tests {
         assert_eq!(cache.result.as_ref().unwrap().model, latest.evaluate_joinery().model);
         assert!(cache.revision > initial_revision);
         let revision = cache.revision;
-        cache.update_render(&latest, true, &ctx, &app.doc.display, &app.shadow_cache);
+        cache.update_render(&latest, true, &ctx, &app.doc.display, &app.shadow_cache, None, false);
         assert!(cache.pending.is_none());
         assert_eq!(cache.revision, revision);
         latest.move_selection(&BTreeSet::from([members[0]]), DVec3::X * 0.01).unwrap();
-        cache.update_render(&latest, true, &ctx, &app.doc.display, &app.shadow_cache);
+        cache.update_render(&latest, true, &ctx, &app.doc.display, &app.shadow_cache, None, false);
         cache.update(&source);
         assert!(cache.pending.is_none());
         assert_eq!(cache.source.as_ref(), Some(&source));

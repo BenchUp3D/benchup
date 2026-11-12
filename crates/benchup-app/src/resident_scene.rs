@@ -4,6 +4,7 @@
 use super::*;
 
 use crate::theme::{FacePalette, Palette};
+use crate::app::surface_appearance::{Materials, appearance_changed};
 #[path = "resident_appearance.rs"]
 mod appearance;
 #[path = "resident_bounds.rs"]
@@ -28,6 +29,12 @@ struct FaceVertex {
     color: [u8; 4],
     face_id: u32,
     interaction: [u32; 2],
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+struct SurfaceVertex {
+    grain: [f32; 3],
+    finish: [u8; 4],
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -85,6 +92,7 @@ pub(super) struct Cache {
     builds: usize,
     appearance: appearance::Cache,
     source: Option<Model>,
+    source_catalog: Option<Arc<Catalog>>,
     removed: std::collections::BTreeSet<u64>,
     bounds_index: bounds::Index,
     hierarchy: Option<Arc<appearance::Hierarchy>>,
@@ -98,6 +106,7 @@ pub(super) struct Cache {
 }
 struct Geometry {
     faces: Vec<FaceVertex>,
+    materials: Vec<SurfaceVertex>,
     edges: Vec<EdgeInstance>,
     markers: Vec<MarkerInstance>,
     origin: DVec3,
@@ -106,6 +115,7 @@ struct Geometry {
 }
 struct GeometryBuffers {
     faces: wgpu::Buffer,
+    materials: Option<wgpu::Buffer>,
     edges: wgpu::Buffer,
     markers: wgpu::Buffer,
     visibility: Mutex<Option<Arc<Visibility>>>,
@@ -140,6 +150,7 @@ struct Draw {
 }
 struct Pipelines {
     face: wgpu::RenderPipeline,
+    material: wgpu::RenderPipeline,
     marker: wgpu::RenderPipeline,
     shadow: wgpu::RenderPipeline,
     unshadowed: wgpu::TextureView,
@@ -157,7 +168,7 @@ fn geometry_key(key: &SceneKey) -> SceneKey {
         joint_preview: key.joint_preview.clone(),
         model_revision: key.model_revision,
         edit_context: None, camera: Camera::default(), size: DVec2::ZERO,
-        pixels_per_point: 1., display: key.display.clone(), dark: key.dark,
+        pixels_per_point: 1., display: key.display.clone(), surface_catalog: key.surface_catalog.clone(), dark: key.dark,
         tool: benchup_core::Tool::Orbit, selected: Default::default(), hover: None,
         outliner_hover: Default::default(), erasing: Default::default(),
     };
@@ -216,7 +227,8 @@ fn removed_geometry(source: &Model, model: &Model) -> Option<std::collections::B
     let mut ids = removed(&source.edges, &model.edges, PartialEq::eq)?;
     let faces = removed(&source.faces, &model.faces, PartialEq::eq)?;
     let colors = removed(&source.face_colors, &model.face_colors, PartialEq::eq)?;
-    if !colors.is_subset(&faces) {
+    let glue = removed(&source.wood_glue, &model.wood_glue, PartialEq::eq)?;
+    if !colors.is_subset(&faces) || !glue.is_subset(&faces) {
         return None;
     }
     ids.extend(faces);
@@ -254,6 +266,10 @@ pub(crate) fn edited_geometry(
     source: &Model,
     model: &Model,
 ) -> Option<std::collections::BTreeSet<u64>> {
+    if source.routing_appearance.edge_controls != model.routing_appearance.edge_controls
+        || source.routing_appearance.stock_edge_controls != model.routing_appearance.stock_edge_controls
+    { return None; }
+
     use std::collections::{BTreeSet, HashSet};
     fn changed<T: PartialEq>(before: &BTreeMap<u64, T>, after: &BTreeMap<u64, T>) -> BTreeSet<u64> {
         let mut old = before.iter().peekable();
@@ -363,6 +379,11 @@ pub(crate) fn edited_geometry(
     // Membership changes require new owner slots in the affected primitives.
     for (&id, object) in &source.objects {
         if let Some(after) = model.objects.get(&id) {
+            if object.transform != after.transform {
+                faces.extend(object.entities.iter().chain(&after.entities)
+                    .filter(|id| source.wood_glue.contains_key(id) || model.wood_glue.contains_key(id))
+                    .copied());
+            }
             edges.extend(
                 object
                     .entities
@@ -381,6 +402,9 @@ pub(crate) fn edited_geometry(
     {
         edges.extend(&object.entities);
     }
+    // Coverage partitions the existing plane, so its boundary edges keep
+    // their original visibility and depth allowances.
+    faces.extend(changed(&source.wood_glue, &model.wood_glue));
     if edges.len() + faces.len() >= 4096 {
         return None;
     }
@@ -509,6 +533,9 @@ impl SceneCache {
             let same_style = self.resident.key.as_ref().is_some_and(|previous| {
                 let mut previous = previous.clone();
                 previous.model_revision = geometry_key.model_revision;
+                // Catalog edits can replace only the stock faces, like other
+                // retained edits. Display-mode changes still rebuild normally.
+                previous.surface_catalog.clone_from(&geometry_key.surface_catalog);
                 previous == geometry_key
             });
             let dirty = same_style
@@ -519,6 +546,26 @@ impl SceneCache {
                         .and_then(|source| edited_geometry(source, model))
                 })
                 .flatten();
+            let dirty = dirty.and_then(|mut dirty| {
+                let catalog_changed = self.resident.source_catalog != key.surface_catalog;
+                if key.surface_catalog.is_some() || self.resident.source_catalog.is_some() {
+                    let source = self.resident.source.as_ref().unwrap();
+                    // Only treatments and the part's grain direction change
+                    // baked attributes independently of the affected vertices.
+                    let mut touched = std::collections::BTreeSet::new();
+                    for (&id, object) in &model.objects {
+                        if (catalog_changed && (object.stock_material_id.is_some() || object.stock_material.is_some()))
+                            || source.objects.get(&id).is_some_and(|before| appearance_changed(before, object))
+                        {
+                            touched.insert(id);
+                        }
+                    }
+                    if !touched.is_empty() {
+                        dirty.extend(model.expand_entities(&touched).into_iter().filter(|id| model.faces.contains_key(id)));
+                    }
+                }
+                (dirty.len() < 4096).then_some(dirty)
+            });
             if let Some(dirty) = dirty {
                 let source = self.resident.source.as_ref().unwrap();
                 let hierarchy = Arc::make_mut(self.resident.hierarchy.as_mut().unwrap());
@@ -555,6 +602,7 @@ impl SceneCache {
                 self.resident.hierarchy = Some(Arc::new(hierarchy));
                 self.resident.bounds_index = bounds::Index::new(model, entities, &key.display);
                 self.resident.source = Some(model.clone());
+                self.resident.source_catalog.clone_from(&key.surface_catalog);
                 self.resident.overlay = None;
                 self.resident.removed.clear();
                 self.resident.builds += 1;
@@ -617,7 +665,8 @@ impl SceneCache {
         }
         let callback = Draw {
             shadows: shadows.clone(),
-            markers: key.selected.iter().any(|id| model.edges.contains_key(id)),
+            markers: key.selected.iter().any(|id| model.edges.contains_key(id)
+                || model.routing_appearance.endpoint_control(*id).is_some()),
             appearance,
             geometry: Arc::clone(&geometry),
             overlay: self.resident.overlay.clone(),
@@ -658,7 +707,7 @@ impl SceneCache {
                 face_hovered: rgba(face_palette.hovered),
                 face_inactive: rgba(face_palette.inactive),
                 edge_selected: rgba(crate::theme::ACCENT),
-                edge_hovered: rgba(palette.green),
+                edge_hovered: rgba(if key.tool == benchup_core::Tool::Router { palette.accent } else { palette.green }),
                 edge_inactive: rgba(if key.dark {
                     palette.border
                 } else {
@@ -741,7 +790,9 @@ impl Geometry {
         let origin = origin.unwrap_or((bounds.0 + bounds.1) * 0.5);
         let point = |p: DVec3| (p - origin).as_vec3().to_array();
         let mut vertices = Vec::new();
+        let mut material_vertices = Vec::new();
         let mut surfaces: BTreeMap<(u64, u64), Vec<(DVec3, DVec3, u32)>> = BTreeMap::new();
+        let mut materials = Materials::new(model, entities, key.surface_catalog.as_deref());
         for face in model.faces.values().filter(|f| {
             !model.reference_images.contains_key(&f.id) && dirty.is_none_or(|dirty| dirty.contains(&f.id))
                 && entities.get(f.id).displayed(&key.display)
@@ -758,16 +809,31 @@ impl Geometry {
             } else {
                 None
             };
-            let material = material.map_or(face_palette.front, |rgb| {
-                Color32::from_rgb(rgb[0], rgb[1], rgb[2])
-            });
-            let color = material;
+            let finish = if material.is_none() { materials.for_face(face.id) } else { None };
+            let material = if model.routing_appearance.faces.contains(&face.id) {
+                Some(&benchup_core::router::CUT_COLOR)
+            } else { material };
+            let color = material.copied().or(finish.map(|surface| surface.color))
+                .map_or(face_palette.front, |[r, g, b]| Color32::from_rgb(r, g, b));
             let anchor = model.vertices[&face.vertices[0]].position;
-            for triangle in &cached.triangles {
+            let (bare, coated, glue) = cached.glue.as_ref().map_or(
+                (cached.triangles.as_slice(), &[][..], None),
+                |glue| (glue.bare.as_slice(), glue.coated.as_slice(), Some(glue.material)),
+            );
+            for (triangle, finish) in bare.iter().map(|triangle| (triangle, finish))
+                .chain(coated.iter().map(|triangle| (triangle, glue)))
+            {
                 for &p in triangle {
+                    if let Some(surface) = finish {
+                        material_vertices.resize(vertices.len(), SurfaceVertex::default());
+                        material_vertices.push(SurfaceVertex {
+                            grain: surface.coordinates(p),
+                            finish: surface.params,
+                        });
+                    }
                     vertices.push(FaceVertex {
                         position: point(p),
-                        normal: cached.normal.as_vec3().to_array(),
+                        normal: model.routing_appearance.normal_at(model, face.id, p, cached.normal).as_vec3().to_array(),
                         anchor: point(anchor),
                         color: color.to_array(),
                         face_id,
@@ -827,12 +893,20 @@ impl Geometry {
         for edge in model.edges.values().filter(|e| {
             dirty.is_none_or(|dirty| dirty.contains(&e.id))
                 && entities.get(e.id).displayed(&key.display)
+                && (!model.routing_appearance.smooth_edges.contains(&e.id) || key.display.hidden_geometry)
         }) {
-            for vertex in [edge.a, edge.b] {
-                endpoints.entry(vertex).or_default().push(hierarchy.slot(edge.id));
+            // Evaluated machining vertices describe tessellation, not editable
+            // drawing endpoints. Their controls are retained from the stock.
+            if !model.routing_appearance.sources.contains_key(&edge.id) {
+                for vertex in [edge.a, edge.b] {
+                    endpoints.entry(vertex).or_default().push(hierarchy.slot(edge.id));
+                }
             }
             let state = entities.get(edge.id);
-            let color = if key.display.color_by_tag {
+            let color = if model.routing_appearance.edges.contains(&edge.id) {
+                let [r, g, b] = benchup_core::router::EDGE_COLOR;
+                Color32::from_rgb(r, g, b)
+            } else if key.display.color_by_tag {
                 state
                     .tag_color
                     .map_or(palette.ink, |rgb| Color32::from_rgb(rgb[0], rgb[1], rgb[2]))
@@ -869,6 +943,27 @@ impl Geometry {
                 interaction: hierarchy.pair(edge.id),
             });
         }
+        // Original routed paths are interaction-only instances. The shader
+        // reveals them for explicit edge selection/hover, never group selection.
+        let mut route_markers = Vec::new();
+        for (&id, control) in &model.routing_appearance.edge_controls {
+            if dirty.is_some_and(|dirty| !dirty.contains(&id)) || control.hidden
+                || control.parent.is_some_and(|parent| !entities.get(parent).displayed(&key.display))
+            { continue; }
+            edges.push(EdgeInstance {
+                a: point(control.points[0]), b: point(control.points[1]),
+                color: palette.ink.to_array(), width: -2., interaction: hierarchy.pair(id),
+                ..bytemuck::Zeroable::zeroed()
+            });
+        }
+        for (&id, control) in model.routing_appearance.endpoint_controls() {
+            if dirty.is_some_and(|dirty| !dirty.contains(&id)) || control.hidden
+                || control.parent.is_some_and(|parent| !entities.get(parent).displayed(&key.display))
+            { continue; }
+            for p in control.points {
+                route_markers.push(MarkerInstance { position: point(p), edges: [hierarchy.slot(id), 0, 0, 0] });
+            }
+        }
         // Angular strokes share the retained edge buffers, camera uniforms,
         // interaction texture and fragment depth clipping. Tessellate only
         // when their geometry changes, never during camera movement.
@@ -885,7 +980,7 @@ impl Geometry {
                 });
             }
         }
-        let markers = endpoints.into_iter().flat_map(|(id, edges)| {
+        let mut markers: Vec<_> = endpoints.into_iter().flat_map(|(id, edges)| {
             let position = point(model.vertices[&id].position);
             edges.chunks(4).map(|chunk| {
                 let mut edges = [0; 4];
@@ -893,7 +988,12 @@ impl Geometry {
                 MarkerInstance { position, edges }
             }).collect::<Vec<_>>()
         }).collect();
+        markers.extend(route_markers);
+        if !material_vertices.is_empty() {
+            material_vertices.resize(vertices.len(), SurfaceVertex::default());
+        }
         Self {
+            materials: material_vertices,
             faces: vertices,
             edges,
             markers,
@@ -911,7 +1011,7 @@ pub(super) fn install(
 ) {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("BenchUp resident world geometry"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("resident_scene.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(concat!(include_str!("surface_appearance.wgsl"), "\n", include_str!("resident_scene.wgsl")).into()),
     });
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Resident camera"),
@@ -970,32 +1070,36 @@ pub(super) fn install(
         bind_group_layouts: &[Some(&layout), Some(&visibility_layout)],
         immediate_size: 0,
     });
-    let create = |edge: bool, depth: bool, visibility: bool| {
+    let material_attributes = wgpu::vertex_attr_array![6=>Float32x3,7=>Unorm8x4];
+    let create = |edge: bool, depth: bool, visibility: bool, material: bool| {
         let attributes = if edge {
             wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x3,3=>Float32x3,4=>Float32x3,5=>Float32x3,6=>Float32x3,7=>Float32x3,8=>Float32x3,9=>Float32x3,10=>Unorm8x4,11=>Float32,12=>Uint32x4,13=>Uint32x2].to_vec()
         } else {
             wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x3,2=>Float32x3,3=>Unorm8x4,4=>Uint32,5=>Uint32x2]
                 .to_vec()
         };
+        let mut buffers = vec![Some(wgpu::VertexBufferLayout {
+            array_stride: if edge { std::mem::size_of::<EdgeInstance>() }
+                else { std::mem::size_of::<FaceVertex>() } as u64,
+            step_mode: if edge { wgpu::VertexStepMode::Instance } else { wgpu::VertexStepMode::Vertex },
+            attributes: &attributes,
+        })];
+        if material {
+            buffers.push(Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<SurfaceVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &material_attributes,
+            }));
+        }
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Resident viewport geometry"),
             layout: Some(if visibility { &pipeline_layout } else { &edge_layout }),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some(if edge { "edge_vertex" } else { "face_vertex" }),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: if edge {
-                        std::mem::size_of::<EdgeInstance>()
-                    } else {
-                        std::mem::size_of::<FaceVertex>()
-                    } as u64,
-                    step_mode: if edge {
-                        wgpu::VertexStepMode::Instance
-                    } else {
-                        wgpu::VertexStepMode::Vertex
-                    },
-                    attributes: &attributes,
-                })],
+                entry_point: Some(if edge { "edge_vertex" }
+                    else if material { "material_vertex" }
+                    else { "face_vertex" }),
+                buffers: &buffers,
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -1006,6 +1110,8 @@ pub(super) fn install(
                     "edge_depth"
                 } else if edge {
                     "edge_color"
+                } else if material {
+                    "material_color"
                 } else {
                     "face_color"
                 }),
@@ -1042,13 +1148,14 @@ pub(super) fn install(
         })
     };
     renderer.callback_resources.insert(Pipelines {
-        face: create(false, false, false),
+        face: create(false, false, false, false),
+        material: create(false, false, false, true),
         marker: markers::pipeline(device, &shader, &pipeline_layout, format),
         shadow: shadows::pipeline(device, &shader, &pipeline_layout),
         unshadowed: shadows::target(device, 1).faces,
-        visibility: create(false, false, true),
-        edge_depth: create(true, true, false),
-        edge: create(true, false, false),
+        visibility: create(false, false, true, false),
+        edge_depth: create(true, true, false, false),
+        edge: create(true, false, false, false),
         layout,
         visibility_layout,
         srgb: format.is_srgb(),
@@ -1072,6 +1179,13 @@ impl egui_wgpu::CallbackTrait for Draw {
         for geometry in &geometries {
             geometry.gpu.get_or_init(|| GeometryBuffers {
                 visibility: Mutex::new(None),
+                materials: (!geometry.materials.is_empty()).then(|| upload(
+                    device, queue, &wgpu::util::BufferInitDescriptor {
+                        label: Some("Resident procedural face attributes"),
+                        contents: bytemuck::cast_slice(&geometry.materials),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    },
+                )),
                 markers: upload(device, queue, &wgpu::util::BufferInitDescriptor {
                     label: Some("Resident endpoint handles"),
                     contents: bytemuck::cast_slice(&geometry.markers),
@@ -1296,11 +1410,17 @@ impl egui_wgpu::CallbackTrait for Draw {
         let geometries: Vec<_> = std::iter::once(&self.geometry)
             .chain(self.overlay.iter())
             .collect();
-        pass.set_pipeline(&pipelines.face);
         pass.set_bind_group(1, &draw.visibility_bind, &[]);
         for (geometry, layer) in geometries.iter().zip(&draw.layers) {
+            let buffers = geometry.gpu.get().unwrap();
+            if let Some(materials) = &buffers.materials {
+                pass.set_pipeline(&pipelines.material);
+                pass.set_vertex_buffer(1, materials.slice(..));
+            } else {
+                pass.set_pipeline(&pipelines.face);
+            }
             pass.set_bind_group(0, &layer.bind, &[]);
-            pass.set_vertex_buffer(0, geometry.gpu.get().unwrap().faces.slice(..));
+            pass.set_vertex_buffer(0, buffers.faces.slice(..));
             pass.draw(0..geometry.faces.len() as u32, 0..1);
         }
         for (pipeline, reference_pipeline) in [
@@ -1381,13 +1501,9 @@ mod tests {
     // translation path without requiring a browser or GPU adapter.
     #[cfg(target_os = "linux")]
     #[test]
-    fn resident_shader_translates_to_webgl2() {
+    fn viewport_shaders_translate_to_webgl2() {
         use wgpu::naga::{back::glsl, front::wgsl, valid};
 
-        let module = wgsl::parse_str(include_str!("resident_scene.wgsl")).unwrap();
-        let info = valid::Validator::new(Default::default(), Default::default())
-            .validate(&module)
-            .unwrap();
         let options = glsl::Options {
             version: glsl::Version::Embedded {
                 version: 300,
@@ -1395,23 +1511,31 @@ mod tests {
             },
             ..Default::default()
         };
-        for entry in &module.entry_points {
-            let pipeline = glsl::PipelineOptions {
-                shader_stage: entry.stage,
-                entry_point: entry.name.clone(),
-                multiview: None,
-            };
-            let mut source = String::new();
-            glsl::Writer::new(
-                &mut source,
-                &module,
-                &info,
-                &options,
-                &pipeline,
-                Default::default(),
-            )
-            .and_then(|mut writer| writer.write())
-            .unwrap_or_else(|error| panic!("WebGL2 entry point {}: {error}", entry.name));
+        let shared = include_str!("surface_appearance.wgsl");
+        for shader in [include_str!("resident_scene.wgsl"), include_str!("edges.wgsl")] {
+            let source = format!("{shared}\n{shader}");
+            let module = wgsl::parse_str(&source).unwrap();
+            let info = valid::Validator::new(Default::default(), Default::default())
+                .validate(&module)
+                .unwrap();
+            for entry in &module.entry_points {
+                let pipeline = glsl::PipelineOptions {
+                    shader_stage: entry.stage,
+                    entry_point: entry.name.clone(),
+                    multiview: None,
+                };
+                let mut source = String::new();
+                glsl::Writer::new(
+                    &mut source,
+                    &module,
+                    &info,
+                    &options,
+                    &pipeline,
+                    Default::default(),
+                )
+                .and_then(|mut writer| writer.write())
+                .unwrap_or_else(|error| panic!("WebGL2 entry point {}: {error}", entry.name));
+            }
         }
     }
 
@@ -1468,6 +1592,7 @@ mod tests {
                 grain_direction: false,
                 ..Default::default()
             },
+            surface_catalog: None,
             dark: false,
             tool: benchup_core::Tool::Orbit,
             selected: Default::default(),
@@ -1475,6 +1600,45 @@ mod tests {
             outliner_hover: Default::default(),
             erasing: Default::default(),
         }
+    }
+
+    #[test]
+    fn finish_preview_updates_only_stock_faces_and_stays_resident_during_selection() {
+        let ctx = egui::Context::default();
+        let mut model = model(1025);
+        let face = *model.faces.keys().next().unwrap();
+        let part = model.make_object(&[face].into_iter().collect(), false, "Board").unwrap();
+        model.objects.get_mut(&part).unwrap().stock_material_id =
+            Some(benchup_core::MaterialId::new_v4());
+        let face = model.objects[&part].entities.iter().copied()
+            .find(|id| model.faces.contains_key(id)).unwrap();
+        let mut faces = FaceCache::default();
+        faces.update(&model);
+        let mut entities = EntityCache::default();
+        entities.update(&model);
+        let mut cache = SceneCache::default();
+        let mut key = key();
+        let mut recipe = benchup_core::surface_treatment::Settings::default();
+        key.surface_catalog = Some(Arc::new(Catalog::from_defaults_for_test(&recipe)));
+        let render = |key: &SceneKey, cache: &mut SceneCache| {
+            let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
+                cache.prepare_resident(key, &model, &faces, &entities, ui);
+            });
+        };
+        render(&key, &mut cache);
+        assert!(!cache.resident.geometry.as_ref().unwrap().materials.is_empty());
+        recipe.stain.enabled = true;
+        key.surface_catalog = Some(Arc::new(Catalog::from_defaults_for_test(&recipe)));
+        render(&key, &mut cache);
+        let overlay = Arc::clone(cache.resident.overlay.as_ref().unwrap());
+        assert_eq!(cache.resident.removed, std::collections::BTreeSet::from([face]));
+        assert_eq!(overlay.faces.len(), 3);
+        assert_eq!(overlay.materials.len(), 3);
+        key.selected.insert(part);
+        key.camera.yaw += 0.5;
+        render(&key, &mut cache);
+        assert_eq!(cache.resident.builds, 1);
+        assert!(Arc::ptr_eq(cache.resident.overlay.as_ref().unwrap(), &overlay));
     }
 
     #[test]
@@ -1638,6 +1802,153 @@ mod tests {
     }
 
     #[test]
+    fn routed_selection_retains_original_gpu_line_and_exactly_two_original_handles() {
+        use std::collections::BTreeSet;
+        let mut stock = Model::default();
+        let points = [DVec3::ZERO, DVec3::X, DVec3::X + DVec3::Y, DVec3::Y];
+        for i in 0..4 { stock.add_edge(points[i], points[(i + 1) % 4]).unwrap(); }
+        let face = *stock.faces.keys().next().unwrap();
+        stock.push_pull(face, 0.1).unwrap();
+        let board = stock.make_object(&stock.root_entities(), false, "Board").unwrap();
+        let edge = *stock.edges.keys().next().unwrap();
+        stock.routes.insert(edge, benchup_core::router::Settings {
+            profile: benchup_core::router::Profile::Roundover, ..Default::default()
+        });
+        stock.paste_entities(&model(1024), DVec3::splat(10.));
+        let evaluated = stock.evaluate_joinery();
+        assert!(evaluated.errors.is_empty(), "{:?}", evaluated.errors);
+        let model = evaluated.model;
+        let mut faces = FaceCache::default(); faces.update(&model);
+        let mut entities = EntityCache::default(); entities.update(&model);
+        let mut key = key();
+        key.selected = model.routing_appearance.selection_entities(&BTreeSet::from([edge]));
+        let ctx = egui::Context::default();
+        let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
+            assert!(supported(&key, &model, &faces));
+            let mut cache = SceneCache::default();
+            cache.prepare_resident(&key, &model, &faces, &entities, ui);
+            let geometry = cache.resident.geometry.as_ref().unwrap();
+            let hierarchy = cache.resident.hierarchy.as_ref().unwrap();
+            let control_slot = hierarchy.slot(edge);
+            assert_ne!(control_slot, 0);
+            let mut appearance = appearance::Cache::default();
+            let state = hierarchy.update(&mut appearance, &key, &BTreeSet::new());
+            let controls: Vec<_> = geometry.edges.iter().filter(|e| e.width == -2.).collect();
+            assert_eq!(controls.len(), 1);
+            assert_eq!(controls[0].interaction[1], control_slot);
+            let markers: Vec<_> = geometry.markers.iter().filter(|marker| marker.edges.iter().any(|&slot|
+                slot != 0 && state[slot as usize] & appearance::SELECTED != 0)).collect();
+            assert_eq!(markers.len(), 2, "generated profile endpoints must not become handles");
+            for (marker, point) in markers.iter().zip(model.routing_appearance.edge_controls[&edge].points) {
+                let world = DVec3::from_array(marker.position.map(f64::from)) + geometry.origin;
+                assert!(world.distance(point) < 1e-5);
+            }
+            let builds = cache.resident.builds;
+            key.selected.clear();
+            cache.prepare_resident(&key, &model, &faces, &entities, ui);
+            key.selected.insert(board);
+            cache.prepare_resident(&key, &model, &faces, &entities, ui);
+            assert_eq!(cache.resident.builds, builds, "selection must reuse the GPU buffers");
+            let state = cache.resident.hierarchy.as_ref().unwrap()
+                .update(&mut appearance, &key, &BTreeSet::new());
+            assert_eq!(state[control_slot as usize] & appearance::SELECTED, 0,
+                "selecting the board must not reveal the source edge controls");
+            assert!(!cache.resident.geometry.as_ref().unwrap().markers.iter().any(|marker|
+                marker.edges.iter().any(|&slot| slot != 0 && state[slot as usize] & appearance::SELECTED != 0)));
+        });
+    }
+
+    #[test]
+    fn routed_loose_and_grouped_stock_show_only_editable_gpu_endpoints() {
+        use std::collections::BTreeSet;
+        for grouped in [false, true] {
+            let mut stock: Model = serde_json::from_str(include_str!(
+                "../../benchup-core/tests/fixtures/cove-split-box.json"
+            ))
+            .unwrap();
+            if grouped {
+                let group = stock
+                    .make_object(&stock.root_entities(), false, "Routed box")
+                    .unwrap();
+                stock.edit_context = Some(group);
+            }
+            let selected = stock.selectable_entities();
+            let evaluated = stock.evaluate_joinery();
+            assert!(evaluated.errors.is_empty(), "{:?}", evaluated.errors);
+            let filler = model(1024);
+            let mut model = evaluated.model;
+            model.edit_context = None;
+            model.paste_entities(&filler, DVec3::splat(30.));
+            model.edit_context = stock.edit_context;
+            let mut faces = FaceCache::default();
+            faces.update(&model);
+            let mut entities = EntityCache::default();
+            entities.update(&model);
+            let mut key = key();
+            key.edit_context = stock.edit_context;
+            key.selected = model.routing_appearance.selection_entities(&selected);
+            let ctx = egui::Context::default();
+            let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
+                assert!(supported(&key, &model, &faces));
+                let mut cache = SceneCache::default();
+                cache.prepare_resident(&key, &model, &faces, &entities, ui);
+                let geometry = cache.resident.geometry.as_ref().unwrap();
+                let hierarchy = cache.resident.hierarchy.as_ref().unwrap();
+                let mut appearance = appearance::Cache::default();
+                let state = hierarchy.update(&mut appearance, &key, &BTreeSet::new());
+                let visible = |marker: &&MarkerInstance, state: &[u32]| {
+                    marker
+                        .edges
+                        .iter()
+                        .any(|&slot| slot != 0 && state[slot as usize] & appearance::SELECTED != 0)
+                };
+                let handles: Vec<_> = geometry
+                    .markers
+                    .iter()
+                    .filter(|m| visible(m, &state))
+                    .collect();
+                assert_eq!(handles.len(), stock.edges.len() * 2);
+                for marker in handles {
+                    let world = DVec3::from_array(marker.position.map(f64::from)) + geometry.origin;
+                    assert!(
+                        stock
+                            .vertices
+                            .values()
+                            .any(|v| v.position.distance(world) < 1e-5),
+                        "a generated cutter vertex must not become an editable handle: {world:?}"
+                    );
+                }
+                let edge = *model
+                    .routing_appearance
+                    .stock_edge_controls
+                    .keys()
+                    .next()
+                    .unwrap();
+                key.selected = model
+                    .routing_appearance
+                    .selection_entities(&BTreeSet::from([edge]));
+                let builds = cache.resident.builds;
+                cache.prepare_resident(&key, &model, &faces, &entities, ui);
+                assert_eq!(
+                    cache.resident.builds, builds,
+                    "selection must reuse GPU buffers"
+                );
+                let hierarchy = cache.resident.hierarchy.as_ref().unwrap();
+                let state = hierarchy.update(&mut appearance, &key, &BTreeSet::new());
+                let geometry = cache.resident.geometry.as_ref().unwrap();
+                assert_eq!(
+                    geometry
+                        .markers
+                        .iter()
+                        .filter(|m| visible(m, &state))
+                        .count(),
+                    2
+                );
+            });
+        }
+    }
+
+    #[test]
     fn appearance_inherits_selection_hover_locks_and_nested_scopes() {
         use appearance::{ACTIVE, ERASING, HOVERED, LOCKED, OUTLINER, REMOVED, SELECTED};
         use std::collections::BTreeSet;
@@ -1736,6 +2047,55 @@ mod tests {
                     .all(|face| face.face_id == face.interaction[1])
             );
         });
+    }
+
+    #[test]
+    fn glue_frame_edits_refresh_cached_and_retained_coordinates_without_retriangulating() {
+        let mut source = model(1);
+        let owner = source.make_object(&source.root_entities(), false, "Part").unwrap();
+        let id = *source.faces.keys().next().unwrap();
+        assert!(source.glue_face(id));
+        let mut faces = FaceCache::default();
+        faces.update(&source);
+        let point = source.vertices[&source.faces[&id].vertices[1]].position;
+        let initial = faces.get(id).glue.as_ref().unwrap().material.coordinates(point);
+        let triangles = faces.get(id).triangles.as_ptr();
+        let mut rotated = source.clone();
+        rotated.objects.get_mut(&owner).unwrap().transform = Some(benchup_core::InstanceTransform {
+            basis: glam::DMat3::from_rotation_z(std::f64::consts::FRAC_PI_2),
+            ..Default::default()
+        });
+        assert_eq!(edited_geometry(&source, &rotated).unwrap(), std::collections::BTreeSet::from([id]));
+        faces.update(&rotated);
+        assert_eq!(faces.get(id).triangles.as_ptr(), triangles);
+        assert_ne!(faces.get(id).glue.as_ref().unwrap().material.coordinates(point), initial);
+        faces.update(&source);
+        assert_eq!(faces.get(id).glue.as_ref().unwrap().material.coordinates(point), initial);
+    }
+
+    #[test]
+    fn wood_glue_updates_only_the_coated_face_in_a_retained_scene() {
+        let source = model(1024);
+        let mut coated = source.clone();
+        let id = *coated.faces.keys().next().unwrap();
+        assert!(coated.glue_face(id));
+        let dirty = edited_geometry(&source, &coated).unwrap();
+        assert_eq!(dirty, std::collections::BTreeSet::from([id]));
+        let mut faces = FaceCache::default();
+        faces.update(&source);
+        faces.update(&coated);
+        let mut entities = EntityCache::default();
+        entities.update(&coated);
+        let ctx = egui::Context::default();
+        let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
+            let hierarchy = appearance::Hierarchy::new(&coated, &entities, &faces);
+            let mesh = Geometry::subset(&key(), &coated, &faces, &entities, ui, &hierarchy, Some(&dirty), None);
+            assert_eq!(mesh.faces.len(), 3);
+            assert!(mesh.materials.iter().all(|vertex| vertex.finish == [255, 255, 255, 0]));
+            assert_eq!(mesh.materials.len(), 3);
+        });
+        faces.update(&source);
+        assert!(faces.get(id).glue.is_none());
     }
 
     #[test]

@@ -700,6 +700,14 @@ impl Model {
                     && next.face_contains(face, cap_point, true)
             })
             .or_else(|| result_faces.last().copied());
+        next.transfer_glue_from(self, &ids, result_faces.iter().copied());
+        if let Some(cap) = cap {
+            let mut polygons = self.glued_polygons(face_id);
+            for point in polygons.iter_mut().flatten() {
+                *point += delta;
+            }
+            next.transfer_glue(cap, &polygons);
+        }
         // Keep the cap last, matching ordinary extrusions and viewport selection.
         // A cut consuming the whole body has no remaining face to select.
         let cap = cap
@@ -710,6 +718,9 @@ impl Model {
                 next.faces.insert(cap, face);
                 if let Some(color) = next.face_colors.remove(&id) {
                     next.face_colors.insert(cap, color);
+                }
+                if let Some(coverage) = next.wood_glue.remove(&id) {
+                    next.wood_glue.insert(cap, coverage);
                 }
                 if let Some(tag) = next.entity_tags.remove(&id) {
                     next.entity_tags.insert(cap, tag);
@@ -849,6 +860,16 @@ impl Model {
             next.raw_face(ring.clone(), vec![], color);
         }
         let cap = next.raw_face(rings[walls].clone(), rings[walls + 1..].to_vec(), color);
+        if !keep_starting_face && self.wood_glue.contains_key(&face_id) {
+            // A Push/Pull without a retained starting surface moves its
+            // coating to the cap. The extrusion walls are new stock.
+            next.wood_glue.remove(&face_id);
+            let mut polygons = self.glued_polygons(face_id);
+            for point in polygons.iter_mut().flatten() {
+                *point += delta;
+            }
+            next.transfer_glue(cap, &polygons);
+        }
         next.validate()?;
         *self = next;
         Ok(cap)
@@ -908,6 +929,13 @@ impl Model {
         }
         next.face_colors.retain(|id, _| next.faces.contains_key(id));
         next.reference_images.retain(|id, _| next.faces.contains_key(id));
+        if self.wood_glue.contains_key(&face_id) {
+            let polygons = self.glued_polygons(face_id);
+            let new: Vec<_> = next.faces.keys().filter(|id| !old_faces.contains(id)).copied().collect();
+            for id in new {
+                next.transfer_glue(id, &polygons);
+            }
+        }
         if let Some(color) = color {
             for id in next.faces.keys().filter(|id| !old_faces.contains(id)) {
                 next.face_colors.insert(*id, color);

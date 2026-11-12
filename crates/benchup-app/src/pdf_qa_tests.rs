@@ -38,11 +38,14 @@ fn all_pdf_exports_use_the_standard_header_and_keep_content_below_it() {
             material_id: None,
             dimensions: [190, 1400, 8500],
             rectangular: true,
+            grain: Default::default(),
+            joinery: Default::default(),
             parts: (0..32)
                 .map(|i| format!("Shelf {} / Bookcase", i + 1))
                 .collect(),
         }],
         skipped: 0,
+        joinery_omitted: false,
     };
     let cutting = plan.pdf(name, false, true);
     let labels = plan.workshop_labels_pdf(name, false).unwrap();

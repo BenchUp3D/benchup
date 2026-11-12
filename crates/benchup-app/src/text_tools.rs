@@ -13,6 +13,13 @@ pub(super) struct TextEditor {
 impl BenchUpApp {
     pub(super) fn update_text_pointer(&mut self, pos: Pos2) {
         self.prepare_picking();
+        self.picking_cache.prepare_snapping(
+            &self.doc.model,
+            &self.face_cache,
+            &self.entity_cache,
+            &self.doc.camera,
+            dv(self.viewport.size()),
+        );
         let start = self
             .measurement
             .as_ref()

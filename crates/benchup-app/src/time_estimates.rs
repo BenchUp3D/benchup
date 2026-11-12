@@ -1,8 +1,8 @@
-//! Stock, finishing, and whole-project joinery estimates.
+//! Stock, finishing, whole-project joinery and routing estimates.
 use benchup_core::tr;
 use super::*;
 use crate::inspector_table::{Column, InspectorTable, product_cell_text};
-use benchup_core::{Model, surface_treatment::Task};
+use benchup_core::{Model, router::Profile, surface_treatment::Task};
 use benchup_core::{connections::ConnectionOperation, joinery::JointKind};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -73,6 +73,81 @@ impl JoineryRates {
     }
 }
 
+pub(super) const ROUTER_SECTION_KEY: &str = "time_estimates_router";
+
+/// Editable planning allowances, rather than a machine feed-rate guarantee.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(super) struct RouterRates {
+    pub setup_minutes: f64,
+    pub minutes_per_meter: f64,
+}
+
+impl Default for RouterRates {
+    fn default() -> Self {
+        Self {
+            setup_minutes: 5.,
+            minutes_per_meter: 1.,
+        }
+    }
+}
+
+impl RouterRates {
+    pub(super) fn sanitize(&mut self) {
+        let defaults = Self::default();
+        if !self.setup_minutes.is_finite() || self.setup_minutes < 0. {
+            self.setup_minutes = defaults.setup_minutes;
+        }
+        if !self.minutes_per_meter.is_finite() || self.minutes_per_meter < 0. {
+            self.minutes_per_meter = defaults.minutes_per_meter;
+        }
+    }
+}
+
+struct RouterRow {
+    profile: Profile,
+    count: usize,
+    meters: f64,
+}
+
+impl RouterRow {
+    fn work_minutes(&self, rates: &RouterRates) -> f64 {
+        rates.setup_minutes + self.meters * rates.minutes_per_meter
+    }
+}
+
+fn router_rows(model: &Model) -> Vec<RouterRow> {
+    let mut totals = BTreeMap::<u8, (usize, f64)>::new();
+    // Count source paths once. Tessellation, copies used for rendering and
+    // selection must never multiply the machining allowance.
+    for (&id, settings) in &model.routes {
+        if settings.profile == Profile::None {
+            continue;
+        }
+        let Some(edge) = model.edges.get(&id) else {
+            continue;
+        };
+        let meters = model.edge_length(edge);
+        if !meters.is_finite() || meters <= 0. {
+            continue;
+        }
+        let total = totals.entry(settings.profile as u8).or_default();
+        total.0 += 1;
+        total.1 += meters;
+    }
+    Profile::ALL
+        .into_iter()
+        .filter_map(|profile| {
+            let &(count, meters) = totals.get(&(profile as u8))?;
+            Some(RouterRow {
+                profile,
+                count,
+                meters,
+            })
+        })
+        .collect()
+}
+
 struct JoineryRow {
     kind: JointKind,
     count: usize,
@@ -89,10 +164,14 @@ struct TimeBreakdown {
     finishing: Vec<(Task, Duration, usize)>,
     joinery: [JoineryRow; JointKind::ALL.len()],
     joinery_work: f64,
+    router: Vec<RouterRow>,
+    router_work: f64,
     duration: Duration,
 }
 
 impl TimeBreakdown {
+    fn has_routes(&self) -> bool { !self.router.is_empty() }
+
     fn has_joints(&self) -> bool {
         self.joinery.iter().any(|row| row.count > 0)
     }
@@ -105,6 +184,7 @@ impl TimeBreakdown {
 #[derive(Default)]
 pub(super) struct EstimateCache {
     source: Option<(Model, BTreeSet<u64>)>,
+    glue_area: Option<f64>,
     area: Option<(WoodMaterials, std::collections::BTreeMap<u64, f64>)>,
     materials: Option<(
         crate::cutting_layout::Settings,
@@ -121,11 +201,11 @@ struct MaterialEstimate {
 
 impl EstimateCache {
     fn validate(&mut self, model: &Model, selected: &BTreeSet<u64>) {
-        if self
-            .source
-            .as_ref()
-            .is_none_or(|(source, selection)| source != model || selection != selected)
-        {
+        let model_changed = self.source.as_ref().is_none_or(|(source, _)| source != model);
+        if model_changed {
+            self.glue_area = None;
+        }
+        if model_changed || self.source.as_ref().is_some_and(|(_, selection)| selection != selected) {
             self.source = Some((model.clone(), selected.clone()));
             self.area = None;
             self.materials = None;
@@ -155,12 +235,30 @@ impl EstimateCache {
         self.area.as_ref().unwrap().1.values().sum()
     }
 
+    fn glue_area(&mut self, model: &Model, selected: &BTreeSet<u64>) -> f64 {
+        self.validate(model, selected);
+        *self.glue_area.get_or_insert_with(|| {
+            if model.wood_glue.is_empty() {
+                return 0.;
+            }
+            let machined = !model.routes.is_empty() || model.connections.values().any(|connection| {
+                matches!(connection.operation, benchup_core::connections::ConnectionOperation::Joinery(_))
+            });
+            if machined {
+                model.evaluate_joinery().model.wood_glue_area()
+            } else {
+                model.wood_glue_area()
+            }
+        })
+    }
+
     fn materials(
         &mut self,
         model: &Model,
         selected: &BTreeSet<u64>,
         layout: crate::cutting_layout::Settings,
     ) -> &Result<MaterialEstimate, String> {
+        let layout = crate::cutting_layout::Settings { show_joinery: false, ..layout };
         self.validate(model, selected);
         if self
             .materials
@@ -173,7 +271,7 @@ impl EstimateCache {
             }
             self.materials = Some((
                 layout,
-                crate::cutting_plan::CuttingPlan::collect_assigned(model, selected).map(|plan| {
+                crate::cutting_plan::CuttingPlan::collect_assigned(model, selected, layout).map(|plan| {
                     MaterialEstimate {
                         requirements: plan.material_requirements(layout),
                         skipped: plan.skipped,
@@ -249,6 +347,15 @@ fn apply_treatment_changes(target: &mut Settings, before: &Settings, after: &Set
             drying_hours,
             final_drying_hours
         );
+        if before.appearance.tint != after.appearance.tint {
+            target.appearance.tint = after.appearance.tint;
+        }
+        if before.appearance.strength != after.appearance.strength {
+            target.appearance.strength = after.appearance.strength;
+        }
+        if before.appearance.sheen != after.appearance.sheen {
+            target.appearance.sheen = after.appearance.sheen;
+        }
     }
     target.sanitize();
     // Match by grit rather than position: mixed selections may have different
@@ -292,6 +399,26 @@ fn apply_treatment_changes(target: &mut Settings, before: &Settings, after: &Set
                 .push(after.sanding_after_varnish[i]);
         }
     }
+    // A reorder changes only the relative order of passes in the edited
+    // recipe. Keep the positions of extra passes in other selected objects.
+    if before.sanding_grits != after.sanding_grits
+        && before.sanding_grits.len() == after.sanding_grits.len()
+        && before.sanding_grits.iter().all(|grit| after.sanding_grits.contains(grit))
+    {
+        let order: std::collections::BTreeMap<_, _> = after.sanding_grits.iter()
+            .enumerate().map(|(i, &grit)| (grit, i)).collect();
+        let slots: Vec<_> = target.sanding_grits.iter().enumerate()
+            .filter_map(|(i, grit)| order.contains_key(grit).then_some(i)).collect();
+        let mut passes: Vec<_> = slots.iter().map(|&i| (
+            target.sanding_grits[i], target.sanding[i].clone(), target.sanding_after_varnish[i],
+        )).collect();
+        passes.sort_by_key(|(grit, _, _)| order[grit]);
+        for (i, (grit, step, between)) in slots.into_iter().zip(passes) {
+            target.sanding_grits[i] = grit;
+            target.sanding[i] = step;
+            target.sanding_after_varnish[i] = between;
+        }
+    }
     step(&mut target.pre_stain, &before.pre_stain, &after.pre_stain);
     step(&mut target.stain, &before.stain, &after.stain);
     step(&mut target.varnish, &before.varnish, &after.varnish);
@@ -329,6 +456,7 @@ fn time_breakdown(
     areas: &BTreeMap<u64, f64>,
     settings: &Settings,
     rates: &JoineryRates,
+    router_rates: &RouterRates,
 ) -> TimeBreakdown {
     let mut counts = BTreeMap::new();
     // The persisted relation is the unit of work, even if it has multiple cuts
@@ -344,10 +472,12 @@ fn time_breakdown(
         minutes_per_joint: rates.minutes(kind),
     });
     let joinery_work = joinery.iter().map(JoineryRow::work_minutes).sum();
+    let router = router_rows(model);
+    let router_work = router.iter().map(|row| row.work_minutes(router_rates)).sum::<f64>();
     let finishing = object_tasks(model, areas, settings);
     let duration = finishing.iter().fold(
         Duration {
-            work: joinery_work,
+            work: joinery_work + router_work,
             wait: 0.,
         },
         |total, (_, task, _)| Duration {
@@ -359,6 +489,8 @@ fn time_breakdown(
         finishing,
         joinery,
         joinery_work,
+        router,
+        router_work,
         duration,
     }
 }
@@ -517,6 +649,15 @@ fn finishing_cost_rows(
     }
 }
 
+fn glue_area_value(area: f64) -> String {
+    let value = if area > 0. && area < 0.0001 {
+        format!("{area:.2e}")
+    } else {
+        format!("{area:.4}")
+    };
+    tr!("wood_glue.area_m2", value = value)
+}
+
 fn format_minutes(minutes: f64) -> String {
     // Keep fractional-minute work visible without inflating the total of zero steps.
     if !minutes.is_finite() || minutes >= u64::MAX as f64 {
@@ -589,6 +730,89 @@ fn joinery_controls(ui: &mut egui::Ui, rows: &[JoineryRow], rates: &mut JoineryR
     );
 }
 
+fn router_controls(
+    ui: &mut egui::Ui,
+    rows: &[RouterRow],
+    rates: &mut RouterRates,
+    units: &benchup_core::UnitSettings,
+) {
+    sidebar::inspector_section(
+        ui,
+        tr!("time_estimates.router_whole_project"),
+        ROUTER_SECTION_KEY,
+        false,
+        |ui| {
+            ui.text_weak(tr!("time_estimates.router_scope"));
+            for (id, label, minutes) in [
+                (
+                    "router_setup",
+                    tr!("time_estimates.router_setup"),
+                    &mut rates.setup_minutes,
+                ),
+                (
+                    "router_rate",
+                    tr!("time_estimates.router_rate"),
+                    &mut rates.minutes_per_meter,
+                ),
+            ] {
+                if crate::inspector_table::inspector_field(ui, id, label, |ui| {
+                    ui.add_sized(
+                        [ui.available_width(), ui.spacing().interact_size.y],
+                        egui::DragValue::new(minutes)
+                            .range(0. ..=f64::MAX)
+                            .speed(0.1),
+                    )
+                })
+                .changed()
+                {
+                    ui.ctx().request_repaint();
+                }
+            }
+            let mut table = InspectorTable::new(
+                ui.available_width(),
+                [
+                    Column::flex(0.32),
+                    Column::flex(0.14),
+                    Column::flex(0.27),
+                    Column::flex(0.27),
+                ],
+            )
+            .striped();
+            table.header(
+                ui,
+                [
+                    tr!("router.profile"),
+                    tr!("time_estimates.count"),
+                    tr!("app.length"),
+                    tr!("time_estimates.hands_on"),
+                ],
+            );
+            for row in rows {
+                table.row(ui, row.profile as u8, |column, ui| {
+                    ui.text_label(match column {
+                        0 => row.profile.label().to_owned(),
+                        1 => row.count.to_string(),
+                        2 => units.format_length(row.meters),
+                        _ => format_minutes(row.work_minutes(rates)),
+                    });
+                });
+            }
+            let work = rows.iter().map(|row| row.work_minutes(rates)).sum::<f64>();
+            table.row(ui, "router_total", |column, ui| {
+                ui.text_label(match column {
+                    0 => tr!("time_estimates.total").to_owned(),
+                    3 => format_minutes(work),
+                    _ => String::new(),
+                });
+            });
+            if rows.is_empty() {
+                ui.text_weak(tr!("time_estimates.router_empty"));
+            }
+            ui.text_weak(tr!("time_estimates.router_allowance"));
+        },
+    );
+}
+
 fn rate_input(ui: &mut egui::Ui, rate: &mut f64) {
     ui.add(egui::DragValue::new(rate).speed(0.5).range(0.0..=f64::MAX));
 }
@@ -610,9 +834,10 @@ fn finish_controls(
     step: &mut Step,
     products: &[finish_settings::Finish],
     filter: &mut String,
+    stage: finish_settings::FinishType,
 ) {
     sidebar::inspector_section(ui, title, key, false, |ui| {
-        ui.checkbox(&mut step.enabled, tr!("time_estimates.include_in_estimate"));
+        ui.checkbox(&mut step.enabled, tr!("finish_settings.apply_step"));
         if !step.enabled {
             return;
         }
@@ -675,6 +900,26 @@ fn finish_controls(
                 }
             });
         }
+        let product = products.iter().find(|product| Some(product.id) == step.product_id);
+        let (tint, strength, sheen) = product.map_or_else(|| stage.preset(), |p| p.visual_preset());
+        let visual = product.map_or_else(Default::default, |p| p.appearance);
+        for (row, label) in [
+            tr!("finish_settings.appearance_color"),
+            tr!("finish_settings.coat_strength"),
+            tr!("finish_settings.sheen"),
+        ].into_iter().enumerate() {
+            table.row(ui, (key, "appearance", row), |column, ui| {
+                if column == 0 {
+                    ui.text_label(label);
+                } else {
+                    match row {
+                        0 => finish_settings::tint_input(ui, &mut step.appearance.tint, visual.tint.or(tint)),
+                        1 => finish_settings::strength_input(ui, &mut step.appearance.strength, visual.strength.unwrap_or(strength)),
+                        _ => finish_settings::sheen_input(ui, &mut step.appearance.sheen, visual.sheen.unwrap_or(sheen)),
+                    }
+                }
+            });
+        }
     });
 }
 
@@ -707,6 +952,7 @@ pub(super) fn treatment_controls(
     sidebar::inspector_section(ui, tr!("time_estimates.sanding"), keys[0], false, |ui| {
         settings.sanitize();
         let mut remove = None;
+        let mut swap = None;
         for i in 0..settings.sanding_grits.len() {
             let mut grit = settings.sanding_grits[i];
             let alias = format!("{}/grit/{grit}", keys[0]);
@@ -716,7 +962,7 @@ pub(super) fn treatment_controls(
                 &tr!("time_estimates.grit_2", grit = grit),
                 &section_key,
                 |ui| {
-                    ui.checkbox(&mut settings.sanding[i].enabled, tr!("time_estimates.include_in_estimate"));
+                    ui.checkbox(&mut settings.sanding[i].enabled, tr!("finish_settings.apply_step"));
                     let mut table = InspectorTable::new(
                         ui.available_width(),
                         [Column::flex(0.4), Column::flex(0.6)],
@@ -752,6 +998,18 @@ pub(super) fn treatment_controls(
                         }
                     });
                     }
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(i > 0, egui::Button::new("↑"))
+                            .on_hover_text(tr!("finish_settings.move_sanding_up")).clicked()
+                        {
+                            swap = Some((i, i - 1));
+                        }
+                        if ui.add_enabled(i + 1 < settings.sanding_grits.len(), egui::Button::new("↓"))
+                            .on_hover_text(tr!("finish_settings.move_sanding_down")).clicked()
+                        {
+                            swap = Some((i, i + 1));
+                        }
+                    });
                 },
             ) {
                 remove = Some(i);
@@ -776,6 +1034,10 @@ pub(super) fn treatment_controls(
             settings.sanding_grits.remove(i);
             settings.sanding.remove(i);
             settings.sanding_after_varnish.remove(i);
+        } else if let Some((i, j)) = swap {
+            settings.sanding_grits.swap(i, j);
+            settings.sanding.swap(i, j);
+            settings.sanding_after_varnish.swap(i, j);
         }
         if ui
             .add_sized(
@@ -815,15 +1077,16 @@ pub(super) fn treatment_controls(
     ui.add_space(8.);
     sidebar::inspector_section(ui, tr!("time_estimates.finishing"), keys[1], false, |ui| {
         let wait = tr!("time_estimates.wait_per_coat");
-        for (title, wait_label, key, step) in [
+        for (title, wait_label, key, step, stage) in [
             (
                 tr!("time_estimates.pre_stain"),
                 tr!("time_estimates.soak_per_coat"),
                 keys[2],
                 &mut settings.pre_stain,
+                finish_settings::FinishType::PreStain,
             ),
-            (tr!("time_estimates.stain"), wait, keys[3], &mut settings.stain),
-            (tr!("time_estimates.varnish"), wait, keys[4], &mut settings.varnish),
+            (tr!("time_estimates.stain"), wait, keys[3], &mut settings.stain, finish_settings::FinishType::Stain),
+            (tr!("time_estimates.varnish"), wait, keys[4], &mut settings.varnish, finish_settings::FinishType::Varnish),
         ] {
             finish_controls(
                 ui,
@@ -833,8 +1096,10 @@ pub(super) fn treatment_controls(
                 step,
                 products,
                 filters.entry(key.into()).or_default(),
+                stage,
             );
         }
+        ui.text_weak(tr!("finish_settings.viewport_preview_help"));
     });
     ui.add_space(8.);
     settings.sanitize();
@@ -850,6 +1115,8 @@ pub(super) struct PdfInput {
     display: benchup_core::DisplaySettings,
     settings: Settings,
     joinery_rates: JoineryRates,
+    #[serde(default)]
+    router_rates: RouterRates,
     stock: stock_settings::Settings,
     layout: crate::cutting_layout::Settings,
 }
@@ -862,6 +1129,7 @@ impl PdfInput {
         app.selected = self.selected;
         app.time_estimates = self.settings;
         app.joinery_rates = self.joinery_rates;
+        app.router_rates = self.router_rates;
         app.general_settings.stock = self.stock;
         app.project.cutting_plan_layout = self.layout;
         crate::estimate_pdf::render(&app.time_estimate_report())
@@ -882,6 +1150,7 @@ impl BenchUpApp {
             name: self.doc.name.clone(), model: self.document_model.shared(),
             selected: self.selected.clone(), display: self.doc.display.clone(),
             settings: self.time_estimates.clone(), joinery_rates: self.joinery_rates.clone(),
+            router_rates: self.router_rates,
             stock: self.general_settings.stock.clone(), layout: self.project.cutting_plan_layout,
         }
     }
@@ -899,6 +1168,7 @@ impl BenchUpApp {
             areas,
             &self.time_estimates,
             &self.joinery_rates,
+            &self.router_rates,
         );
         let finishes = finishing_costs(
             &self.doc.model,
@@ -923,6 +1193,9 @@ impl BenchUpApp {
                     ]
                 })
                 .into_iter()
+                .chain(time.has_routes().then(|| [
+                    tr!("time_estimates.router_task").into(), format_minutes(time.router_work), format_minutes(0.),
+                ]))
                 .chain(time.finishing.iter().map(|(task, duration, count)| {
                     [
                         tr!("time_estimates.objects", count = *count, title = task.label()),
@@ -953,6 +1226,10 @@ impl BenchUpApp {
         };
         report.notes.push(tr!("time_estimates.wood_surfaces_finishing_applies_only_to_objects_assigned",
             self.doc.display.units.format_area(area), if self.selected.is_empty() { tr!("time_estimates.visible") } else { tr!("time_estimates.selected") }));
+        if time.has_routes() {
+            report.notes.push(tr!("time_estimates.router_report_note",
+                setup = self.router_rates.setup_minutes, rate = self.router_rates.minutes_per_meter));
+        }
         report.notes.push(tr!(
             "time_estimates.joinery_whole_project_3",
             JOINERY_SCOPE = joinery_scope(),
@@ -1070,6 +1347,9 @@ impl BenchUpApp {
                 report.costs.push(group);
             }
         }
+        report.notes.push(tr!("wood_glue.estimate_note", area = glue_area_value(
+            self.estimate_cache.glue_area(&self.doc.model, &self.selected)
+        )));
         if area <= 0. {
             report.notes.push(
                 tr!("time_estimates.no_visible_surfaces_with_assigned_wood_materials_in").into(),
@@ -1319,14 +1599,7 @@ impl BenchUpApp {
         // Unassigned imported assemblies have no wood treatment to display.
         // Avoid constructing a parent entry for every piece of mesh geometry.
         if self.doc.model.objects.values().all(|object| object.stock_material_id.is_none() && object.stock_material.is_none()) {return;}
-        let wood: WoodMaterials = self
-            .general_settings
-            .stock
-            .wood
-            .iter()
-            .map(|stock| (stock.id, stock.definition()))
-            .collect();
-        let parents = self
+        let parents: std::collections::BTreeMap<_, _> = self
             .doc
             .model
             .objects
@@ -1339,7 +1612,13 @@ impl BenchUpApp {
             .expand_entities(&self.selected)
             .into_iter()
             .filter(|id| self.doc.model.objects.contains_key(id))
-            .filter(|id| object_has_wood_material(&self.doc.model, *id, &parents, &wood))
+            .filter(|&id| {
+                std::iter::successors(Some(id), |id| parents.get(id).copied()).any(|id| {
+                    self.doc.model.objects.get(&id).is_some_and(|object| {
+                        object.stock_material_id.is_some() || object.stock_material.is_some()
+                    })
+                })
+            })
             .collect();
         let Some(first) = objects.first() else {
             return;
@@ -1427,6 +1706,7 @@ impl BenchUpApp {
             &self.estimate_cache.area.as_ref().unwrap().1,
             &self.time_estimates,
             &self.joinery_rates,
+            &self.router_rates,
         );
         if self.doc.model.connections.is_empty()
             && self.doc.model.edges.is_empty()
@@ -1437,6 +1717,7 @@ impl BenchUpApp {
                 tr!("time_estimates.draw_or_import_parts_to_estimate_time_and")).show(ui);
             ui.add_space(8.);
             joinery_controls(ui, &time.joinery, &mut self.joinery_rates);
+            router_controls(ui, &time.router, &mut self.router_rates, &self.doc.display.units);
             return;
         }
         let finish_costs = finishing_costs(
@@ -1501,6 +1782,12 @@ impl BenchUpApp {
                 "wait",
                 tr!("time_estimates.drying_waiting"),
                 format_minutes(duration.wait),
+                colors.muted,
+            ),
+            (
+                "wood_glue",
+                tr!("wood_glue.estimate_label"),
+                glue_area_value(self.estimate_cache.glue_area(&self.doc.model, &self.selected)),
                 colors.muted,
             ),
         ] {
@@ -1573,15 +1860,15 @@ impl BenchUpApp {
             .inner_margin(10)
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                if area <= 0. {
+                if area <= 0. && !time.has_joints() && !time.has_routes() {
                     crate::empty_state::EmptyState::new(tr!("time_estimates.no_surfaces_to_estimate"),
                         if self.selected.is_empty() { tr!("time_estimates.no_visible_surfaces_with_assigned_wood_materials") }
                         else { tr!("time_estimates.select_faces_or_groups_with_assigned_wood_materials") }).show(ui);
-                } else if time.finishing.is_empty() {
+                } else if time.finishing.is_empty() && !time.has_joints() && !time.has_routes() {
                     crate::empty_state::EmptyState::new(tr!("time_estimates.no_finishing_tasks"),
                         tr!("time_estimates.choose_sanding_grits_or_finishes_for_objects_in")).show(ui);
                 }
-                if time.has_joints() || !time.finishing.is_empty() {
+                if time.has_joints() || time.has_routes() || !time.finishing.is_empty() {
                     ui.text_label(
                         RichText::new(tr!("time_estimates.sequential_total"))
                             .small()
@@ -1607,6 +1894,12 @@ impl BenchUpApp {
                             "-".into(),
                         ];
                         table.row(ui, "joinery_total", |column, ui| {
+                            ui.text_label(RichText::new(&values[column]).small());
+                        });
+                    }
+                    if time.has_routes() {
+                        let values = [tr!("time_estimates.router_task").to_owned(), format_minutes(time.router_work), "-".into()];
+                        table.row(ui, "router_total", |column, ui| {
                             ui.text_label(RichText::new(&values[column]).small());
                         });
                     }
@@ -1661,6 +1954,7 @@ impl BenchUpApp {
         self.material_cost_estimate_contents(ui);
         ui.add_space(8.);
         joinery_controls(ui, &time.joinery, &mut self.joinery_rates);
+        router_controls(ui, &time.router, &mut self.router_rates, &self.doc.display.units);
     }
 }
 

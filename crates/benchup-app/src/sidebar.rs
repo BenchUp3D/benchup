@@ -22,12 +22,37 @@ const ORDER_PREFERENCE_KEY: &str = "benchup.inspector-order.v1";
 const PREFERENCE_KEY: &str = "benchup.inspector.v1";
 const OUTLINER_SEARCH_ID: &str = "outliner_search";
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) enum OrbitOrigin {
+    #[default]
+    VisibleModel,
+    Selection,
+    World,
+    View,
+    Focused,
+}
+
+impl OrbitOrigin {
+    pub(super) const ALL: [Self; 5] = [Self::VisibleModel, Self::Selection, Self::World, Self::View, Self::Focused];
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::VisibleModel => "Visible model center",
+            Self::Selection => "Selection center",
+            Self::World => "World origin",
+            Self::View => "View center",
+            Self::Focused => "Focused",
+        }
+    }
+}
+
 // Persist the whole settings object: new DisplaySettings fields automatically
 // participate, while serde defaults keep older preferences compatible.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(super) struct InspectorPreferences {
     joinery: joinery::Preferences,
+    router: router::Preferences,
     fasteners: fasteners::Preferences,
     sharing: sharing::Preferences,
     account_open: bool,
@@ -43,10 +68,14 @@ pub(super) struct InspectorPreferences {
     paint_color: [u8; 3],
     paint_target: PaintTarget,
     tools: ToolPreferences,
+    orbit_origin: OrbitOrigin,
+    tool_rail_order: Vec<Tool>,
+    tool_rail_order_revision: u32,
     snapping: Option<SnappingPreferences>,
     cutting_plan: CuttingPlanPreferences,
     time_estimates: time_estimates::Settings,
     joinery_rates: time_estimates::JoineryRates,
+    router_rates: time_estimates::RouterRates,
     finish_product_filters: std::collections::BTreeMap<String, String>,
     stock_material_filter: String,
     wood_type_filters: std::collections::BTreeMap<String, String>,
@@ -68,6 +97,7 @@ impl Default for InspectorPreferences {
     fn default() -> Self {
         Self {
             joinery: Default::default(),
+            router: Default::default(),
             fasteners: Default::default(),
             sharing: Default::default(),
             account_open: false,
@@ -83,10 +113,14 @@ impl Default for InspectorPreferences {
             paint_color: [195, 96, 67],
             paint_target: PaintTarget::default(),
             tools: ToolPreferences::default(),
+            orbit_origin: OrbitOrigin::default(),
+            tool_rail_order: Tool::RAIL.to_vec(),
+            tool_rail_order_revision: 0,
             snapping: None,
             cutting_plan: CuttingPlanPreferences::default(),
             time_estimates: Default::default(),
             joinery_rates: Default::default(),
+            router_rates: Default::default(),
             finish_product_filters: Default::default(),
             stock_material_filter: String::new(),
             wood_type_filters: Default::default(),
@@ -137,6 +171,48 @@ mod guide_preference_tests {
         fn set_string(&mut self, key: &str, value: String) { self.values.insert(key.into(), value); }
         fn remove_string(&mut self, key: &str) { self.values.remove(key); }
         fn flush(&mut self) { self.flushed = true; }
+    }
+
+    #[test]
+    fn tool_rail_order_defaults_normalizes_and_persists_without_model_edits() {
+        let legacy: InspectorPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.tool_rail_order, Tool::RAIL.to_vec());
+        let normalized = normalized_tool_rail_order(&[Tool::Move, Tool::Move, Tool::Circle]);
+        assert_eq!(normalized[0], Tool::Move);
+        assert_eq!(normalized.len(), Tool::RAIL.len());
+        assert!(!normalized.contains(&Tool::Circle));
+        let ctx = egui::Context::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        let mut storage = Storage::default();
+        app.reorder_rail_tool(Tool::Move, 0);
+        assert_eq!(app.tool_rail_order[0], Tool::Move);
+        app.reorder_rail_tool(Tool::Move, Tool::RAIL.len());
+        assert_eq!(app.tool_rail_order.last(), Some(&Tool::Move));
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        assert!(storage.flushed);
+        assert!(!app.project.modified);
+        assert!(app.dirty_since.is_none());
+        let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        assert_eq!(restored.tool_rail_order, app.tool_rail_order);
+    }
+
+    #[test]
+    fn router_and_glue_move_to_bottom_once_and_remain_reorderable() {
+        let ctx = egui::Context::default();
+        let mut storage = Storage::default();
+        let mut legacy = InspectorPreferences::default();
+        legacy.tool_rail_order = Tool::RAIL.iter().rev().copied().collect();
+        eframe::set_value(&mut storage, PREFERENCE_KEY, &legacy);
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        app.restore_inspector_preferences(&ctx, Some(&storage));
+        assert_eq!(&app.tool_rail_order[app.tool_rail_order.len() - 2..], &[Tool::Router, Tool::WoodGlue]);
+        app.reorder_rail_tool(Tool::Router, 0);
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        assert_eq!(restored.tool_rail_order[0], Tool::Router);
+        assert!(!restored.project.modified);
     }
 
     #[test]
@@ -678,6 +754,13 @@ impl BenchUpApp {
         self.general_settings.normalize();
         benchup_core::i18n::set_language(&self.general_settings.language);
         preferences.tools.restore(self);
+        self.orbit_origin = preferences.orbit_origin;
+        self.tool_rail_order = normalized_tool_rail_order(&preferences.tool_rail_order);
+        // Apply the new bottom placement once, preserving subsequent user reordering.
+        if preferences.tool_rail_order_revision < 1 {
+            self.tool_rail_order.retain(|tool| !matches!(tool, Tool::Router | Tool::WoodGlue));
+            self.tool_rail_order.extend([Tool::Router, Tool::WoodGlue]);
+        }
         self.project.recent = preferences.recent_projects.clone();
         self.project.recent.truncate(10);
         self.project.import_format =
@@ -688,6 +771,12 @@ impl BenchUpApp {
             };
         self.joinery = preferences.joinery.clone();
         self.joinery.sanitize();
+        self.router = preferences.router;
+        // Tool restoration must honor the saved Properties/Router disclosures.
+        self.router_editor.reveal = false;
+        if !self.router.settings.valid() {
+            self.router.settings = Default::default();
+        }
         self.fasteners = preferences.fasteners.clone();
         self.fasteners.sanitize();
         self.project.export_stl = preferences.export_stl;
@@ -695,6 +784,8 @@ impl BenchUpApp {
         self.time_estimates.sanitize();
         self.joinery_rates = preferences.joinery_rates.clone();
         self.joinery_rates.sanitize();
+        self.router_rates = preferences.router_rates;
+        self.router_rates.sanitize();
         self.finish_product_filters = preferences.finish_product_filters.clone();
         self.stock_material_filter = preferences.stock_material_filter.clone();
         self.wood_type_filters = preferences.wood_type_filters.clone();
@@ -778,6 +869,7 @@ impl BenchUpApp {
     fn current_inspector_preferences(&self, ctx: &egui::Context) -> InspectorPreferences {
         InspectorPreferences {
             joinery: self.joinery.clone(),
+            router: self.router,
             fasteners: self.fasteners.clone(),
             sharing: self.sharing.preferences.clone(),
             account_open: self.account.open,
@@ -798,6 +890,9 @@ impl BenchUpApp {
             paint_color: self.paint_color,
             paint_target: self.paint_target,
             tools: ToolPreferences::capture(self),
+            orbit_origin: self.orbit_origin,
+            tool_rail_order: self.tool_rail_order.clone(),
+            tool_rail_order_revision: 1,
             snapping: Some(SnappingPreferences {
                 geometry: true,
                 edges: self.doc.snap_to_geometry && self.snap_to_edge,
@@ -813,6 +908,7 @@ impl BenchUpApp {
             },
             time_estimates: self.time_estimates.clone(),
             joinery_rates: self.joinery_rates.clone(),
+            router_rates: self.router_rates,
             finish_product_filters: self.finish_product_filters.clone(),
             stock_material_filter: self.stock_material_filter.clone(),
             wood_type_filters: self.wood_type_filters.clone(),
@@ -958,6 +1054,150 @@ mod preference_tests {
         let mut old=InspectorSection::ALL.to_vec();old.insert(2,InspectorSection::Fasteners);
         eframe::set_value(&mut storage,ORDER_PREFERENCE_KEY,&old);
         assert_eq!(restore_order(Some(&storage)),InspectorSection::ALL);
+    }
+
+    #[test]
+    fn router_preferences_save_without_model_edits_and_default_for_older_projects() {
+        let old: InspectorPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.router, router::Preferences::default());
+        let old_display: DisplaySettings = serde_json::from_str("{}").unwrap();
+        assert!(old_display.router_preview);
+        let ctx = egui::Context::default();
+        let mut storage = SavedPreferences::default();
+        let mut model = Model::default();
+        let edge = model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+        let mut app = BenchUpApp::with_document(Document { model, ..Default::default() }, None, true);
+        app.selected.insert(edge);
+        app.set_tool(Tool::Router);
+        app.router.settings = benchup_core::router::Settings {
+            profile: benchup_core::router::Profile::Chamfer,
+            width: 0.008,
+            depth: 0.004,
+            offset: 0.003,
+            angle_degrees: 26.,
+            reverse: true,
+        };
+        // Select the new profile card through the UI, then save immediately
+        // without any model edit or framework autosave.
+        use crate::test_ui::ContextExt as _;
+        app.reveal_router_properties(&ctx);
+        let input = |events| egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(640., 1200.))),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_test_ui(input(vec![]), |ui| app.router_properties(ui));
+        let output = ctx.run_test_ui(input(vec![]), |ui| app.router_properties(ui));
+        fn find_text(shape: &egui::Shape, label: &str) -> Option<Pos2> {
+            match shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| find_text(shape, label)),
+                _ => None,
+            }
+        }
+        for retired in [
+            "Close Router",
+            "Apply routing",
+            "Live preview",
+            "Use selected edges",
+        ] {
+            assert!(
+                output
+                    .shapes
+                    .iter()
+                    .all(|shape| find_text(&shape.shape, retired).is_none())
+            );
+        }
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| find_text(&shape.shape, benchup_core::router::Profile::None.label()))
+            .expect("None profile card");
+        for pressed in [true, false] {
+            let _ = ctx.run_test_ui(
+                input(vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]),
+                |ui| app.router_properties(ui),
+            );
+        }
+        assert_eq!(
+            app.router.settings.profile,
+            benchup_core::router::Profile::None
+        );
+        app.doc.display.router_preview = false;
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        assert_eq!(restored.router, app.router);
+        assert_eq!(restored.tool, Tool::Router);
+        assert!(!restored.doc.display.router_preview);
+        assert!(restored.doc.model.routes.is_empty());
+        assert!(!restored.project.modified);
+    }
+
+    #[test]
+    fn router_first_launch_is_collapsed_with_none_selected() {
+        let ctx = egui::Context::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        app.restore_inspector_preferences(&ctx, None);
+        assert_eq!(
+            app.router.settings.profile,
+            benchup_core::router::Profile::None
+        );
+        let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
+            inspector_section(ui, "Properties", "entity_info", true, |ui| {
+                app.router_properties(ui)
+            });
+        });
+        assert!(!app.current_inspector_preferences(&ctx).sections.get("router").copied().unwrap_or(false));
+        let edge = app.doc.model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+        app.selected.insert(edge);
+        let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| app.router_properties(ui));
+        assert!(!app.current_inspector_preferences(&ctx).sections["router"]);
+        assert!(app.doc.model.routes.is_empty());
+        assert!(!app.project.modified);
+    }
+
+    #[test]
+    fn nested_router_disclosure_restores_without_model_edits_or_reopening_on_startup() {
+        let legacy: InspectorPreferences = serde_json::from_str(r#"{"router":{"open":true}}"#).unwrap();
+        assert_eq!(legacy.router, router::Preferences::default());
+        for (properties_open, router_open) in [(true, false), (true, true), (false, false)] {
+            let ctx = egui::Context::default();
+            let mut storage = SavedPreferences::default();
+            let mut app = BenchUpApp::with_document(Document::default(), None, true);
+            app.set_tool(Tool::Router);
+            app.reveal_router_properties(&ctx);
+            set_section_open(&ctx, "entity_info", properties_open);
+            set_section_open(&ctx, "router", router_open);
+            let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
+                inspector_section(ui, "Properties", "entity_info", true, |ui| {
+                    app.router_properties(ui)
+                });
+            });
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(!app.project.modified);
+            assert!(app.doc.history.is_empty());
+            let restored_ctx = egui::Context::default();
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&restored_ctx, Some(&storage));
+            // Rendering the normal inspector cannot force saved disclosures open.
+            restored.reveal_router_properties(&restored_ctx);
+            let preferences = restored.current_inspector_preferences(&restored_ctx);
+            assert_eq!(preferences.sections["entity_info"], properties_open);
+            assert_eq!(preferences.sections["router"], router_open);
+            assert_eq!(restored.tool, Tool::Router);
+            assert!(!restored.project.modified);
+        }
     }
 
     #[test]
@@ -1318,6 +1558,38 @@ mod preference_tests {
                 .get("modal_positions")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn export_scales_survive_reload_without_a_model_edit() {
+        let ctx = egui::Context::default();
+        let mut storage = SavedPreferences::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        app.general_settings.section = settings::Section::ExportScales;
+        let scales = &mut app.general_settings.export_scale;
+        scales.presets[0].name = "Workshop miniature".into();
+        scales.presets[0].model = 20.;
+        scales.presets.pop();
+        scales.choice = export_scale::Choice::Preset(scales.presets[0].id);
+        scales.custom_output = "2.5".into();
+        scales.custom_model = "7".into();
+        let expected = scales.clone();
+        storage.flushed = false;
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        assert!(storage.flushed);
+        assert!(!app.project.modified);
+        assert!(app.dirty_since.is_none());
+        let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        assert_eq!(restored.general_settings.export_scale, expected);
+        assert_eq!(restored.general_settings.section, settings::Section::ExportScales);
+        app.general_settings.export_scale.choice = export_scale::Choice::Custom;
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        assert_eq!(restored.general_settings.export_scale.factor(), Some(2.5 / 7.));
+        let old: InspectorPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.general.export_scale, export_scale::Preferences::default());
     }
 
     #[test]
@@ -1921,6 +2193,27 @@ mod preference_tests {
     }
 
     #[test]
+    fn face_side_lengths_restore_without_model_edits_and_default_off() {
+        let old: DisplaySettings = serde_json::from_str("{}").unwrap();
+        assert!(!old.face_side_lengths);
+        let ctx = egui::Context::default();
+        let mut storage = SavedPreferences::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        for enabled in [false, true] {
+            app.doc.display.face_side_lengths = enabled;
+            storage.flushed = false;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&ctx, Some(&storage));
+            assert_eq!(restored.doc.display.face_side_lengths, enabled);
+            restored.new_model(&ctx);
+            assert_eq!(restored.doc.display.face_side_lengths, enabled);
+        }
+    }
+
+    #[test]
     fn grain_direction_visibility_and_tool_restore_without_model_edits() {
         let old: DisplaySettings = serde_json::from_str("{}").unwrap();
         assert!(old.grain_direction);
@@ -2167,7 +2460,7 @@ mod preference_tests {
 
     #[test]
     fn each_additional_option_saves_independently_without_a_model_edit() {
-        let options: [(&str, fn(&mut BenchUpApp)); 16] = [
+        let options: [(&str, fn(&mut BenchUpApp)); 18] = [
             ("face center snapping", |app| app.snap_to_face_center = false),
             ("axis snapping", |app| app.doc.snap_to_axes = false),
             ("edge snapping", |app| app.snap_to_edge = false),
@@ -2182,6 +2475,12 @@ mod preference_tests {
             ("shortcut filter", |app| app.shortcut_filter = "Move".into()),
             ("stock rotation", |app| {
                 app.project.cutting_plan_layout.allow_rotation = false
+            }),
+            ("wood grain direction", |app| {
+                app.project.cutting_plan_layout.respect_grain = false
+            }),
+            ("show wood joinery", |app| {
+                app.project.cutting_plan_layout.show_joinery = false
             }),
             ("sheet width", |app| {
                 app.project.cutting_plan_layout.sheet_width_mm = 600.
@@ -2325,6 +2624,8 @@ mod preference_tests {
             assert!(preferences.shortcut_filter.is_empty());
             assert!(preferences.cutting_plan.selection.is_none());
             assert!(preferences.cutting_plan.layout.validate().is_ok());
+            assert!(preferences.cutting_plan.layout.respect_grain);
+            assert!(preferences.cutting_plan.layout.show_joinery);
             let mut storage = SavedPreferences::default();
             eframe::set_value(&mut storage, PREFERENCE_KEY, &preferences);
             let mut doc = Document::default();
@@ -2399,6 +2700,22 @@ mod preference_tests {
         let defaults: InspectorPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(defaults.tools.active, Tool::Select);
         assert_eq!(defaults.tools.axis_lock, None);
+    }
+
+    #[test]
+    fn arc_tool_choice_saves_immediately_without_a_model_edit() {
+        let ctx = egui::Context::default();
+        let mut storage = SavedPreferences::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        app.set_tool(Tool::Arc);
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        assert!(storage.flushed);
+        assert!(!app.project.modified);
+        let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+        restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+        assert_eq!(restored.tool, Tool::Arc);
+        assert_eq!(restored.drawing_tool, Tool::Arc);
+        assert!(restored.drawing.is_none());
     }
 
     #[test]
@@ -2692,6 +3009,7 @@ mod preference_tests {
             length_mm: 2438.4,
             price: 8.25,
             wood_type: Default::default(),
+            appearance_color: None,
         });
         set_section_open(&ctx, "settings/stock/wood", false);
         app.doc.display.grid_auto_size = false;
@@ -3081,6 +3399,12 @@ mod preference_tests {
         app.general_settings.stock.finishes[1].name = "White paint".into();
         app.general_settings.stock.finishes[1].price = 30.;
         app.general_settings.stock.finishes[1].coverage_m2_per_container = Some(12.5);
+        app.general_settings.stock.finishes[0].appearance.strength = Some(38);
+        app.general_settings.stock.finishes[1].appearance.tint = Some([237, 230, 215]);
+        app.general_settings.stock.finishes[1].appearance.sheen =
+            Some(benchup_core::surface_treatment::Sheen::Satin);
+        app.time_estimates.varnish.appearance.sheen =
+            Some(benchup_core::surface_treatment::Sheen::Matte);
         set_section_open(&ctx, "settings/stock/finishes", false);
         storage.flushed = false;
         app.persist_inspector_changes(&ctx, Some(&mut storage), false);
@@ -3092,6 +3416,7 @@ mod preference_tests {
         let mut restored = BenchUpApp::with_document(Document::default(), None, true);
         restored.restore_inspector_preferences(&restored_ctx, Some(&storage));
         assert_eq!(restored.general_settings, app.general_settings);
+        assert_eq!(restored.time_estimates, app.time_estimates);
         let _ = restored_ctx.run_test_ui(Default::default(), |ui| {
             assert_eq!(
                 restored_header_open(ui, "settings/stock/finishes", true),
@@ -3224,6 +3549,48 @@ mod preference_tests {
     fn older_general_preferences_keep_defaults() {
         let preferences: InspectorPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(preferences.general, settings::GeneralSettings::default());
+    }
+
+    #[test]
+    fn orbit_origin_defaults_and_saves_without_model_edit() {
+        let legacy: InspectorPreferences = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.orbit_origin, OrbitOrigin::VisibleModel);
+        let ctx = egui::Context::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        let mut storage = SavedPreferences::default();
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        for origin in OrbitOrigin::ALL.into_iter().rev() {
+            storage.flushed = false;
+            app.orbit_origin = origin;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+            assert_eq!(restored.orbit_origin, origin);
+        }
+    }
+
+    #[test]
+    fn move_wireframe_defaults_off_and_persists_without_model_edit() {
+        let legacy: DisplaySettings = serde_json::from_str("{}").unwrap();
+        assert!(!legacy.move_wireframe);
+        let ctx = egui::Context::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        assert!(!app.doc.display.move_wireframe);
+        let mut storage = SavedPreferences::default();
+        app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+        for enabled in [true, false] {
+            storage.flushed = false;
+            app.doc.display.move_wireframe = enabled;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            let restored_ctx = egui::Context::default();
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&restored_ctx, Some(&storage));
+            assert_eq!(restored.doc.display.move_wireframe, enabled);
+        }
     }
 
     #[test]
@@ -3443,6 +3810,7 @@ mod preference_tests {
             step.minutes_per_m2 = 7. + i as f64;
         }
         app.time_estimates.sanding_after_varnish = vec![false, true, false, true, false, true];
+        app.router_rates = time_estimates::RouterRates { setup_minutes: 3.5, minutes_per_meter: 2.25 };
         app.joinery_rates.set_minutes(JointKind::Dovetail, 31.5);
         app.joinery_rates.set_minutes(JointKind::Rabbet, 0.);
         for (step, product) in [
@@ -3471,6 +3839,7 @@ mod preference_tests {
             ("time_estimates_varnish", false),
             ("time_estimates_material_cost", true),
             (time_estimates::JOINERY_SECTION_KEY, false),
+            (time_estimates::ROUTER_SECTION_KEY, true),
         ];
         for (key, open) in subsections {
             set_section_open(&ctx, key, open);
@@ -3485,6 +3854,7 @@ mod preference_tests {
         let mut restored = BenchUpApp::with_document(Document::default(), None, true);
         restored.restore_inspector_preferences(&restored_ctx, Some(&storage));
         assert_eq!(restored.time_estimates, app.time_estimates);
+        assert_eq!(restored.router_rates, app.router_rates);
         assert_eq!(restored.joinery_rates.minutes(JointKind::Dovetail), 31.5);
         assert_eq!(restored.joinery_rates.minutes(JointKind::Rabbet), 0.);
         assert_eq!(restored.joinery_rates.minutes(JointKind::HalfLap), 8.);
@@ -3512,6 +3882,7 @@ mod preference_tests {
         });
         let old: InspectorPreferences = serde_json::from_str("{}").unwrap();
         assert_eq!(old.time_estimates, time_estimates::Settings::default());
+        assert_eq!(old.router_rates, time_estimates::RouterRates::default());
         assert_eq!(
             JointKind::ALL.map(|kind| old.joinery_rates.minutes(kind)),
             [15., 8., 8., 5., 25., 15.],
@@ -5086,24 +5457,26 @@ impl BenchUpApp {
     }
 
     pub(super) fn view_menu(&mut self, ui: &mut egui::Ui) {
-        let before = self.doc.display.clone();
+        let mut before = self.doc.display.clone();
         let d = &mut self.doc.display;
-        for (value, label) in [
-            (&mut d.axes, tr!("sidebar.axes")),
-            (&mut d.grid, tr!("sidebar.grid")),
-            (&mut d.guides, tr!("sidebar.guides")),
-        ] {
-            Self::menu_checkbox(ui, value, label);
+
+        // Display modes and editing emphasis.
+        Self::menu_checkbox(ui, &mut d.x_ray, tr!("sidebar.x_ray"));
+        Self::menu_checkbox(ui, &mut d.color_by_tag, tr!("sidebar.color_by_tag"));
+        if Self::menu_checkbox(ui, &mut d.group_emphasis, tr!("sidebar.emphasize_group"))
+            .on_hover_text(tr!("sidebar.emphasize_the_group_component_currently_being_edited_and"))
+            .changed()
+        {
+            ui.ctx().request_repaint();
         }
+        Self::menu_checkbox(
+            ui,
+            &mut d.move_wireframe,
+            "Wireframe other objects while moving",
+        );
         ui.separator();
-        for (value, label) in [
-            (&mut d.group_names, tr!("sidebar.group_names")),
-            (&mut d.dimensions, tr!("sidebar.dimensions")),
-            (&mut d.wood_joinery, tr!("sidebar.wood_joinery")),
-        ] {
-            Self::menu_checkbox(ui, value, label);
-        }
-        ui.separator();
+
+        // Hidden model content.
         for (value, label) in [
             (&mut d.hidden_geometry, tr!("sidebar.hidden_geometry")),
             (&mut d.hidden_objects, tr!("sidebar.hidden_objects")),
@@ -5111,18 +5484,34 @@ impl BenchUpApp {
             Self::menu_checkbox(ui, value, label);
         }
         ui.separator();
-        Self::menu_checkbox(ui, &mut d.x_ray, tr!("sidebar.x_ray"));
-        Self::menu_checkbox(ui, &mut d.color_by_tag, tr!("sidebar.color_by_tag"));
+
+        // Model annotations and woodworking details.
+        for (value, label) in [
+            (&mut d.group_names, tr!("sidebar.group_names")),
+            (&mut d.dimensions, tr!("sidebar.dimensions")),
+            (&mut d.face_side_lengths, "Selected Edge Lengths"),
+            (&mut d.grain_direction, tr!("grain_direction.show")),
+            (&mut d.wood_joinery, tr!("sidebar.wood_joinery")),
+        ] {
+            Self::menu_checkbox(ui, value, label);
+        }
+        ui.separator();
+
+        // Construction aids.
+        for (value, label) in [
+            (&mut d.axes, tr!("sidebar.axes")),
+            (&mut d.grid, tr!("sidebar.grid")),
+            (&mut d.guides, tr!("sidebar.guides")),
+        ] {
+            Self::menu_checkbox(ui, value, label);
+        }
+
+        // These application preferences do not modify the project.
+        before.face_side_lengths = d.face_side_lengths;
+        before.grain_direction = d.grain_direction;
+        before.group_emphasis = d.group_emphasis;
         if before != self.doc.display {
             self.changed(ui.ctx());
-        }
-        Self::menu_checkbox(ui, &mut self.doc.display.grain_direction, tr!("grain_direction.show"));
-        // Group emphasis is an application preference and does not modify the project.
-        if Self::menu_checkbox(ui, &mut self.doc.display.group_emphasis, tr!("sidebar.emphasize_group"))
-            .on_hover_text(tr!("sidebar.emphasize_the_group_component_currently_being_edited_and"))
-            .changed()
-        {
-            ui.ctx().request_repaint();
         }
         ui.separator();
         self.sections_menu(ui);
@@ -5321,4 +5710,15 @@ mod face_center_preference_tests {
         let older:SnappingPreferences=serde_json::from_str(r#"{"geometry":true,"faces":false}"#).unwrap();
         assert!(older.face_centers);
     }
+}
+
+// Preserve saved slots, remove duplicates, and append tools added by newer versions.
+pub(super) fn normalized_tool_rail_order(saved: &[Tool]) -> Vec<Tool> {
+    let mut order = Vec::with_capacity(Tool::RAIL.len());
+    for &tool in saved.iter().chain(Tool::RAIL.iter()) {
+        if Tool::RAIL.contains(&tool) && !order.contains(&tool) {
+            order.push(tool);
+        }
+    }
+    order
 }

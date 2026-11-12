@@ -729,8 +729,7 @@ impl BenchUpApp {
                     if let Some((_, rect, _)) = views.iter().find(|(id, _, _)| *id == owner) {
                         self.activate_viewport(owner);
                         self.viewport = *rect;
-                        self.doc.camera.zoom(scroll * self.general_settings.mouse_zoom_speed(),
-                            dv(anchor - rect.min), dv(rect.size()));
+                        self.zoom_camera_at(scroll, anchor);
                         self.changed(ctx);
                     }
                 }
@@ -778,6 +777,54 @@ impl BenchUpApp {
                     .is_some_and(|pos| rect.contains(pos))
             {
                 activate = Some(pane.selected);
+            }
+            if self.tool == Tool::Orbit {
+                egui::Area::new(egui::Id::unique(("orbit-origin-selector", pane.id)))
+                    .order(egui::Order::Foreground)
+                    .pivot(Align2::RIGHT_TOP)
+                    .fixed_pos(rect.right_top() + egui::vec2(-8., 8.))
+                    .movable(false)
+                    .show(&ctx, |ui| {
+                        egui::Frame::NONE.show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                // The selector includes an 18-point origin icon. Give both
+                                // controls the same height and center them on the row.
+                                let control_height = ui.spacing().interact_size.y.max(
+                                    ui.text_style_height(&egui::TextStyle::Button).max(18.)
+                                        + 2. * ui.spacing().button_padding.y,
+                                );
+                                ui.spacing_mut().interact_size.y = control_height;
+                                let colors = Palette::for_ui(ui);
+                                let widgets = &mut ui.style_mut().visuals.widgets;
+                                for (visuals, opacity) in [
+                                    (&mut widgets.inactive, 0.75),
+                                    (&mut widgets.hovered, 0.80),
+                                    (&mut widgets.active, 0.80),
+                                ] {
+                                    let fill = colors.paper.gamma_multiply(opacity);
+                                    visuals.bg_fill = fill;
+                                    visuals.weak_bg_fill = fill;
+                                }
+                                if ui.add(egui::Button::new("Set focus").selected(self.setting_orbit_focus)
+                                    .min_size(egui::vec2(0., control_height)))
+                                    .on_hover_text("Click a point in the viewport to set the orbit focus. Right-click to cancel. Focused uses the view center until a focus is set.")
+                                    .clicked()
+                                {
+                                    self.setting_orbit_focus = !self.setting_orbit_focus;
+                                }
+                                let icon = crate::icons::origin_atom(colors.ink);
+                                egui::ComboBox::from_id_salt("orbit-origin")
+                                    .selected_text((icon, self.orbit_origin.label()))
+                                    .show_ui(ui, |ui| {
+                                        for origin in sidebar::OrbitOrigin::ALL {
+                                            ui.selectable_value(&mut self.orbit_origin, origin, origin.label());
+                                        }
+                                    })
+                                    .response
+                                    .on_hover_text("Choose the orbit pivot. Selection center uses the visible model center when nothing is selected.");
+                            });
+                        });
+                    });
             }
             views.push((pane.selected, rect, response));
         }

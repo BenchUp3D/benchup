@@ -34,17 +34,24 @@ pub(super) struct Hierarchy {
 }
 impl Hierarchy {
     pub fn new(model: &Model, entities: &EntityCache, _faces: &FaceCache) -> Self {
-        let parents: BTreeMap<_, _> = model
+        let mut parents: BTreeMap<_, _> = model
             .objects
             .values()
             .flat_map(|o| o.entities.iter().map(|id| (*id, o.id)))
             .collect();
+        for (&id, control) in model.routing_appearance.endpoint_controls() {
+            if let Some(parent) = control.parent.filter(|id| model.objects.contains_key(id)) {
+                parents.insert(id, parent);
+            }
+        }
         let slots: BTreeMap<_, _> = model
             .objects
             .keys()
             .chain(model.faces.keys())
             .chain(model.edges.keys())
             .chain(model.dimensions.keys())
+            .chain(model.routing_appearance.edge_controls.keys().filter(|id| !model.contains_entity(*id)))
+            .chain(model.routing_appearance.stock_edge_controls.keys().filter(|id| !model.contains_entity(*id)))
             .enumerate()
             .map(|(i, id)| (*id, i as u32 + 1))
             .collect();
@@ -62,7 +69,7 @@ impl Hierarchy {
             .collect();
         let mut base = vec![0; (slots.len() + 1).div_ceil(WIDTH) * WIDTH];
         for (&id, &slot) in &slots {
-            if entities.get(id).locked {
+            if entities.get(id).locked || model.routing_appearance.endpoint_control(id).is_some_and(|c| c.locked) {
                 base[slot as usize] |= LOCKED;
             }
         }

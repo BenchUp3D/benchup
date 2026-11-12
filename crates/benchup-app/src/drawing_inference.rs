@@ -34,10 +34,9 @@ impl BenchUpApp {
             .iter()
             .copied()
             .filter(move |guide| {
-                matches!(self.tool, Tool::Line | Tool::GrainDirection)
-                    && point.is_some_and(|point| {
-                        (point - guide.origin).cross(guide.axis.vector()).length() < 1e-6
-                    })
+                point.is_some_and(|point| {
+                    (point - guide.origin).cross(guide.axis.vector()).length() < 1e-6
+                })
             })
     }
 
@@ -79,16 +78,35 @@ impl BenchUpApp {
         if matches!(base.kind, Inference::OnGuide | Inference::GuidePoint) {
             return;
         }
-        if matches!(self.tool, Tool::Line | Tool::GrainDirection)
-            && let Some(start) = self.trace_start()
+        let alignment_start = self
+            .trace_start()
+            .or_else(|| self.drawing.as_ref().map(|drawing| drawing.origin))
+            .or_else(|| {
+                self.measurement
+                    .as_ref()
+                    .filter(|measurement| !measurement.complete)?
+                    .points
+                    .first()
+                    .copied()
+            });
+        let constraint = alignment_start.and_then(|_| {
+            if self.drawing.is_some() {
+                self.shape_lock().map(AxisConstraint::Plane)
+            } else if self.tool == Tool::Dimensions {
+                None
+            } else {
+                self.axis_constraint()
+            }
+        });
         {
             let inference = benchup_core::inference::infer_axis_alignment_with_constraint(
                 &self.doc.model,
                 &self.doc.camera,
                 dv(self.viewport.size()),
                 dv(pos - self.viewport.min),
-                start,
-                self.axis_constraint(),
+                // Before the first click only world/model references apply.
+                alignment_start.unwrap_or(DVec3::ZERO),
+                constraint,
                 self.doc.snap_to_geometry && self.snap_to_edge && !self.snap_only_visible,
                 base,
                 Some(
@@ -97,7 +115,18 @@ impl BenchUpApp {
                         .snap_query(&self.face_cache, &self.entity_cache),
                 ),
             );
-            if !inference.guides.is_empty() {
+            let on_plane = self.drawing.as_ref().is_none_or(|drawing| {
+                // Soft alignment must preserve a shape's starting surface.
+                !drawing.on_surface
+                    || self.lock.is_some()
+                    || (inference.snap.point - drawing.origin)
+                        .dot(drawing.surface_normal)
+                        .abs()
+                        < 1e-6
+            }) && self.measurement_plane().is_none_or(|(origin, normal)| {
+                (inference.snap.point - origin).dot(normal).abs() < 1e-6
+            });
+            if !inference.guides.is_empty() && on_plane {
                 self.snap = Some(inference.snap);
                 self.drawing_axis_guides = inference.guides;
             }

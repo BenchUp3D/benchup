@@ -1054,3 +1054,119 @@ fn line_start_and_world_axis_guides_combine_with_object_snapping_disabled() {
             .any(|g| g.axis == Axis::Y && g.origin == DVec3::ZERO)
     );
 }
+
+#[test]
+fn first_drawing_and_measurement_points_combine_axis_guides() {
+    let target = DVec3::new(3., 4., 2.);
+    for tool in [
+        Tool::Line,
+        Tool::Rectangle,
+        Tool::Circle,
+        Tool::Polygon,
+        Tool::Freehand,
+        Tool::Image,
+        Tool::TapeMeasure,
+        Tool::Dimensions,
+        Tool::Protractor,
+    ] {
+        let mut h = Harness::new();
+        for axis in [Axis::X, Axis::Y, Axis::Z] {
+            reference(&mut h, target - axis.vector() * 3.);
+        }
+        h.app.set_tool(tool);
+        let cursor = h.at(target) + egui::vec2(2., -2.);
+        h.frame(
+            vec![egui::Event::PointerMoved(cursor)],
+            egui::Modifiers::NONE,
+        );
+        let snap = h.app.snap.unwrap();
+        assert_eq!(snap.kind, Inference::Aligned, "{tool:?}");
+        assert!(snap.point.distance(target) < 1e-7, "{tool:?}: {snap:?}");
+        assert_eq!(h.app.active_drawing_axis_guides().count(), 3, "{tool:?}");
+
+        h.app.doc.snap_to_axes = false;
+        h.app.update_pointer(cursor);
+        assert!(h.app.drawing_axis_guides.is_empty());
+        assert!(
+            h.app.snap.unwrap().point.distance(target) > 1e-4,
+            "{tool:?}"
+        );
+    }
+}
+
+#[test]
+fn shapes_combine_axis_guides_and_commit_the_snapped_preview() {
+    let target = DVec3::new(3., 4., 2.);
+    let start = DVec3::new(-4., -3., 2.);
+    for tool in [Tool::Rectangle, Tool::Circle, Tool::Polygon] {
+        let mut h = Harness::new();
+        for axis in [Axis::X, Axis::Y] {
+            reference(&mut h, target - axis.vector() * 3.);
+        }
+        reference(&mut h, start);
+        h.app.set_tool(tool);
+        h.click(h.at(start));
+        let cursor = h.at(target) + egui::vec2(2., -2.);
+        h.frame(
+            vec![egui::Event::PointerMoved(cursor)],
+            egui::Modifiers::NONE,
+        );
+        let snap = h.app.snap.unwrap();
+        assert_eq!(snap.kind, Inference::Aligned, "{tool:?}");
+        assert!(snap.point.distance(target) < 1e-7);
+        assert_eq!(h.app.active_drawing_axis_guides().count(), 2);
+        let preview = h.app.drawing_points();
+        h.click(cursor);
+        assert!(h.app.drawing.is_none());
+        assert!(
+            preview.iter().all(|point| h
+                .app
+                .doc
+                .model
+                .vertices
+                .values()
+                .any(|vertex| vertex.position.distance(*point) < 1e-7)),
+            "{tool:?}"
+        );
+        h.app.doc.model.validate().unwrap();
+    }
+}
+
+#[test]
+fn combined_shape_guides_preserve_explicit_plane_locks() {
+    let start = DVec3::new(-4., -3., 2.);
+    for (normal, key) in PLANE_LOCKS {
+        let axes: Vec<_> = [Axis::X, Axis::Y, Axis::Z]
+            .into_iter()
+            .filter(|axis| *axis != normal)
+            .collect();
+        let target = start + axes[0].vector() * 6. + axes[1].vector() * 5.;
+        let mut h = Harness::new();
+        for axis in &axes {
+            reference(&mut h, target - axis.vector() * 3.);
+            reference(&mut h, target + normal.vector() * 2. - axis.vector() * 3.);
+        }
+        reference(&mut h, start);
+        h.app.doc.camera.target = (start + target) * 0.5;
+        h.app.set_tool(Tool::Rectangle);
+        h.click(h.at(start));
+        h.key(key);
+        let cursor = h.at(target) + egui::vec2(2., -2.);
+        h.frame(
+            vec![egui::Event::PointerMoved(cursor)],
+            egui::Modifiers::NONE,
+        );
+        assert!(
+            h.app.snap.unwrap().point.distance(target) < 1e-7,
+            "{normal:?}"
+        );
+        assert_eq!(h.app.active_drawing_axis_guides().count(), 2);
+        hover(&mut h, target + normal.vector() * 2.);
+        assert!(
+            (h.app.snap.unwrap().point - start)
+                .dot(normal.vector())
+                .abs()
+                < 1e-7
+        );
+    }
+}

@@ -501,6 +501,9 @@ struct Harness {
     size: Vec2,
     maximized: bool,
 }
+
+#[path = "arc_tool_tests.rs"]
+mod arc_tool_tests;
 impl Harness {
     fn new() -> Self {
         let ctx = egui::Context::default();
@@ -863,6 +866,66 @@ fn drawing_menu_switches_tools_and_remembers_the_choice() {
 }
 
 #[test]
+fn dragging_a_rail_tool_reorders_without_activating_it() {
+    let mut h = Harness::new();
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    let start = text_position(&output, "Move") - egui::vec2(0., 12.);
+    let end = text_position(&output, "Select") - egui::vec2(0., 20.);
+    h.pointer(start, egui::PointerButton::Primary, true, false);
+    h.frame(vec![egui::Event::PointerMoved(start + egui::vec2(0., -12.))], egui::Modifiers::NONE);
+    h.frame(vec![egui::Event::PointerMoved(end)], egui::Modifiers::NONE);
+    h.pointer(end, egui::PointerButton::Primary, false, false);
+    assert_eq!(h.app.tool_rail_order[0], Tool::Move);
+    assert_eq!(h.app.tool, Tool::Select);
+    assert!(!h.app.project.modified);
+}
+
+#[test]
+fn tool_rail_flyouts_open_on_hover_without_changing_the_tool() {
+    let mut h = Harness::new();
+    for (label, option) in [
+        ("Line", Tool::Rectangle),
+        ("Dimensions", Tool::TapeMeasure),
+        ("Union", Tool::Intersect),
+    ] {
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        let rail = text_position(&output, label);
+        h.frame(vec![egui::Event::PointerMoved(rail)], egui::Modifiers::NONE);
+        let menu = h.frame(vec![], egui::Modifiers::NONE);
+        assert!(egui::Popup::is_any_open(&h.ctx));
+        assert_menu_icon(&menu, option.label());
+        assert_eq!(h.app.tool, Tool::Select);
+    }
+}
+
+#[test]
+fn tool_rail_flyouts_close_after_leaving_parent_and_menu() {
+    let mut h = Harness::new();
+    for (label, option) in [
+        ("Line", Tool::Rectangle),
+        ("Dimensions", Tool::TapeMeasure),
+        ("Union", Tool::Intersect),
+    ] {
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        let rail = text_position(&output, label);
+        h.click(rail);
+        let menu = h.frame(vec![], egui::Modifiers::NONE);
+        let item = menu_text_position(&menu, option.label());
+        h.frame(vec![egui::Event::PointerMoved(item)], egui::Modifiers::NONE);
+        assert!(egui::Popup::is_any_open(&h.ctx));
+        h.frame(vec![egui::Event::PointerMoved(rail)], egui::Modifiers::NONE);
+        assert!(egui::Popup::is_any_open(&h.ctx));
+        h.frame(vec![egui::Event::PointerMoved(egui::pos2(500., 400.))], egui::Modifiers::NONE);
+        assert!(!egui::Popup::is_any_open(&h.ctx));
+        h.click(rail);
+        assert!(egui::Popup::is_any_open(&h.ctx));
+        h.frame(vec![egui::Event::PointerGone], egui::Modifiers::NONE);
+        assert!(!egui::Popup::is_any_open(&h.ctx));
+        assert_eq!(h.app.tool, Tool::Select);
+    }
+}
+
+#[test]
 fn toolbar_order_and_measurement_flyout_defaults_and_remembers_the_choice() {
     let mut h = Harness::new();
     let output = h.frame(vec![], egui::Modifiers::NONE);
@@ -878,6 +941,8 @@ fn toolbar_order_and_measurement_flyout_defaults_and_remembers_the_choice() {
         "Paint",
         "Dimensions",
         "Union",
+        "Router",
+        "Wood Glue",
     ];
     let positions: Vec<_> = labels
         .iter()
@@ -887,7 +952,7 @@ fn toolbar_order_and_measurement_flyout_defaults_and_remembers_the_choice() {
     assert!(positions.windows(2).all(|pair| pair[0].y < pair[1].y));
     assert_eq!(h.app.measurement_tool, Tool::Dimensions);
     assert_eq!(h.app.solid_tool, Tool::Union);
-    let rail = positions[9];
+    let rail = text_position(&output, "Dimensions");
     for tool in Tool::MEASURING {
         h.click(rail);
         let menu = h.frame(vec![], egui::Modifiers::NONE);
@@ -1246,6 +1311,10 @@ fn drawing_modifier_orbits_without_mouse_buttons_and_preserves_pending_points() 
             let start = h.at(DVec3::ZERO);
             if tool != Tool::Freehand {
                 h.click(start);
+            }
+            if tool == Tool::Arc {
+                h.click(h.at(DVec3::X));
+                assert!(h.app.drawing.as_ref().unwrap().arc_end.is_some());
             }
             h.frame(
                 vec![egui::Event::PointerMoved(start)],
@@ -2690,22 +2759,32 @@ fn render_snapshots(state: eframe::egui_wgpu::RenderState, audit: bool) {
             view_formats: &[],
         });
         let depth_view = depth.create_view(&Default::default());
+        let rail_menu = match snapshot {
+            "drawing-menu" => Some(app.drawing_tool),
+            "solid-menu" => Some(app.solid_tool),
+            "measurement-menu" => Some(app.measurement_tool),
+            _ => None,
+        };
+        let rail_menu_point = rail_menu.map(|tool| {
+            time += 0.1;
+            app.dirty_since = None;
+            let output = ctx.run_test_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        Pos2::ZERO,
+                        egui::vec2(width as f32, height as f32),
+                    )),
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ui| app.ui(ui, &mut eframe::Frame::_new_kittest()),
+            );
+            text_position(&output, tool.label())
+        });
         for frame in 0..4 {
             time += 0.1;
             app.dirty_since = None; // Snapshot edits must not write a user's saved model.
-            let events = if snapshot == "drawing-menu" && frame < 2 {
-                let point = egui::pos2(38., 169.);
-                vec![
-                    egui::Event::PointerMoved(point),
-                    egui::Event::PointerButton {
-                        pos: point,
-                        button: egui::PointerButton::Primary,
-                        pressed: frame == 0,
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ]
-            } else if matches!(snapshot, "solid-menu" | "measurement-menu") && frame < 2 {
-                let point = egui::pos2(38., if snapshot == "solid-menu" { 781. } else { 713. });
+            let events = if let Some(point) = rail_menu_point.filter(|_| frame < 2) {
                 vec![
                     egui::Event::PointerMoved(point),
                     egui::Event::PointerButton {
@@ -4797,7 +4876,7 @@ fn properties_show_edge_lengths_totals_units_and_geometry_changes() {
 }
 
 #[test]
-fn properties_show_face_sides_and_include_holes_in_the_perimeter() {
+fn properties_include_holes_in_the_perimeter_without_side_lists() {
     let mut h = Harness::new();
     // A tilted square ensures lengths are measured in 3D, not projected onto XY.
     let face = properties_outline(
@@ -4824,10 +4903,10 @@ fn properties_show_face_sides_and_include_holes_in_the_perimeter() {
     let output = properties_output(&mut h);
     text_position(&output, "Perimeter");
     text_position(&output, "24.00 m");
-    text_position(&output, "Side lengths");
-    text_position(&output, "5.00 m · 5.00 m · 5.00 m · 5.00 m");
-    text_position(&output, "Hole 1 side lengths");
-    text_position(&output, "1.00 m · 1.00 m · 1.00 m · 1.00 m");
+    assert!(!output.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Text(text) if text.galley.job.text.contains("side lengths")
+            || text.galley.job.text == "Side lengths"
+    )));
     text_position(&output, "Surface area");
 }
 
@@ -5929,6 +6008,7 @@ fn materials_section_assigns_catalog_material_as_an_undoable_document_edit() {
             length_mm: 2440.,
             price: 10.,
             wood_type: Default::default(),
+            appearance_color: None,
         });
     let output = h.frame(vec![], egui::Modifiers::NONE);
     h.click(text_position(&output, "Properties"));
@@ -6798,4 +6878,488 @@ fn cancelling_an_unfinished_angle_leaves_no_dimension() {
     assert!(h.app.doc.model.dimensions.is_empty());
     assert!(h.app.doc.model.guides.is_empty());
     assert!(!h.app.project.modified);
+}
+
+#[test]
+fn wood_glue_pointer_clicks_and_automatic_selection_record_one_edit_each() {
+    let mut h = Harness::new();
+    h.app.doc.model = Model::default();
+    let board = |model: &mut Model, x: f64| {
+        let mut stock = Model::default();
+        let points = [DVec3::ZERO, DVec3::X, DVec3::X + DVec3::Y, DVec3::Y];
+        for i in 0..4 {
+            stock.add_edge(points[i], points[(i + 1) % 4]).unwrap();
+        }
+        let entities = model.paste_entities(&stock, DVec3::X * x);
+        let board = model.make_object(&entities, false, "Stock").unwrap();
+        let face = *model.objects[&board].entities.iter().find(|id| model.faces.contains_key(id)).unwrap();
+        (board, face)
+    };
+    let (a, face) = board(&mut h.app.doc.model, 0.);
+    let (b, contact_face) = board(&mut h.app.doc.model, 0.5);
+    h.app.doc.camera = Camera::default();
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    let button = text_position(&output, Tool::WoodGlue.label());
+    assert!(button.x < 76.);
+    h.click(button + egui::vec2(20., -25.));
+    assert_eq!(h.app.tool, Tool::WoodGlue);
+    let pos = h.at(DVec3::new(0.25, 0.5, 0.));
+    let initial = h.app.doc.history.position();
+    h.click(pos);
+    assert!(h.app.doc.model.wood_glue.contains_key(&face));
+    assert_eq!(h.app.doc.model.wood_glue_area(), 1.);
+    assert_eq!(h.app.doc.history.position(), initial + 1);
+    h.click(pos);
+    assert!(!h.app.doc.model.wood_glue.contains_key(&face));
+    assert_eq!(h.app.doc.model.wood_glue_area(), 0.);
+    assert_eq!(h.app.doc.history.position(), initial + 2);
+    assert_eq!(h.app.doc.history.undo_label(), Some("Remove wood glue"));
+    h.app.undo(&h.ctx, false);
+    assert_eq!(h.app.doc.model.wood_glue_area(), 1.);
+    h.app.undo(&h.ctx, true);
+    assert_eq!(h.app.doc.model.wood_glue_area(), 0.);
+    h.click(pos);
+    assert_eq!(h.app.doc.model.wood_glue_area(), 1.);
+    assert_eq!(h.app.doc.history.position(), initial + 3);
+    h.app.set_tool(Tool::Select);
+    h.app.selected = BTreeSet::from([a, b]);
+    let apply_automatic = |h: &mut Harness| {
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        h.click(text_position(&output, tr!("app.tools")));
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        h.click(menu_text_position(&output, tr!("wood_glue.automatic")));
+    };
+    apply_automatic(&mut h);
+    assert_eq!(h.app.tool, Tool::Select);
+    assert!((h.app.doc.model.wood_glue_area() - 1.0).abs() < 1e-9);
+    apply_automatic(&mut h);
+    assert_eq!(h.app.doc.history.position(), initial + 4);
+    // Clicking a face with automatic partial coverage also toggles it off,
+    // even when the pointer is outside the coated contact patch.
+    h.app.set_tool(Tool::WoodGlue);
+    h.click(h.at(DVec3::new(1.25, 0.5, 0.)));
+    assert!(!h.app.doc.model.wood_glue.contains_key(&contact_face));
+    assert_eq!(h.app.doc.model.wood_glue_area(), 1.);
+    assert_eq!(h.app.doc.history.position(), initial + 5);
+    h.app.undo(&h.ctx, false);
+    assert!((h.app.doc.model.wood_glue_area() - 1.0).abs() < 1e-9);
+    h.app.undo(&h.ctx, false);
+    assert_eq!(h.app.doc.model.wood_glue_area(), 1.);
+}
+
+#[test]
+fn router_rail_tool_routes_clicked_edges_and_reopens_existing_cuts() {
+    for grouped in [false, true] {
+        let mut h = Harness::new();
+        let mut model = Model::default();
+        let corners = [DVec3::ZERO, DVec3::X, DVec3::X + DVec3::Y, DVec3::Y];
+        for i in 0..4 {
+            model.add_edge(corners[i], corners[(i + 1) % 4]).unwrap();
+        }
+        let face = *model.faces.keys().next().unwrap();
+        let normal = benchup_core::faces::plane(&model, &model.faces[&face].vertices)
+            .unwrap()
+            .normal;
+        model.push_pull(face, 0.2 / normal.z).unwrap();
+        let board = grouped.then(|| {
+            model
+                .make_object(&model.root_entities(), false, "Stock")
+                .unwrap()
+        });
+        let edge_midpoints = [DVec3::new(0.5, 0., 0.2), DVec3::new(0., 0.5, 0.2)];
+        let edges = edge_midpoints.map(|point| {
+            model
+                .edges
+                .values()
+                .find(|edge| {
+                    let (a, b) = model.points(edge);
+                    ((a + b) * 0.5).distance(point) < 1e-8
+                })
+                .unwrap()
+                .id
+        });
+        let stock = model.vertices.clone();
+        h.app.doc.model = model;
+        h.app.inspector_width = 420.;
+        h.app.doc.camera = Camera {
+            target: DVec3::new(0.5, 0.5, 0.1),
+            distance: 3.,
+            ..Default::default()
+        };
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        let button = text_position(&output, Tool::Router.label());
+        assert!(button.x < 76.);
+        h.click(button);
+        assert_eq!(h.app.tool, Tool::Router);
+        let properties = h.frame(vec![], egui::Modifiers::NONE);
+        text_position(&properties, tr!("sidebar.properties"));
+        let initial = h.app.doc.history.position();
+        let pos = h.at(edge_midpoints[0]);
+        h.frame(vec![egui::Event::PointerMoved(pos)], egui::Modifiers::NONE);
+        assert_eq!(h.app.hover, Some(edges[0]));
+        assert_eq!(h.app.doc.history.position(), initial);
+        h.click(pos);
+        assert!(h.app.doc.model.routes.is_empty());
+        assert_eq!(h.app.doc.model.edit_context, board);
+        assert_eq!(h.app.selected, BTreeSet::from([edges[0]]));
+        assert_eq!(h.app.tool, Tool::Select);
+        assert_eq!(h.app.doc.history.position(), initial);
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        h.click(text_position(
+            &output,
+            benchup_core::router::Profile::Chamfer.label(),
+        ));
+        assert_eq!(
+            h.app.doc.model.routes[&edges[0]].profile,
+            benchup_core::router::Profile::Chamfer
+        );
+        assert_eq!(h.app.doc.history.position(), initial + 1);
+        h.click(h.at(edge_midpoints[1]));
+        assert!(!h.app.doc.model.routes.contains_key(&edges[1]));
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        let card = text_position(&output, benchup_core::router::Profile::Roundover.label());
+        let before_hover = h.app.doc.model.clone();
+        let rendered_revision = h.app.render_model.revision();
+        h.frame(vec![egui::Event::PointerMoved(card)], egui::Modifiers::NONE);
+        assert_eq!(h.app.render_model.revision(), rendered_revision);
+        assert_eq!(
+            h.app.router.settings.profile,
+            benchup_core::router::Profile::Chamfer
+        );
+        assert_eq!(h.app.doc.model, before_hover);
+        assert_eq!(h.app.doc.history.position(), initial + 1);
+        h.click(card);
+        assert_eq!(
+            h.app.doc.model.routes[&edges[1]].profile,
+            benchup_core::router::Profile::Roundover
+        );
+        assert_eq!(h.app.doc.history.position(), initial + 2);
+        let viewport = h.app.viewport.center();
+        h.frame(
+            vec![egui::Event::PointerMoved(viewport)],
+            egui::Modifiers::NONE,
+        );
+        assert_eq!(h.app.doc.model.vertices, stock);
+        h.click(h.at(edge_midpoints[0]));
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        h.click(text_position(
+            &output,
+            benchup_core::router::Profile::None.label(),
+        ));
+        assert!(!h.app.doc.model.routes.contains_key(&edges[0]));
+        assert!(h.app.doc.model.routes.contains_key(&edges[1]));
+        assert_eq!(h.app.doc.history.position(), initial + 3);
+        h.app.undo(&h.ctx, false);
+        assert_eq!(
+            h.app.doc.model.routes[&edges[0]].profile,
+            benchup_core::router::Profile::Chamfer
+        );
+        h.app.undo(&h.ctx, true);
+        assert!(!h.app.doc.model.routes.contains_key(&edges[0]));
+        assert!(h.app.doc.model.evaluate_joinery().errors.is_empty());
+        assert_eq!(h.app.doc.model.vertices, stock);
+        if let Some(board) = board {
+            assert!(h.app.doc.model.objects.contains_key(&board));
+        }
+    }
+}
+
+#[test]
+fn select_edge_reveals_router_inside_properties_for_loose_and_grouped_geometry() {
+    for grouped in [false, true] {
+        let mut h = Harness::new();
+        let mut model = Model::default();
+        let edge = model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+        let owner = if grouped {
+            model
+                .make_object(&model.root_entities(), false, "Edge group")
+                .unwrap()
+        } else {
+            edge
+        };
+        h.app.doc.model = model;
+        h.app.doc.camera = Camera {
+            target: DVec3::X * 0.5,
+            distance: 3.,
+            ..Default::default()
+        };
+        h.app.set_tool(Tool::Select);
+        h.app.inspector = false;
+        sidebar::set_section_open(&h.ctx, "entity_info", false);
+        sidebar::set_section_open(&h.ctx, "router", false);
+        h.frame(vec![], egui::Modifiers::NONE);
+        let before = h.app.doc.model.clone();
+        h.click(h.at(DVec3::X * 0.5));
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        assert_eq!(h.app.tool, Tool::Select);
+        assert!(h.app.inspector);
+        assert_eq!(h.app.selected, BTreeSet::from([owner]));
+        text_position(&output, tr!("sidebar.properties"));
+        text_position(&output, tr!("router.router"));
+        assert_eq!(h.app.doc.model, before);
+        assert!(h.app.doc.history.is_empty());
+        let _ = h.ctx.run_test_ui(egui::RawInput::default(), |ui| {
+            assert_eq!(
+                sidebar::restored_header_open(ui, "entity_info", false),
+                Some(true)
+            );
+            assert_eq!(
+                sidebar::restored_header_open(ui, "router", false),
+                Some(true)
+            );
+        });
+    }
+}
+
+
+#[test]
+fn applied_routing_keeps_visible_stock_and_cut_surfaces_selectable_and_highlighted() {
+    for grouped in [false, true] {
+        let mut h = Harness::new();
+        let mut model = Model::default();
+        let corners = [DVec3::ZERO, DVec3::X, DVec3::X + DVec3::Y, DVec3::Y];
+        for i in 0..4 {
+            model.add_edge(corners[i], corners[(i + 1) % 4]).unwrap();
+        }
+        let face = *model.faces.keys().next().unwrap();
+        let normal = benchup_core::faces::plane(&model, &model.faces[&face].vertices)
+            .unwrap()
+            .normal;
+        model.push_pull(face, 0.2 / normal.z).unwrap();
+        let edge = model
+            .edges
+            .values()
+            .find(|edge| {
+                let (a, b) = model.points(edge);
+                ((a + b) * 0.5).distance(DVec3::new(0.5, 0., 0.2)) < 1e-8
+            })
+            .unwrap()
+            .id;
+        let top = model
+            .faces
+            .values()
+            .find(|face| {
+                face.vertices
+                    .iter()
+                    .all(|id| (model.vertices[id].position.z - 0.2).abs() < 1e-8)
+            })
+            .unwrap()
+            .id;
+        let group = grouped.then(|| {
+            model
+                .make_object(&model.root_entities(), false, "Stock")
+                .unwrap()
+        });
+        model.routes.insert(
+            edge,
+            benchup_core::router::Settings {
+                profile: benchup_core::router::Profile::Roundover,
+                width: 0.08,
+                ..Default::default()
+            },
+        );
+        h.app.doc.model = model;
+        h.app.doc.camera = Camera {
+            target: DVec3::new(0.5, 0.5, 0.1),
+            distance: 3.,
+            ..Default::default()
+        };
+        h.app.set_tool(Tool::Select);
+        h.frame(vec![], egui::Modifiers::NONE);
+        let stock = h.app.doc.model.clone();
+        let inset = 0.08 * (1. - std::f64::consts::FRAC_1_SQRT_2);
+        for (point, expected) in [
+            (DVec3::new(0.5, 0.5, 0.2), group.unwrap_or(top)),
+            (DVec3::new(0.5, inset, 0.2 - inset), group.unwrap_or(edge)),
+        ] {
+            h.app.selected.clear();
+            h.time += 1.;
+            h.frame(vec![], egui::Modifiers::NONE);
+            h.click(h.at(point));
+            h.frame(vec![], egui::Modifiers::NONE);
+            assert_eq!(h.app.selected, BTreeSet::from([expected]));
+            let rendered = h.app.render_model.shared();
+            let selected = rendered.routing_appearance.selection_entities(&h.app.selected);
+            if rendered.routing_appearance.edge_controls.contains_key(&expected) {
+                assert_eq!(selected, BTreeSet::from([expected]));
+                assert!(!rendered.routing_appearance.faces.is_empty());
+            } else {
+                let visible = rendered.expand_entities(&selected);
+                assert!(visible.iter().any(|id| rendered.faces.contains_key(id)), "selection must reach visible faces");
+            }
+            assert_eq!(h.app.doc.model, stock);
+            assert!(h.app.doc.history.is_empty());
+        }
+    }
+}
+
+#[test]
+fn view_menu_toggles_selected_edge_lengths_without_model_edits() {
+    let mut h = Harness::new();
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    assert!(!h.app.doc.display.face_side_lengths);
+    h.click(text_position(&output, "View"));
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    h.click(menu_text_position(&output, "Selected Edge Lengths"));
+    assert!(h.app.doc.display.face_side_lengths);
+    assert!(!h.app.project.modified);
+    assert!(h.app.doc.history.is_empty());
+}
+
+#[test]
+fn selected_edge_lengths_appear_in_the_viewport() {
+    let mut h = Harness::new();
+    h.app.doc.display.face_side_lengths = true;
+    let face = properties_outline(&mut h.app.doc.model, &[
+        DVec3::ZERO, DVec3::X * 3., DVec3::new(3., 5., 0.), DVec3::Y * 5.,
+    ]);
+    h.app.doc.camera.set_standard_view(benchup_core::StandardView::Top);
+    h.app.fit(&h.ctx);
+    h.app.selected = BTreeSet::from([face]);
+    h.app.doc.display.units.precision.length = Some(2);
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    assert!(!output.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Text(text) if text.galley.job.text == "3.00 m"
+            || text.galley.job.text == "5.00 m"
+    )));
+    h.app.selected = h.app.doc.model.edges.keys().copied().collect();
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    text_position(&output, "3.00 m");
+    text_position(&output, "5.00 m");
+    h.app.doc.display.face_side_lengths = false;
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    assert!(!output.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Text(text) if text.galley.job.text == "3.00 m"
+            || text.galley.job.text == "5.00 m"
+    )));
+}
+
+#[test]
+fn selected_edge_length_labels_hide_behind_faces() {
+    fn contains_length(shape: &egui::Shape) -> bool {
+        match shape {
+            egui::Shape::Text(text) => text.galley.job.text == "3.00 m",
+            egui::Shape::Vec(shapes) => shapes.iter().any(contains_length),
+            _ => false,
+        }
+    }
+    for cover_height in [1., -1., 0.] {
+        let mut h = Harness::new();
+        h.app.doc.display.face_side_lengths = true;
+        let edge = h.app.doc.model.add_edge(DVec3::ZERO, DVec3::X * 3.).unwrap();
+        properties_outline(&mut h.app.doc.model, &[
+            DVec3::new(-10., -10., cover_height),
+            DVec3::new(10., -10., cover_height),
+            DVec3::new(10., 10., cover_height),
+            DVec3::new(-10., 10., cover_height),
+        ]);
+        h.app.selected = BTreeSet::from([edge]);
+        h.app.doc.camera.set_standard_view(benchup_core::StandardView::Top);
+        h.app.doc.display.units.precision.length = Some(2);
+        h.app.fit(&h.ctx);
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 800.));
+        let app = &mut h.app;
+        let output = h.ctx.run_test_ui(egui::RawInput {
+            screen_rect: Some(rect), ..Default::default()
+        }, |ui| app.paint_scene(ui, rect));
+        assert_eq!(output.shapes.iter().any(|shape| contains_length(&shape.shape)),
+            cover_height <= 0., "cover height {cover_height}");
+    }
+}
+
+#[test]
+fn orbit_origin_choices_use_current_project_and_selection() {
+    let mut h = Harness::new();
+    let edge = h.app.doc.model.add_edge(DVec3::X * 2., DVec3::X * 4.).unwrap();
+    h.app.doc.model.add_edge(DVec3::X * 10., DVec3::X * 12.).unwrap();
+    h.app.doc.camera.target = DVec3::new(20., 30., 40.);
+    h.app.orbit_origin = sidebar::OrbitOrigin::World;
+    assert_eq!(h.app.orbit_center(), DVec3::ZERO);
+    h.app.orbit_origin = sidebar::OrbitOrigin::View;
+    assert_eq!(h.app.orbit_center(), h.app.doc.camera.target);
+    h.app.orbit_origin = sidebar::OrbitOrigin::Focused;
+    assert_eq!(h.app.orbit_center(), h.app.doc.camera.target);
+    h.app.doc.orbit_focus = Some(DVec3::new(4., 5., 6.));
+    assert_eq!(h.app.orbit_center(), DVec3::new(4., 5., 6.));
+    let saved = serde_json::to_string(&h.app.doc).unwrap();
+    let restored: Document = serde_json::from_str(&saved).unwrap();
+    assert_eq!(restored.orbit_focus, h.app.doc.orbit_focus);
+    let mut legacy = serde_json::to_value(&h.app.doc).unwrap();
+    legacy.as_object_mut().unwrap().remove("orbit_focus");
+    let restored: Document = serde_json::from_value(legacy).unwrap();
+    assert_eq!(restored.orbit_focus, None);
+    assert_eq!(Document::default().orbit_focus, None);
+    h.app.orbit_origin = sidebar::OrbitOrigin::Selection;
+    assert_eq!(h.app.orbit_center(), DVec3::X * 7.);
+    h.app.selected.insert(edge);
+    assert_eq!(h.app.orbit_center(), DVec3::X * 3.);
+    h.app.orbit_origin = sidebar::OrbitOrigin::VisibleModel;
+    assert_eq!(h.app.orbit_center(), DVec3::X * 7.);
+}
+
+
+#[test]
+fn precision_routed_edge_selection_shows_only_original_endpoints() {
+    let mut h = Harness::new();
+    let mut model = Model::default();
+    let face = properties_outline(&mut model, &[DVec3::ZERO, DVec3::X, DVec3::X + DVec3::Y, DVec3::Y]);
+    let normal = benchup_core::faces::plane(&model, &model.faces[&face].vertices).unwrap().normal;
+    model.push_pull(face, 0.2 / normal.z).unwrap();
+    let edge = *model.edges.keys().next().unwrap();
+    let (a, b) = model.points(&model.edges[&edge]);
+    model.routes.insert(edge, benchup_core::router::Settings {
+        profile: benchup_core::router::Profile::Roundover, ..Default::default()
+    });
+    h.app.doc.model = model;
+    h.app.doc.display.axes = false;
+    h.app.doc.display.grid = false;
+    h.app.doc.camera = Camera { target: DVec3::new(0.5, 0.5, 0.1), distance: 3., ..Default::default() };
+    h.app.set_tool(Tool::Select);
+    h.app.selected = BTreeSet::from([edge]);
+    let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(800., 600.));
+    h.app.viewport = rect;
+    let output = h.ctx.run_test_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
+        h.app.paint_scene(ui, rect);
+    });
+    fn handles(shape: &egui::Shape, points: &mut Vec<Pos2>) {
+        match shape {
+            egui::Shape::Circle(circle) if circle.radius == 3. && circle.fill != Color32::TRANSPARENT => points.push(circle.center),
+            egui::Shape::Vec(shapes) => { for shape in shapes { handles(shape, points); } }
+            _ => {}
+        }
+    }
+    let mut points = Vec::new();
+    for shape in &output.shapes { handles(&shape.shape, &mut points); }
+    assert_eq!(points.len(), 2);
+    for (actual, source) in points.into_iter().zip([a, b]) {
+        let expected = rect.min + pv(h.app.doc.camera.project(source, dv(rect.size())).unwrap());
+        assert!(actual.distance(expected) < 0.01);
+    }
+    let rendered = h.app.render_model.shared();
+    assert!(!rendered.routing_appearance.faces.is_empty());
+    assert!(rendered.routing_appearance.faces.iter().all(|id| rendered.faces.contains_key(id)));
+}
+
+#[test]
+fn focus_picker_highlights_like_pointer_without_selecting() {
+    let mut h = Harness::new();
+    let face = properties_outline(&mut h.app.doc.model, &[
+        DVec3::new(-2., -2., 0.), DVec3::new(2., -2., 0.),
+        DVec3::new(2., 2., 0.), DVec3::new(-2., 2., 0.),
+    ]);
+    h.app.doc.camera.set_standard_view(benchup_core::StandardView::Top);
+    h.app.fit(&h.ctx);
+    let pos = h.at(DVec3::ZERO);
+    h.app.set_tool(Tool::Select);
+    h.app.update_pointer(pos);
+    let pointer_hover = h.app.hover;
+    assert_eq!(pointer_hover, Some(face));
+    h.app.set_tool(Tool::Orbit);
+    h.app.setting_orbit_focus = true;
+    h.app.update_pointer(pos);
+    assert_eq!(h.app.hover, pointer_hover);
+    assert!(h.app.selected.is_empty());
+    h.app.setting_orbit_focus = false;
+    h.app.update_pointer(pos);
+    assert_eq!(h.app.hover, None);
 }

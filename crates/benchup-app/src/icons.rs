@@ -67,6 +67,23 @@ pub fn dropdown_chevron(p: &egui::Painter, center: Pos2, color: Color32) {
     ));
 }
 
+/// A fixed pivot: center dot, target ring, and four axis ticks.
+pub fn origin_atom(color: Color32) -> egui::Atom<'static> {
+    egui::Atom::paint(egui::vec2(18., 18.), move |ui, args| {
+        origin_target(ui.painter(), args.rect.center(), color);
+    })
+}
+
+/// Shared target geometry for the orbit selector and focus cursor.
+pub fn origin_target(painter: &egui::Painter, center: Pos2, color: Color32) {
+    let stroke = Stroke::new(1.3, color);
+    painter.circle_stroke(center, 4.5, stroke);
+    painter.circle_filled(center, 1.5, color);
+    for direction in [egui::vec2(1., 0.), egui::vec2(-1., 0.), egui::vec2(0., 1.), egui::vec2(0., -1.)] {
+        painter.line_segment([center + direction * 5., center + direction * 8.], stroke);
+    }
+}
+
 pub fn dropdown_atom(color: Color32) -> egui::Atom<'static> {
     egui::Atom::paint(egui::vec2(8., 12.), move |ui, args| {
         dropdown_chevron(ui.painter(), args.rect.center(), color);
@@ -278,6 +295,17 @@ fn paint_tool(p: &egui::Painter, rect: Rect, tool: Tool, colors: ToolPalette) {
             p.circle_filled(c, r, face);
             p.circle_stroke(c, r, stroke);
         }
+        Tool::Arc => {
+            p.add(egui::Shape::line(
+                (0..=16)
+                    .map(|i| {
+                        let angle = std::f32::consts::PI * i as f32 / 16.;
+                        xy(angle.cos(), 0.55 - angle.sin())
+                    })
+                    .collect(),
+                stroke,
+            ));
+        }
         Tool::Polygon => {
             p.add(egui::Shape::convex_polygon(
                 (0..6)
@@ -461,6 +489,33 @@ fn paint_tool(p: &egui::Painter, rect: Rect, tool: Tool, colors: ToolPalette) {
             ));
             p.circle_filled(c, 2., red);
         }
+        Tool::Router => {
+            // Classic bearing-guided bit: steel shank, carbide cutting head,
+            // flute and pilot bearing, legible in both the rail and cursor.
+            p.rect_filled(Rect::from_min_max(xy(-0.22, -1.), xy(0.22, -0.15)), 1., metal);
+            p.rect_stroke(Rect::from_min_max(xy(-0.22, -1.), xy(0.22, -0.15)), 1.,
+                Stroke::new(1.3, outline), egui::StrokeKind::Inside);
+            p.add(egui::Shape::convex_polygon(
+                vec![xy(-0.58, -0.17), xy(0.58, -0.17), xy(0.58, 0.25),
+                    xy(0.28, 0.67), xy(-0.28, 0.67), xy(-0.58, 0.25)],
+                red, Stroke::new(1.3, outline),
+            ));
+            p.line_segment([xy(0.15, -0.12), xy(-0.12, 0.59)], Stroke::new(2., metal));
+            p.line_segment([xy(0., 0.67), xy(0., 0.85)], Stroke::new(2., outline));
+            p.rect_filled(Rect::from_min_max(xy(-0.3, 0.83), xy(0.3, 1.05)), 1., metal);
+            p.rect_stroke(Rect::from_min_max(xy(-0.3, 0.83), xy(0.3, 1.05)), 1.,
+                Stroke::new(1.3, outline), egui::StrokeKind::Inside);
+        }
+        Tool::WoodGlue => {
+            p.add(egui::Shape::line(
+                vec![xy(-0.85, 0.45), xy(-0.45, 0.05), xy(-0.05, 0.45), xy(0.35, 0.05), xy(0.8, 0.45)],
+                Stroke::new(2., gold),
+            ));
+            p.add(egui::Shape::convex_polygon(
+                vec![xy(-0.23, -0.7), xy(0., -1.), xy(0.23, -0.7), xy(0., -0.36)],
+                gold, Stroke::NONE,
+            ));
+        }
         Tool::Paint => {
             let bucket = |x: f32, y: f32| {
                 let diagonal = std::f32::consts::FRAC_1_SQRT_2;
@@ -581,11 +636,20 @@ fn paint_tool(p: &egui::Painter, rect: Rect, tool: Tool, colors: ToolPalette) {
             }
         }
         Tool::Walk => {
-            p.circle_stroke(xy(0.15, -0.78), r * 0.2, stroke);
-            for (a, b) in [((0.1, -0.45), (-0.1, 0.15)),
-                ((0.05, -0.3), (-0.55, -0.05)), ((0.05, -0.3), (0.6, -0.05)),
-                ((-0.1, 0.15), (-0.65, 0.9)), ((-0.1, 0.15), (0.55, 0.65))] {
-                p.line_segment([xy(a.0, a.1), xy(b.0, b.1)], stroke);
+            // A side-on stride stays recognizable even at toolbar size.
+            let limb = Stroke::new(1.9, color);
+            p.circle_filled(xy(0.2, -0.8), r * 0.2, color);
+            for points in [
+                [(0.1, -0.42), (-0.12, -0.08), (-0.18, 0.25)],
+                [(0.08, -0.38), (0.4, -0.08), (0.72, -0.08)],
+                [(0.06, -0.38), (-0.42, -0.23), (-0.62, 0.12)],
+                [(-0.18, 0.25), (0.27, 0.49), (0.48, 0.96)],
+                [(-0.18, 0.25), (-0.37, 0.68), (-0.72, 0.96)],
+            ] {
+                p.add(egui::Shape::line(
+                    points.into_iter().map(|(x, y)| xy(x, y)).collect(),
+                    limb,
+                ));
             }
         }
         Tool::Orbit => {
@@ -707,6 +771,8 @@ fn paint_face_icon(p: &egui::Painter, c: Pos2, fill: Color32, outline: Color32) 
 // same icon and palette in Settings and Materials.
 pub(super) fn section_icon(id: &str) -> &str {
     match id {
+        "time_estimates_joinery" => "connections/wood_joinery",
+        "time_estimates_router" => "router",
         "settings/treatment/sanding" | "entity/treatment/sanding" => "time_estimates_sanding",
         "settings/treatment/finishing" | "entity/treatment/finishing" => "time_estimates_finishing",
         "settings/treatment/pre_stain" | "entity/treatment/pre_stain" => "time_estimates_pre_stain",
@@ -722,6 +788,10 @@ pub fn line_icon(p: &egui::Painter, c: Pos2, kind: &str, color: Color32) {
 
 /// Compact, action-colored icons shared by the main menu and context menus.
 pub fn menu_icon(p: &egui::Painter, c: Pos2, kind: &str) {
+    if kind == "wood_glue" {
+        ui_tool(p, Rect::from_center_size(c, egui::Vec2::splat(26.)), Tool::WoodGlue);
+        return;
+    }
     let colors = ToolPalette::for_painter(p);
     let color = match kind {
         "new" => {
@@ -773,6 +843,11 @@ fn paint_line_icon(p: &egui::Painter, c: Pos2, kind: &str, color: Color32) {
     let s = Stroke::new(1.5, color);
     let at = |x: f32, y: f32| c + egui::vec2(x, y);
     match kind {
+        "router" => tool_vectors(
+            p,
+            Rect::from_center_size(c, egui::Vec2::splat(26.)),
+            Tool::Router,
+        ),
         "clean_aligned" => {
             // Aligned endpoints, a redundant middle vertex, and a cleanup sparkle.
             for (start, end) in [(-5., -2.), (2., 5.)] {

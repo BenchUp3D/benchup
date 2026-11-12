@@ -317,7 +317,8 @@ impl BenchUpApp {
                 ContextAction::Unhide => Some("eye"),
                 ContextAction::Lock => Some("lock"),
                 ContextAction::Unlock => Some("unlock"),
-                ContextAction::Ungroup | ContextAction::Explode | ContextAction::CleanAligned => None,
+                ContextAction::CleanAligned => Some("clean_aligned"),
+                ContextAction::Ungroup | ContextAction::Explode => None,
             };
             let mut button = Self::menu_item_button(ui, label, icon);
             if let Some((modifiers, key)) = shortcut {
@@ -390,6 +391,13 @@ impl BenchUpApp {
             ContextAction::PasteInPlace,
         );
         item(ui, tr!("common.delete"), editable, ContextAction::Delete);
+        ui.separator();
+        item(
+            ui,
+            tr!("context_menu.clean_aligned_vertices"),
+            editable,
+            ContextAction::CleanAligned,
+        );
         ui.separator();
         if self
             .selected

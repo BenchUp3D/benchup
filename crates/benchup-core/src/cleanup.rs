@@ -96,6 +96,9 @@ impl Model {
             .filter(|(_, edges)| edges.len() == 2)
             .map(|(id, _)| *id)
             .collect();
+        // Bound accumulated deviation from the original run as edges merge.
+        // Otherwise individually negligible bends can erase a real curve.
+        let mut deviations: BTreeMap<u64, f64> = BTreeMap::new();
         let mut removed = 0;
         while let Some(vertex) = candidates.pop_first() {
             if protected.contains(&vertex) {
@@ -130,8 +133,18 @@ impl Model {
             if va.length_squared() <= EPS * EPS
                 || vb.length_squared() <= EPS * EPS
                 || va.dot(vb) >= 0.
-                || va.cross(vb).length_squared() > 1e-18 * va.length_squared() * vb.length_squared()
             {
+                continue;
+            }
+            // Use the model's distance precision, rather than an almost exact
+            // angular test that rejects rounded/imported straight edges.
+            let deviation = va.cross(vb).length() / (vb - va).length()
+                + deviations
+                    .get(&first)
+                    .copied()
+                    .unwrap_or_default()
+                    .max(deviations.get(&second).copied().unwrap_or_default());
+            if deviation > EPS {
                 continue;
             }
             let faces = faces_at.get(&vertex).cloned().unwrap_or_default();
@@ -153,6 +166,19 @@ impl Model {
             }) {
                 continue;
             }
+            // Merging a routed segment would change the span of its cut.
+            if self.routes.contains_key(&first) || self.routes.contains_key(&second) {
+                continue;
+            }
+            let glue: BTreeMap<_, _> = faces.iter().filter_map(|id| {
+                let coverage = self.wood_glue.get(id)?;
+                if let crate::wood_glue::Coverage::Partial { anchors, .. } = coverage
+                    && anchors.contains(&vertex)
+                {
+                    return Some((*id, coverage.polygons(self, &self.faces[id])));
+                }
+                None
+            }).collect();
             // Retain one edge identity and the existing face/material identities.
             let edge = self.edges.get_mut(&first).unwrap();
             edge.a = a;
@@ -168,6 +194,10 @@ impl Model {
                 for ring in &mut face.holes {
                     ring.retain(|id| *id != vertex);
                 }
+            }
+            for (id, polygons) in glue {
+                self.wood_glue.remove(&id);
+                self.transfer_glue(id, &polygons);
             }
             for object in self.objects.values_mut() {
                 object.entities.remove(&second);
@@ -185,6 +215,8 @@ impl Model {
                 candidates.insert(endpoint);
             }
             allowed.remove(&second);
+            deviations.remove(&second);
+            deviations.insert(first, deviation);
             removed += 1;
         }
         removed
@@ -230,6 +262,90 @@ mod tests {
             Ok(0)
         );
     }
+    #[test]
+    fn detects_alignment_at_model_precision_for_short_and_long_edges() {
+        for length in [0.001, 1., 1000.] {
+            for (offset, expected) in [(EPS * 0.5, 1), (EPS * 2., 0)] {
+                let mut model = Model::default();
+                let middle = DVec3::new(length, offset, 0.);
+                model.add_edge(DVec3::ZERO, middle).unwrap();
+                model.add_edge(middle, DVec3::X * length * 2.).unwrap();
+                let roots = model.root_entities();
+                assert_eq!(model.clean_collinear_vertices(&roots), Ok(expected));
+                assert_eq!(model.edges.len(), 2 - expected);
+                model.validate().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn small_bends_do_not_accumulate_into_removing_a_curve() {
+        let mut model = Model::default();
+        for i in 0..8 {
+            let point = |i: usize| DVec3::new(i as f64, (i * i) as f64 * EPS * 0.25, 0.);
+            model.add_edge(point(i), point(i + 1)).unwrap();
+        }
+        let roots = model.root_entities();
+        assert!(model.clean_collinear_vertices(&roots).unwrap() > 0);
+        assert!(model.edges.len() > 1);
+        model.validate().unwrap();
+    }
+
+    #[test]
+    fn cleans_mixed_edges_and_multiple_nested_groups_without_touching_other_runs() {
+        let mut model = Model::default();
+        let mut source = chain();
+        let middle = source
+            .vertices
+            .values_mut()
+            .find(|vertex| vertex.position == DVec3::X * 2.)
+            .unwrap();
+        middle.position.y = EPS * 0.25;
+        let first_edges = model.paste_entities(&source, DVec3::ZERO);
+        let first = model.make_object(&first_edges, false, "First run").unwrap();
+        let second_edges = model.paste_entities(&source, DVec3::Y * 2.);
+        let inner = model
+            .make_object(&second_edges, false, "Inner run")
+            .unwrap();
+        let second = model
+            .make_object(&BTreeSet::from([inner]), false, "Assembly")
+            .unwrap();
+        // Grouping remaps the nested object along with its contents.
+        let inner = *model.objects[&second].entities.first().unwrap();
+        let mut selected = model.paste_entities(&source, DVec3::Y * 4.);
+        selected.extend([first, second]);
+        let untouched = model.paste_entities(&source, DVec3::Y * 6.);
+        let before = model.copy_entities(&untouched);
+
+        assert_eq!(model.clean_collinear_vertices(&selected), Ok(9));
+        assert_eq!(model.edges.len(), 7);
+        assert_eq!(model.objects[&first].entities.len(), 1);
+        assert_eq!(model.objects[&second].entities, BTreeSet::from([inner]));
+        assert_eq!(model.objects[&inner].entities.len(), 1);
+        assert_eq!(model.copy_entities(&untouched), before);
+        assert_eq!(model.clean_collinear_vertices(&selected), Ok(0));
+        model.validate().unwrap();
+    }
+
+    #[test]
+    fn selecting_multiple_linked_components_cleans_the_definition_once() {
+        let mut model = chain();
+        let object = model
+            .make_object(&model.root_entities(), true, "Run")
+            .unwrap();
+        let copy = model.copy_entities(&BTreeSet::from([object]));
+        let mut selected = model.paste_entities(&copy, DVec3::Y * 2.);
+        selected.insert(object);
+        assert_eq!(model.clean_collinear_vertices(&selected), Ok(3));
+        assert_eq!(model.edges.len(), 2);
+        assert!(
+            selected
+                .iter()
+                .all(|id| model.objects[id].entities.len() == 1)
+        );
+        model.validate().unwrap();
+    }
+
     #[test]
     fn preserves_annotation_attachments_and_metadata_boundaries() {
         let mut model = chain();

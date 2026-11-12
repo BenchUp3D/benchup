@@ -1,0 +1,105 @@
+name: Warm release caches
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain*'
+      - '.cargo/**'
+      - '.github/actions/setup-compiler-cache/**'
+      - 'scripts/ci_cargo.sh'
+      - 'crates/**'
+      - 'assets/**'
+      - 'scripts/install_linux_dependencies.py'
+      - '.github/workflows/cache.yml'
+      - '.github/workflows/build.yml'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BENCHUP_UPDATE_REPOSITORY: ${{ github.repository }}
+  CARGO_TERM_COLOR: always
+  # Match the desktop release builds, including the native C/C++ reader.
+  MACOSX_DEPLOYMENT_TARGET: '11.0'
+
+jobs:
+  cache:
+    name: Warm ${{ matrix.platform }} dependencies
+    # Only main can seed caches that every future release tag can restore.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-x64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+            cache-key: desktop-x86_64-pc-windows-msvc
+          - platform: macos-arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            cache-key: desktop-aarch64-apple-darwin
+          - platform: macos-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            cache-key: desktop-x86_64-apple-darwin
+          - platform: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            cache-key: desktop-x86_64-unknown-linux-gnu
+          - platform: wasm
+            os: ubuntu-24.04
+            target: wasm32-unknown-unknown
+            cache-key: release-wasm
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/setup-compiler-cache
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.cache-key }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux' && matrix.platform != 'wasm'
+        run: |
+          sudo python3 scripts/install_linux_dependencies.py \
+            build-essential pkg-config libx11-dev libxcb1-dev \
+            libxkbcommon-dev libwayland-dev libegl1-mesa-dev libudev-dev
+
+      # Workspace source changes do not change the dependency cache key. Always
+      # refresh their compiler-cache entries; final release linking is not cached.
+      - name: Warm release libraries
+        run: bash scripts/ci_cargo.sh build -p benchup-app --lib --release --locked --target "${{ matrix.target }}"
+
+      - name: Warm desktop compatibility test dependencies
+        if: matrix.platform != 'wasm'
+        run: |
+          bash scripts/ci_cargo.sh test -p benchup-app --lib --profile ci-test --locked --no-run --target "${{ matrix.target }}"
+          bash scripts/ci_cargo.sh test -p benchup-io -p benchup-skp --profile ci-test --locked --no-run --target "${{ matrix.target }}"

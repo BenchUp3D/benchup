@@ -1,5 +1,42 @@
 [
   {
+    "version": "0.7.0",
+    "date": "2026-11-12",
+    "title": "Woodworking tools, grain-aware cutting plans, and procedural finishes",
+    "sections": [
+      {
+        "title": "Modeling and woodworking",
+        "changes": [
+          "Draw circular arcs from two endpoints and a point on the curve, with snapping, plane locks, and precise chord length and arc height.",
+          "Use Router to machine edges and surfaces with woodworking profiles such as chamfers, bevels, roundovers, and rabbets.",
+          "Apply Wood Glue to individual faces or automatically to contacting surfaces in a selection. Review glue coverage and routing work in Time & Cost Estimates.",
+          "Use simultaneous axis snapping, cursor-aligned Offset previews, and reusable scale presets for more precise edits."
+        ]
+      },
+      {
+        "title": "Materials and workshop plans",
+        "changes": [
+          "Preview procedural wood grain and finishing recipes in Materials mode, including sanding, pre-stain, stain coats, and varnish sheen.",
+          "Export cutting plans that align parts to their assigned wood grain and show joinery with fine dashed outlines. Both options are enabled by default and can be turned off independently."
+        ]
+      },
+      {
+        "title": "SketchUp and STL",
+        "changes": [
+          "Import more SketchUp versions reliably and recover geometry from some damaged archives. Preserve more tag, material, and face information during import.",
+          "Set the scale when exporting STL and reuse saved scale presets."
+        ]
+      },
+      {
+        "title": "Workspace and navigation",
+        "changes": [
+          "Reorder toolbar tools by dragging them, open tool flyouts on hover, and merge adjacent inspector panes by double-clicking the divider.",
+          "Pick an orbit focus in the model, zoom more smoothly near surfaces, and optionally display selected edge lengths directly in the viewport."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.6.8",
     "date": "2026-11-11",
     "title": "Angular dimensions, selection, and responsive exports",

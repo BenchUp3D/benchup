@@ -40,6 +40,83 @@ fn add_board(model: &mut Model, size: DVec3, offset: DVec3, name: &str, componen
 }
 
 #[test]
+fn assigned_grain_along_the_short_side_controls_stock_fit_by_default() {
+    let mut model = Model::default();
+    let board = add_board(&mut model, DVec3::new(0.9, 0.7, 0.03), DVec3::ZERO, "Panel", false);
+    model.objects.get_mut(&board).unwrap().stock_material.as_mut().unwrap().dimensions = [500, 8000, 10000];
+    model.set_grain_direction(board, Some(DVec3::Y)).unwrap();
+    let settings = LayoutSettings::default();
+    let plan = CuttingPlan::collect_with_layout(&model, &BTreeSet::new(), settings).unwrap();
+    assert_eq!(plan.groups[0].dimensions, [300, 9000, 7000]);
+    assert_eq!(plan.groups[0].grain, Grain::AlongLength);
+    let required = plan.material_requirements(settings);
+    assert_eq!((required[0].quantity, required[0].excluded), (0, 1));
+
+    let settings = LayoutSettings { respect_grain: false, ..settings };
+    let plan = CuttingPlan::collect_with_layout(&model, &BTreeSet::new(), settings).unwrap();
+    assert_eq!(plan.groups[0].dimensions, [300, 7000, 9000]);
+    let required = plan.material_requirements(settings);
+    assert_eq!((required[0].quantity, required[0].excluded), (1, 0));
+}
+
+#[test]
+fn diagonal_and_through_thickness_grain_use_the_part_frame() {
+    let mut model = Model::default();
+    let board = add_board(&mut model, DVec3::new(0.3, 0.1, 0.04), DVec3::ZERO, "Board", false);
+    model.set_grain_direction(board, Some(DVec3::X + DVec3::Y)).unwrap();
+    let plan = CuttingPlan::collect(&model, &BTreeSet::new()).unwrap();
+    assert_eq!(plan.groups[0].dimensions, [400, 2828, 2828]);
+    assert!(!plan.groups[0].rectangular);
+
+    model.set_grain_direction(board, Some(DVec3::Z)).unwrap();
+    let plan = CuttingPlan::collect(&model, &BTreeSet::new()).unwrap();
+    assert_eq!(plan.groups[0].grain, Grain::ThroughThickness);
+    assert_eq!(plan.material_requirements(LayoutSettings::default())[0].excluded, 1);
+    let pdf = String::from_utf8(plan.pdf("End grain", false, true)).unwrap();
+    assert!(pdf.contains("Grain runs through the thickness"));
+}
+
+#[test]
+fn cutting_plan_draws_actual_joinery_only_on_the_machined_pieces() {
+    use benchup_core::{connections::{Connection, ConnectionOperation}, joinery::JointSettings};
+    let mut model = Model::default();
+    let size = DVec3::new(0.3, 0.1, 0.04);
+    let a = add_board(&mut model, size, DVec3::ZERO, "Tenon", false);
+    let b = add_board(&mut model, size, DVec3::X * 0.25, "Mortise", false);
+    let plain = add_board(&mut model, size, DVec3::Y, "Plain", false);
+    model.add_connection(Connection {
+        members: [a, b], entry_face: None,
+        operation: ConnectionOperation::Joinery(JointSettings::default()),
+    }).unwrap();
+    for board in [a, b, plain] {
+        model.set_grain_direction(board, Some(DVec3::X)).unwrap();
+    }
+    let before = model.clone();
+    let plan = CuttingPlan::collect(&model, &BTreeSet::new()).unwrap();
+    assert_eq!(plan.groups.len(), 1);
+    let group = &plan.groups[0];
+    assert_eq!(group.parts, ["Tenon", "Mortise", "Plain"]);
+    assert_eq!(group.joinery.keys().copied().collect::<Vec<_>>(), [0, 1]);
+    assert!(!plan.joinery_omitted);
+    assert!(group.joinery.values().flatten().flatten().all(|[x, y]| *x <= 3000 && *y <= 1000));
+
+    let pdf = plan.pdf("Workshop joinery", false, true);
+    let text = std::str::from_utf8(&pdf).unwrap();
+    assert_eq!(text.matches("[1.6 1.4] 0 d").count(), 2);
+    assert!(text.contains("Dashed outlines show joinery"));
+    assert!(text.contains("Assigned grain follows the length of the stock"));
+    let options = LayoutSettings { show_joinery: false, ..Default::default() };
+    let hidden = CuttingPlan::collect_with_layout(&model, &BTreeSet::new(), options).unwrap();
+    assert!(hidden.groups[0].joinery.is_empty());
+    let hidden = String::from_utf8(hidden.pdf_with_layout("Workshop joinery", false, true, options)).unwrap();
+    assert!(!hidden.contains("[1.6 1.4] 0 d"));
+    assert_eq!(model, before);
+    if let Some(dir) = std::env::var_os("BENCHUP_PDF_QA_DIR") {
+        std::fs::write(std::path::Path::new(&dir).join("cutting-plan-joinery.pdf"), pdf).unwrap();
+    }
+}
+
+#[test]
 fn groups_twenty_rails_and_two_posts_with_nominal_stock_and_real_cut_lengths() {
     let mut model = Model::default();
     for i in 0..20 {
@@ -479,6 +556,8 @@ fn pdf_escapes_names_paginates_the_summary_and_has_valid_cross_reference_offsets
                 material: material(),
                 dimensions: [380, 890, 6000 + i * 10],
                 rectangular: i % 2 == 0,
+                grain: Default::default(),
+                joinery: Default::default(),
                 parts: vec![format!(
                     "{} (Part {}) \\ Café",
                     "LongAssemblyName".repeat(30),
@@ -487,6 +566,7 @@ fn pdf_escapes_names_paginates_the_summary_and_has_valid_cross_reference_offsets
             })
             .collect(),
         skipped: 3,
+        joinery_omitted: false,
     };
     let bytes = plan.pdf("Bench (rev 2) \\ Shop", true, false);
     let text = std::str::from_utf8(&bytes).unwrap();
@@ -695,10 +775,13 @@ fn cut_list_sorts_by_group_then_descending_quantity_and_cut_length() {
             material: material(),
             dimensions: [380, 890, length],
             rectangular: true,
+            grain: Default::default(),
+            joinery: Default::default(),
             parts: vec![name.into(); quantity],
         })
         .collect(),
         skipped: 0,
+        joinery_omitted: false,
     };
     for group_stock in [false, true] {
         let pdf = String::from_utf8(plan.pdf_with_layout(
@@ -753,9 +836,12 @@ fn stock_pdf_includes_colored_coded_diagrams_and_uses_the_selected_kerf() {
             },
             dimensions: [380, 890, 5000],
             rectangular: true,
+            grain: Default::default(),
+            joinery: Default::default(),
             parts: vec!["A".into(), "B".into()],
         }],
         skipped: 0,
+        joinery_omitted: false,
     };
     let settings = LayoutSettings {
         board_length_mm: 1000.,
@@ -808,9 +894,12 @@ fn oversized_cuts_are_reported_without_silently_increasing_the_stock_size() {
             material: material(),
             dimensions: [180, 13000, 30000],
             rectangular: true,
+            grain: Default::default(),
+            joinery: Default::default(),
             parts: vec!["Too large".into()],
         }],
         skipped: 0,
+        joinery_omitted: false,
     };
     let pdf = String::from_utf8(plan.pdf("Cabinet", false, true)).unwrap();
     assert!(pdf.contains("DOES NOT FIT SELECTED STOCK"));
@@ -882,6 +971,8 @@ fn group_column_deduplicates_paths_wraps_long_names_and_handles_unnamed_parts() 
         material: material(),
         dimensions: [180, 3000, 6000],
         rectangular: true,
+        grain: Default::default(),
+        joinery: Default::default(),
         parts: vec!["Bench/Frame/Leg".into(), "Bench/Frame/Leg".into()],
     };
     assert_eq!(group_lines(&group), ["Bench/Frame/Leg"]);
@@ -903,6 +994,7 @@ fn group_column_deduplicates_paths_wraps_long_names_and_handles_unnamed_parts() 
     let plan = CuttingPlan {
         groups: vec![group],
         skipped: 0,
+        joinery_omitted: false,
     };
     let pdf = String::from_utf8(plan.pdf("Long hierarchy", false, false)).unwrap();
     assert!(pdf.matches("/Type /Page /").count() > 1);
@@ -926,9 +1018,12 @@ fn assigned_stock_rejects_cuts_that_exceed_thickness_or_width() {
                 },
                 dimensions,
                 rectangular,
+                grain: Default::default(),
+                joinery: Default::default(),
                 parts: vec!["Too large".into()],
             }],
             skipped: 0,
+            joinery_omitted: false,
         };
         let pdf = String::from_utf8(plan.pdf_with_layout(
             "Fit",

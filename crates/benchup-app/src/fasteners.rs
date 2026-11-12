@@ -617,6 +617,7 @@ impl BenchUpApp {
             ..Default::default()
         };
         self.joinery.open = false;
+        self.close_router();
         self.fasteners.open = true;
         self.inspector = true;
         self.set_tool(Tool::Select);

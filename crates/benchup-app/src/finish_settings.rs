@@ -1,5 +1,6 @@
-//! Reusable finishing-product prices, stored with the device's material catalog.
+//! Reusable finishing products, stored with the device's material catalog.
 use benchup_core::tr;
+use benchup_core::surface_treatment::{Appearance, Sheen};
 use super::*;
 use crate::inspector_table::{Column, InspectorTable};
 
@@ -16,6 +17,38 @@ pub(super) enum FinishType {
     Oil,
     Wax,
     Other,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) enum Formula {
+    #[default]
+    Standard,
+    Dye,
+    Pigment,
+    Gel,
+    WaterBased,
+    OilBased,
+}
+
+impl Formula {
+    fn options(kind: FinishType) -> &'static [Self] {
+        match kind {
+            FinishType::Stain => &[Self::Standard, Self::Dye, Self::Pigment, Self::Gel],
+            FinishType::Varnish => &[Self::Standard, Self::WaterBased, Self::OilBased],
+            _ => &[Self::Standard],
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Standard => tr!("finish_settings.standard_formula"),
+            Self::Dye => tr!("finish_settings.dye"),
+            Self::Pigment => tr!("finish_settings.pigment"),
+            Self::Gel => tr!("finish_settings.gel"),
+            Self::WaterBased => tr!("finish_settings.water_based"),
+            Self::OilBased => tr!("finish_settings.oil_based"),
+        }
+    }
 }
 
 impl FinishType {
@@ -46,6 +79,82 @@ impl FinishType {
             Self::Other => tr!("finish_settings.other"),
         }
     }
+
+    pub(super) fn preset(self) -> (Option<[u8; 3]>, u8, Sheen) {
+        use Sheen::{Gloss, Matte, Satin};
+        match self {
+            Self::PreStain => (None, 55, Matte),
+            Self::Stain => (Some([117, 67, 34]), 36, Matte),
+            Self::Paint => (Some([233, 231, 222]), 86, Satin),
+            Self::Varnish => (None, 62, Satin),
+            Self::Primer => (Some([213, 207, 193]), 76, Matte),
+            Self::Sealer => (None, 50, Satin),
+            Self::Lacquer => (None, 73, Gloss),
+            Self::Oil => (Some([170, 112, 57]), 23, Satin),
+            Self::Wax => (None, 42, Satin),
+            Self::Other => (None, 45, Matte),
+        }
+    }
+}
+
+pub(super) fn tint_input(
+    ui: &mut egui::Ui,
+    tint: &mut Option<[u8; 3]>,
+    inherited: Option<[u8; 3]>,
+) {
+    ui.horizontal(|ui| {
+        let mut color = tint.or(inherited).unwrap_or([255; 3]);
+        if ui.color_edit_button_srgb(&mut color)
+            .on_hover_text(tr!("finish_settings.appearance_color"))
+            .changed()
+        {
+            *tint = Some(color);
+        }
+        if tint.is_some() && ui.small_button("↶")
+            .on_hover_text(tr!("finish_settings.reset_appearance_value")).clicked()
+        {
+            *tint = None;
+        } else if tint.is_none() && inherited.is_none() {
+            ui.text_weak(tr!("finish_settings.clear_color"));
+        }
+    });
+}
+
+pub(super) fn strength_input(ui: &mut egui::Ui, strength: &mut Option<u8>, inherited: u8) {
+    ui.horizontal(|ui| {
+        let mut value = strength.unwrap_or(inherited);
+        if ui.add(egui::DragValue::new(&mut value).range(0..=100).suffix("%"))
+            .on_hover_text(tr!("finish_settings.coat_strength_help")).changed()
+        {
+            *strength = Some(value);
+        }
+        if strength.is_some() && ui.small_button("↶")
+            .on_hover_text(tr!("finish_settings.reset_appearance_value")).clicked()
+        {
+            *strength = None;
+        }
+    });
+}
+
+fn sheen_label(sheen: Sheen) -> &'static str {
+    match sheen {
+        Sheen::Matte => tr!("finish_settings.matte"),
+        Sheen::Satin => tr!("finish_settings.satin"),
+        Sheen::Gloss => tr!("finish_settings.gloss"),
+    }
+}
+
+pub(super) fn sheen_input(ui: &mut egui::Ui, sheen: &mut Option<Sheen>, inherited: Sheen) {
+    egui::ComboBox::from_id_salt("sheen")
+        .width(ui.available_width())
+        .truncate()
+        .selected_text(sheen_label(sheen.unwrap_or(inherited)))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(sheen, None, tr!("finish_settings.default_sheen", sheen_label(inherited)));
+            for value in [Sheen::Matte, Sheen::Satin, Sheen::Gloss] {
+                ui.selectable_value(sheen, Some(value), sheen_label(value));
+            }
+        });
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -96,6 +205,9 @@ pub(super) struct Finish {
     pub price: f64,
     /// Single-coat coverage of the configured container, in square metres.
     pub coverage_m2_per_container: Option<f64>,
+    #[serde(skip_serializing_if = "Appearance::is_default")]
+    pub appearance: Appearance,
+    pub formula: Formula,
 }
 
 impl Default for Finish {
@@ -108,7 +220,27 @@ impl Default for Finish {
             container_unit: ContainerUnit::default(),
             price: 0.,
             coverage_m2_per_container: None,
+            appearance: Appearance::default(),
+            formula: Formula::default(),
         }
+    }
+}
+
+impl Finish {
+    pub(super) fn visual_preset(&self) -> (Option<[u8; 3]>, u8, Sheen) {
+        let (mut tint, mut strength, sheen) = self.finish_type.preset();
+        match self.formula {
+            Formula::Dye => strength = 30,
+            Formula::Pigment => strength = 43,
+            Formula::Gel => strength = 52,
+            Formula::WaterBased => strength = 55,
+            Formula::OilBased => {
+                tint = Some([222, 164, 83]);
+                strength = 65;
+            }
+            Formula::Standard => {}
+        }
+        (tint, strength, sheen)
     }
 }
 
@@ -132,6 +264,10 @@ pub(super) fn normalize(finishes: &mut [Finish]) {
         finish.coverage_m2_per_container = finish
             .coverage_m2_per_container
             .filter(|value| value.is_finite() && *value > 0.);
+        finish.appearance.strength = finish.appearance.strength.map(|value| value.min(100));
+        if !Formula::options(finish.finish_type).contains(&finish.formula) {
+            finish.formula = Formula::Standard;
+        }
     }
 }
 
@@ -199,6 +335,10 @@ pub(super) fn show(ui: &mut egui::Ui, finishes: &mut Vec<Finish>, currency: &str
                         Column::at_least(80.),
                         Column::at_least(112.),
                         Column::at_least(110.),
+                        Column::at_least(92.),
+                        Column::at_least(98.),
+                        Column::at_least(100.),
+                        Column::at_least(115.),
                         Column::fixed(28.),
                     ],
                 )
@@ -214,6 +354,10 @@ pub(super) fn show(ui: &mut egui::Ui, finishes: &mut Vec<Finish>, currency: &str
                             tr!("finish_settings.unit"),
                             tr!("finish_settings.price_container"),
                             tr!("finish_settings.m2_container_coat"),
+                            tr!("finish_settings.appearance_color"),
+                            tr!("finish_settings.coat_strength"),
+                            tr!("finish_settings.sheen"),
+                            tr!("finish_settings.formula"),
                             "",
                         ],
                     );
@@ -280,6 +424,28 @@ pub(super) fn show(ui: &mut egui::Ui, finishes: &mut Vec<Finish>, currency: &str
                                     finish.coverage_m2_per_container = (coverage > 0.).then_some(coverage);
                                 }
                             }
+                            6 => {
+                                let tint = finish.visual_preset().0;
+                                tint_input(ui, &mut finish.appearance.tint, tint);
+                            }
+                            7 => {
+                                let strength = finish.visual_preset().1;
+                                strength_input(ui, &mut finish.appearance.strength, strength);
+                            }
+                            8 => sheen_input(ui, &mut finish.appearance.sheen, finish.finish_type.preset().2),
+                            9 => {
+                                let options = Formula::options(finish.finish_type);
+                                if options.len() > 1 {
+                                    egui::ComboBox::from_id_salt("formula")
+                                        .width(ui.available_width())
+                                        .selected_text(finish.formula.label())
+                                        .show_ui(ui, |ui| {
+                                            for &formula in options {
+                                                ui.selectable_value(&mut finish.formula, formula, formula.label());
+                                            }
+                                        });
+                                }
+                            }
                             _ => {
                                 if ui
                                     .button(tr!("finish_settings.format"))
@@ -317,6 +483,8 @@ mod tests {
         assert_eq!(finish.container_unit, ContainerUnit::Liters);
         assert_eq!(finish.price, 0.);
         assert_eq!(finish.coverage_m2_per_container, None);
+        assert_eq!(finish.appearance, Appearance::default());
+        assert_eq!(finish.formula, Formula::Standard);
         assert!(finish.id.is_nil());
         finish.container_size = f64::NAN;
         finish.price = f64::INFINITY;

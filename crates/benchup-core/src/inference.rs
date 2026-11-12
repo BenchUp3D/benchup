@@ -1197,20 +1197,29 @@ pub fn infer_with_constraint(
             kind: Inference::Axis(axis),
         });
     }
-    if let Some(target) = local_axis {
-        return Some(target.snap);
-    }
     // The visible model axes are also snap targets before the first click and
     // whenever a later point approaches them outside the local direction guides.
-    if snap_to_axes {
-        if let Some(target) = axis_target(camera, &view, cursor, DVec3::ZERO, true) {
-            if locked
-                .is_none_or(|(start, constraint)| constraint.contains(target.snap.point - start))
+    let world_axis = (snap_to_axes
+        && (local_axis.is_none()
+            || view.project(DVec3::ZERO).is_some_and(|pixel| pixel.distance(cursor) <= 10.)))
+        .then(|| axis_target(camera, &view, cursor, DVec3::ZERO, true))
+        .flatten()
+        .filter(|target| {
+            !(target.snap.kind == Inference::Origin
+                && away_from_start
+                && start.is_some_and(|start| start.length() < 1e-7))
+                && locked.is_none_or(|(start, constraint)| {
+                    constraint.contains(target.snap.point - start)
+                })
                 && visible(target.snap.point)
-            {
-                return Some(target.snap);
-            }
-        }
+        });
+    // A shared intersection satisfies multiple axes, including a local guide
+    // through the world origin. Prefer it over a soft single-axis direction.
+    if let Some(target) = world_axis.filter(|target| target.snap.kind == Inference::Origin) {
+        return Some(target.snap);
+    }
+    if let Some(target) = local_axis.or(world_axis) {
+        return Some(target.snap);
     }
     if let Some((start, constraint)) = locked {
         return Some(Snap {
@@ -1305,42 +1314,51 @@ fn axis_target(
     world: bool,
 ) -> Option<AxisTarget> {
     let screen_origin = view.project(origin)?;
-    [Axis::X, Axis::Y, Axis::Z]
-        .into_iter()
-        .filter_map(|axis| {
-            let screen_direction = view
-                .project(origin + axis.vector() * camera.distance)
-                .or_else(|| view.project(origin - axis.vector() * camera.distance))?
-                - screen_origin;
-            if screen_direction.length_squared() < 1e-8 {
-                return None;
-            }
-            let projected = screen_origin
-                + screen_direction
-                    * ((cursor - screen_origin).dot(screen_direction)
-                        / screen_direction.length_squared());
-            let distance = projected.distance(cursor);
-            if distance > 10. {
-                return None;
-            }
-            let point = view.ray(projected).axis(origin, axis.vector())?;
-            view.project(point)?;
-            let kind = if world {
-                Inference::OnAxis(axis)
-            } else {
-                Inference::Axis(axis)
-            };
-            Some((
-                distance,
-                AxisTarget {
-                    snap: Snap { point, kind },
-                    axis,
-                    distance,
-                },
-            ))
+    let targets = [Axis::X, Axis::Y, Axis::Z].map(|axis| {
+        let screen_direction = view
+            .project(origin + axis.vector() * camera.distance)
+            .or_else(|| view.project(origin - axis.vector() * camera.distance))?
+            - screen_origin;
+        if screen_direction.length_squared() < 1e-8 {
+            return None;
+        }
+        let projected = screen_origin
+            + screen_direction
+                * ((cursor - screen_origin).dot(screen_direction)
+                    / screen_direction.length_squared());
+        let distance = projected.distance(cursor);
+        if distance > 10. {
+            return None;
+        }
+        let point = view.ray(projected).axis(origin, axis.vector())?;
+        view.project(point)?;
+        let kind = if world {
+            Inference::OnAxis(axis)
+        } else {
+            Inference::Axis(axis)
+        };
+        Some(AxisTarget {
+            snap: Snap { point, kind },
+            axis,
+            distance,
         })
-        .min_by(|a, b| a.0.total_cmp(&b.0))
-        .map(|(_, target)| target)
+    });
+    let mut target = targets
+        .iter()
+        .flatten()
+        .min_by(|a, b| a.distance.total_cmp(&b.distance))
+        .copied()?;
+    // Nearby world axes share an exact intersection. Acquire it even when
+    // geometry snapping is disabled, rather than sliding along just one axis.
+    // Local direction hints must still allow short segments away from start.
+    if world && targets.iter().flatten().count() > 1 && screen_origin.distance(cursor) <= 10. {
+        target.snap = Snap {
+            point: origin,
+            kind: Inference::Origin,
+        };
+        target.distance = screen_origin.distance(cursor);
+    }
+    Some(target)
 }
 
 struct MoveFace {

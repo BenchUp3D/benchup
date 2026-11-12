@@ -250,9 +250,36 @@ impl Camera {
         let anchor =
             ray.origin + ray.direction * ((self.target - ray.origin).dot(forward) / denominator);
         let old = self.distance;
-        self.distance = (old * (-scroll * 0.002).exp()).clamp(0.05, 1e6);
+        let requested = old * (-scroll * 0.002).exp();
+        self.distance = requested.clamp(0.05, 1e6);
         self.target += (anchor - self.target) * (1.0 - self.distance / old);
+        if self.projection == Projection::Perspective && requested < self.distance {
+            // Keep the orbit radius numerically safe, but continue dollying along
+            // the pointer ray. The small radius naturally limits close-up speed.
+            self.target += ray.direction * ((self.distance - requested) / denominator);
+        }
     }
+    /// Limit perspective dolly speed by the visible surface depth, rather than
+    /// letting a distant orbit target carry the eye through nearby geometry.
+    pub fn zoom_to_surface(&mut self, scroll: f64, point: DVec2, size: DVec2, surface: Option<DVec3>) {
+        if self.projection != Projection::Perspective {
+            self.zoom(scroll, point, size);
+            return;
+        }
+        let eye = self.eye();
+        let forward = (self.target - eye).normalize();
+        let depth = surface.map(|hit| (hit - eye).dot(forward));
+        let Some(depth) = depth.filter(|depth| depth.is_finite() && *depth > 0. && *depth < self.distance) else {
+            self.zoom(scroll, point, size);
+            return;
+        };
+        let ray = self.ray(point, size);
+        let movement = depth * (1. - (-scroll * 0.002).exp());
+        self.distance = (self.distance - movement).clamp(0.05, 1e6);
+        self.target = eye + ray.direction * (movement / ray.direction.dot(forward))
+            + forward * self.distance;
+    }
+
     pub fn fit(&mut self, bounds: Option<(DVec3, DVec3)>, size: DVec2) {
         if let Some((lo, hi)) = bounds {
             self.target = (lo + hi) * 0.5;
@@ -419,6 +446,18 @@ impl CameraView {
             previous = next;
         }
     }
+    /// Recover world position and reciprocal clip w from a projected point.
+    pub fn unproject_depth(&self, point: DVec3) -> (DVec3, f64) {
+        let world = *self.inverse.get_or_init(|| self.matrix.inverse())
+            * DVec4::new(
+                point.x / self.size.x * 2. - 1.,
+                1. - point.y / self.size.y * 2.,
+                point.z,
+                1.,
+            );
+        (world.truncate() / world.w, world.w)
+    }
+
     pub fn ray(&self, point: DVec2) -> Ray {
         let ndc = DVec2::new(
             point.x / self.size.x * 2.0 - 1.0,
@@ -453,6 +492,55 @@ impl CameraView {
 #[cfg(test)]
 mod projection_tests {
     use super::*;
+
+    #[test]
+    fn close_perspective_zoom_keeps_moving_slowly_along_pointer_ray() {
+        let size = DVec2::new(1200., 800.);
+        for point in [size * 0.5, size * 0.75] {
+            let mut camera = Camera { distance: 0.051, ..Camera::default() };
+            let direction = camera.ray(point, size).direction;
+            for _ in 0..100 {
+                let before = camera.eye();
+                camera.zoom(20., point, size);
+                let movement = camera.eye() - before;
+                assert!(movement.dot(direction) > 0.001);
+                assert!(movement.length() < 0.004);
+                assert!(movement.cross(direction).length() < 1e-10);
+                assert!(camera.valid());
+            }
+            assert_eq!(camera.distance, 0.05);
+        }
+    }
+
+    #[test]
+    fn surface_zoom_slows_down_before_reaching_nearby_geometry() {
+        let size = DVec2::new(1200., 800.);
+        for point in [size * 0.5, size * 0.75] {
+            let mut camera = Camera::default();
+            let ray = camera.ray(point, size);
+            let surface = ray.origin + ray.direction * 0.1;
+            let mut previous = 0.1;
+            for _ in 0..100 {
+                camera.zoom_to_surface(20., point, size, Some(surface));
+                let gap = camera.eye().distance(surface);
+                assert!(gap < previous);
+                assert!((gap / previous - (-0.04_f64).exp()).abs() < 1e-8);
+                assert!(camera.valid());
+                previous = gap;
+            }
+        }
+    }
+
+    #[test]
+    fn parallel_zoom_does_not_dolly_at_minimum_scale() {
+        let size = DVec2::new(1200., 800.);
+        let mut camera = Camera {
+            distance: 0.05, projection: Projection::Parallel, ..Camera::default()
+        };
+        let before = camera.clone();
+        camera.zoom(20., size * 0.75, size);
+        assert_eq!(camera, before);
+    }
 
     #[test]
     fn older_cameras_default_to_perspective_and_new_options_round_trip() {

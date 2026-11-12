@@ -1048,6 +1048,32 @@ fn custom_grit_edits_match_values_across_mixed_object_lists() {
 }
 
 #[test]
+fn sanding_reorder_preserves_extra_passes_and_visual_overrides() {
+    use benchup_core::surface_treatment::Sheen;
+    let mut before = Settings::default();
+    before.sanding_grits = vec![80, 220];
+    before.sanitize();
+    before.sanding[0].enabled = true;
+    before.sanding[1].enabled = true;
+    before.sanding_after_varnish[1] = true;
+    let mut after = before.clone();
+    after.sanding_grits.swap(0, 1);
+    after.sanding.swap(0, 1);
+    after.sanding_after_varnish.swap(0, 1);
+    after.varnish.appearance.sheen = Some(Sheen::Gloss);
+    let mut target = before.clone();
+    target.sanding_grits.insert(1, 150);
+    target.sanding.insert(1, Step::default());
+    target.sanding_after_varnish.insert(1, false);
+    target.varnish.appearance.tint = Some([171, 115, 53]);
+    apply_treatment_changes(&mut target, &before, &after);
+    assert_eq!(target.sanding_grits, vec![220, 150, 80]);
+    assert_eq!(target.sanding_after_varnish, vec![true, false, false]);
+    assert_eq!(target.varnish.appearance.tint, Some([171, 115, 53]));
+    assert_eq!(target.varnish.appearance.sheen, Some(Sheen::Gloss));
+}
+
+#[test]
 fn task_groups_sum_work_and_share_the_longest_wait_per_coat() {
     let mut model = Model::default();
     let face = rectangle(&mut model, DVec3::ZERO);
@@ -1487,10 +1513,197 @@ fn background_pdf_snapshot_preserves_report_settings_without_editing_the_project
     app.project.cutting_plan_layout.kerf_mm = 4.;
     app.project.cutting_plan_layout.allow_rotation = false;
     app.joinery_rates.set_minutes(JointKind::MortiseTenon, 23.);
+    app.router_rates = RouterRates { setup_minutes: 7.25, minutes_per_meter: 3.5 };
+    let edge = *app.doc.model.edges.keys().next().unwrap();
+    app.doc.model.routes.insert(edge, benchup_core::router::Settings::default());
     let before = app.doc.clone();
     let expected = crate::estimate_pdf::render(&app.time_estimate_report()).unwrap();
     let input = app.estimate_pdf_input(&ctx);
     let restored: PdfInput = serde_json::from_str(&serde_json::to_string(&input).unwrap()).unwrap();
     assert_eq!(restored.render().unwrap(), expected);
     assert_eq!(app.doc, before);
+}
+
+#[test]
+fn wood_glue_area_appears_in_the_estimate_report_independent_of_selection() {
+    let mut model = Model::default();
+    let first = rectangle(&mut model, DVec3::ZERO);
+    let second = rectangle(&mut model, DVec3::X * 3.);
+    assert!(model.glue_face(first));
+    let mut app = BenchUpApp::with_document(
+        benchup_core::Document { model, ..Default::default() }, None, true,
+    );
+    app.selected = BTreeSet::from([second]);
+    let report = app.time_estimate_report();
+    assert!(report.notes.iter().any(|note| note == "Wood glue coverage (whole project): 6.0000 m²"));
+}
+
+
+#[test]
+fn router_time_counts_saved_source_lengths_and_adds_work_without_waiting() {
+    let mut model = Model::default();
+    let first = model.add_edge(DVec3::ZERO, DVec3::X * 2.).unwrap();
+    let second = model.add_edge(DVec3::Y, DVec3::Y + DVec3::X * 3.).unwrap();
+    let third = model
+        .add_edge(DVec3::Y * 2., DVec3::Y * 2. + DVec3::X)
+        .unwrap();
+    let none = model
+        .add_edge(DVec3::Y * 3., DVec3::Y * 3. + DVec3::X * 100.)
+        .unwrap();
+    for (edge, profile) in [
+        (first, Profile::Chamfer),
+        (second, Profile::Chamfer),
+        (third, Profile::Groove),
+        (none, Profile::None),
+    ] {
+        model.routes.insert(
+            edge,
+            benchup_core::router::Settings {
+                profile,
+                ..Default::default()
+            },
+        );
+    }
+    let group = model
+        .make_object(&BTreeSet::from([first]), false, "Part")
+        .unwrap();
+    let mut app = BenchUpApp::with_document(
+        Document {
+            model,
+            ..Default::default()
+        },
+        None,
+        true,
+    );
+    app.router_rates = RouterRates {
+        setup_minutes: 3.,
+        minutes_per_meter: 2.,
+    };
+    let rows = router_rows(&app.doc.model);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        (rows[0].profile, rows[0].count, rows[0].meters),
+        (Profile::Chamfer, 2, 5.)
+    );
+    assert_eq!(
+        (rows[1].profile, rows[1].count, rows[1].meters),
+        (Profile::Groove, 1, 1.)
+    );
+    let report = app.time_estimate_report();
+    assert_eq!(
+        report.tasks,
+        vec![["Router (whole project)", "0 h 18 min", "0 h 0 min"].map(str::to_owned)]
+    );
+    assert_eq!(
+        report.totals,
+        ["0 h 18 min", "0 h 18 min", "0 h 0 min"].map(str::to_owned)
+    );
+    app.selected.insert(none);
+    app.doc.model.hidden.insert(second);
+    app.doc.model.edit_context = Some(group);
+    let selected = app.time_estimate_report();
+    assert_eq!(selected.tasks, report.tasks);
+    assert_eq!(selected.totals, report.totals);
+    // Removing the last route with a profile also removes that setup allowance.
+    app.doc.model.routes.remove(&third);
+    assert_eq!(app.time_estimate_report().totals[1], "0 h 13 min");
+    app.doc.model.routes.clear();
+    assert!(app.time_estimate_report().tasks.is_empty());
+    assert_eq!(
+        app.time_estimate_report().totals,
+        ["0 h 0 min"; 3].map(str::to_owned)
+    );
+}
+
+#[test]
+fn routing_rates_default_for_older_data_and_sanitize_independently() {
+    assert_eq!(
+        serde_json::from_str::<RouterRates>("{}").unwrap(),
+        RouterRates::default()
+    );
+    let partial: RouterRates = serde_json::from_str(r#"{"minutes_per_meter":2.5}"#).unwrap();
+    assert_eq!(
+        partial,
+        RouterRates {
+            setup_minutes: 5.,
+            minutes_per_meter: 2.5
+        }
+    );
+    let mut rates = RouterRates {
+        setup_minutes: f64::NAN,
+        minutes_per_meter: 2.5,
+    };
+    rates.sanitize();
+    assert_eq!(rates, partial);
+    rates.minutes_per_meter = -1.;
+    rates.sanitize();
+    assert_eq!(rates, RouterRates::default());
+    rates.setup_minutes = 0.;
+    rates.minutes_per_meter = 0.;
+    rates.sanitize();
+    assert_eq!(rates.setup_minutes + rates.minutes_per_meter, 0.);
+}
+
+#[test]
+fn router_section_shows_profile_length_and_work_with_zero_finishing_area() {
+    let mut model = Model::default();
+    let edge = model.add_edge(DVec3::ZERO, DVec3::X * 2.).unwrap();
+    model
+        .routes
+        .insert(edge, benchup_core::router::Settings::default());
+    let mut app = BenchUpApp::with_document(
+        Document {
+            model,
+            ..Default::default()
+        },
+        None,
+        true,
+    );
+    let ctx = egui::Context::default();
+    sidebar::set_section_open(&ctx, ROUTER_SECTION_KEY, true);
+    let input = || egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(640., 1800.))),
+        ..Default::default()
+    };
+    let _ = ctx.run_test_ui(input(), |ui| app.time_estimates_contents(ui));
+    let output = ctx.run_test_ui(input(), |ui| app.time_estimates_contents(ui));
+    fn contains(shape: &egui::Shape, label: &str) -> bool {
+        match shape {
+            egui::Shape::Text(text) => text.galley.job.text == label,
+            egui::Shape::Vec(shapes) => shapes.iter().any(|shape| contains(shape, label)),
+            _ => false,
+        }
+    }
+    for label in [
+        tr!("time_estimates.router_whole_project"),
+        tr!("time_estimates.router_task"),
+        Profile::Chamfer.label(),
+        "0 h 7 min",
+    ] {
+        assert!(
+            output
+                .shapes
+                .iter()
+                .any(|shape| contains(&shape.shape, label)),
+            "missing {label}"
+        );
+    }
+    assert!(app.doc.history.is_empty());
+    assert_eq!(crate::icons::section_icon(ROUTER_SECTION_KEY), "router");
+}
+
+#[test]
+fn wood_glue_estimate_counts_touching_coated_faces_once() {
+    let mut stock = Model::default();
+    let face = rectangle(&mut stock, DVec3::ZERO);
+    assert!(stock.glue_face(face));
+    let mut model = Model::default();
+    model.paste_entities(&stock, DVec3::ZERO);
+    model.paste_entities(&stock, DVec3::X);
+    let mut app = BenchUpApp::with_document(
+        benchup_core::Document { model, ..Default::default() }, None, true,
+    );
+    // Each face is 6 m², with a 3 m² matching patch between them.
+    let report = app.time_estimate_report();
+    assert!(report.notes.iter().any(|note| note == "Wood glue coverage (whole project): 9.0000 m²"));
 }

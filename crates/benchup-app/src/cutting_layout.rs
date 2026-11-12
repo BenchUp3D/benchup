@@ -10,6 +10,8 @@ pub(crate) struct Settings {
     pub board_length_mm: f64,
     pub kerf_mm: f64,
     pub allow_rotation: bool,
+    pub respect_grain: bool,
+    pub show_joinery: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -19,6 +21,8 @@ impl Default for Settings {
             board_length_mm: 2440.,
             kerf_mm: 3.,
             allow_rotation: true,
+            respect_grain: true,
+            show_joinery: true,
         }
     }
 }
@@ -47,6 +51,7 @@ pub(crate) struct Piece {
     pub length: u64,
     pub width: u64,
     pub quantity: usize,
+    pub grain_along_length: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Rect {
@@ -60,6 +65,7 @@ pub(crate) struct Placement {
     pub mark: usize,
     pub rect: Rect,
     pub rotated: bool,
+    pub part_index: usize,
 }
 #[derive(Debug)]
 pub(crate) struct Stock {
@@ -109,23 +115,24 @@ pub(crate) fn sheets(pieces: &[Piece], settings: Settings) -> Layout {
     });
     let mut layout = Layout::default();
     for piece in pieces {
+        let can_rotate = settings.allow_rotation && !(settings.respect_grain && piece.grain_along_length);
         let orientations = [
             (piece.length, piece.width, false),
             (piece.width, piece.length, true),
         ];
         if !orientations.iter().any(|(l, w, rotated)| {
-            (!*rotated || settings.allow_rotation) && *l <= length && *w <= width
+            (!*rotated || can_rotate) && *l <= length && *w <= width
         }) {
             layout.oversized.push(piece);
             continue;
         }
-        for _ in 0..piece.quantity {
+        for part_index in 0..piece.quantity {
             // Best-area-fit among the remaining guillotine rectangles.
             let mut best = None;
             for (stock_index, stock) in layout.stock.iter().enumerate() {
                 for (free_index, free) in stock.free.iter().enumerate() {
                     for &(l, w, rotated) in &orientations {
-                        if rotated && !settings.allow_rotation || l > free.length || w > free.width
+                        if rotated && !can_rotate || l > free.length || w > free.width
                         {
                             continue;
                         }
@@ -148,7 +155,7 @@ pub(crate) fn sheets(pieces: &[Piece], settings: Settings) -> Layout {
                 let &(l, w, r) = orientations
                     .iter()
                     .find(|(l, w, r)| {
-                        (!*r || settings.allow_rotation) && *l <= length && *w <= width
+                        (!*r || can_rotate) && *l <= length && *w <= width
                     })
                     .unwrap();
                 layout.stock.push(Stock::new(length, width));
@@ -165,6 +172,7 @@ pub(crate) fn sheets(pieces: &[Piece], settings: Settings) -> Layout {
                     width: w,
                 },
                 rotated,
+                part_index,
             });
             // Horizontal cut first, then a vertical cut inside the lower band.
             if free.length > l + kerf {

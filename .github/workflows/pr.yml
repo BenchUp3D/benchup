@@ -25,7 +25,10 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.97.1
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/setup-compiler-cache
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -34,3 +37,41 @@ jobs:
 
       - name: Test core
         run: cargo test --locked -p benchup-core
+
+  io:
+    name: Test geometry import and export
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust and WebAssembly target
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/setup-compiler-cache
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: pr-io
+
+      - name: Test native import and export fixtures
+        run: cargo test --locked -p benchup-io -p benchup-skp
+
+      - name: Check browser import and export
+        run: cargo check --locked -p benchup-io -p benchup-skp --target wasm32-unknown-unknown
+
+      - name: Install Node.js for browser reader tests
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Test browser SketchUp reader and worker
+        run: node --test scripts/test_skp_import.cjs

@@ -1,0 +1,198 @@
+use super::*;
+use benchup_core::DVec3;
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn skp_import_normalizes_duplicate_pinched_faces_without_losing_placement_or_color() {
+    let bytes = include_bytes!("../tests/fixtures/pinched-face.skp");
+    let raw: Model = serde_json::from_str(&parse_skp(bytes).unwrap()).unwrap();
+    assert_eq!(raw.faces.len(), 2);
+    assert!(raw.validate().is_err());
+    let model = import_skp(bytes, "Pinched panel").unwrap();
+    model.validate().unwrap();
+    assert_eq!(model.vertices, raw.vertices);
+    assert_eq!(model.edges, raw.edges);
+    assert_eq!(model.faces.len(), 2);
+    assert_eq!(model.objects.len(), 2);
+    assert_eq!(
+        model.objects.last_key_value().unwrap().1.name,
+        "Pinched panel"
+    );
+    assert_eq!(model.face_colors.len(), 2);
+    assert!(model.face_colors.values().all(|c| *c == [210, 45, 30]));
+    assert!(
+        model
+            .vertices
+            .values()
+            .any(|v| { v.position.distance(DVec3::new(11., 21., 30.) * 0.0254) < 1e-12 })
+    );
+    let area: f64 = model.faces.values().map(|face| model.face_area(face)).sum();
+    assert!((area - 2. * 0.0254_f64.powi(2)).abs() < 1e-12);
+    let restored: Model = serde_json::from_str(&serde_json::to_string(&model).unwrap()).unwrap();
+    restored.validate().unwrap();
+    assert_eq!(model, restored);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn skp_import_accepts_small_details_and_warped_faces_without_losing_holes() {
+    let bytes = include_bytes!("../tests/fixtures/precision-faces.skp");
+    let raw: Model = serde_json::from_str(&parse_skp(bytes).unwrap()).unwrap();
+    assert!(raw.validate().is_err());
+    let model = import_skp(bytes, "Precision faces").unwrap();
+    model.validate().unwrap();
+    assert_eq!(model.vertices, raw.vertices);
+    assert_eq!(model.faces.len(), 9);
+    assert_eq!(model.objects.len(), 1);
+    assert_eq!(
+        model.objects.last_key_value().unwrap().1.name,
+        "Precision faces"
+    );
+    assert!(model.face_colors.values().all(|c| *c == [210, 45, 30]));
+    assert!(
+        model
+            .faces
+            .values()
+            .any(|face| model.face_area(face) < 1e-7)
+    );
+    let area: f64 = model.faces.values().map(|face| model.face_area(face)).sum();
+    assert!((area - (1200. + 0.00005) * 0.0254_f64.powi(2)).abs() < 1e-8);
+    let restored: Model = serde_json::from_str(&serde_json::to_string(&model).unwrap()).unwrap();
+    restored.validate().unwrap();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn skp_import_preserves_nested_geometry_holes_colors_and_metres() {
+    let model = import_skp(
+        include_bytes!("../tests/fixtures/placed-window.skp"),
+        "Window",
+    )
+    .unwrap();
+    model.validate().unwrap();
+    assert_eq!(model.faces.len(), 2);
+    assert_eq!(model.objects.len(), 4);
+    assert!(model.faces.values().all(|face| face.holes.len() == 1));
+    assert!(model.face_colors.values().all(|c| *c == [210, 45, 30]));
+    assert_eq!(model.objects.last_key_value().unwrap().1.name, "Window");
+    assert!(
+        model
+            .vertices
+            .values()
+            .any(|v| { v.position.distance(DVec3::new(0.254, 5.08, 0.508)) < 1e-9 })
+    );
+    assert!(import_skp(b"not a SketchUp file", "Bad").is_err());
+    let modern = import_skp(
+        include_bytes!("../tests/fixtures/modern-triangle.skp"),
+        "Triangle",
+    )
+    .unwrap();
+    assert_eq!(modern.faces.len(), 1);
+    assert_eq!(modern.edges.len(), 3);
+    modern.validate().unwrap();
+}
+
+#[test]
+fn obj_export_preserves_hole_area_and_omits_hidden_geometry() {
+    let mut model = Model::default();
+    for corners in [
+        [
+            DVec3::ZERO,
+            DVec3::X * 4.,
+            DVec3::new(4., 4., 0.),
+            DVec3::Y * 4.,
+        ],
+        [
+            DVec3::new(1., 1., 0.),
+            DVec3::new(3., 1., 0.),
+            DVec3::new(3., 3., 0.),
+            DVec3::new(1., 3., 0.),
+        ],
+    ] {
+        for i in 0..4 {
+            model.add_edge(corners[i], corners[(i + 1) % 4]).unwrap();
+        }
+    }
+    let inner = model
+        .faces
+        .values()
+        .find(|f| f.holes.is_empty())
+        .unwrap()
+        .id;
+    model.erase(&std::collections::BTreeSet::from([inner]));
+    let hidden = model.add_edge(DVec3::X * 10., DVec3::X * 11.).unwrap();
+    model.hidden.insert(hidden);
+    let obj = export_obj(&model).unwrap();
+    let vertices: Vec<DVec3> = obj
+        .lines()
+        .filter_map(|line| line.strip_prefix("v "))
+        .map(|line| {
+            let xyz: Vec<f64> = line
+                .split_whitespace()
+                .map(|s| s.parse().unwrap())
+                .collect();
+            DVec3::new(xyz[0], xyz[1], xyz[2])
+        })
+        .collect();
+    assert!(vertices.iter().all(|p| p.x <= 4.));
+    let area: f64 = obj
+        .lines()
+        .filter_map(|line| line.strip_prefix("f "))
+        .map(|line| {
+            let ids: Vec<usize> = line
+                .split_whitespace()
+                .map(|s| s.parse::<usize>().unwrap() - 1)
+                .collect();
+            let [a, b, c] = [vertices[ids[0]], vertices[ids[1]], vertices[ids[2]]];
+            (b - a).cross(c - a).length() * 0.5
+        })
+        .sum();
+    assert!((area - 12.).abs() < 1e-9);
+    assert!(export_obj(&Model::default()).is_err());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_skp_rejects_truncated_containers_without_panicking() {
+    for bytes in [
+        include_bytes!("../tests/fixtures/placed-window.skp").as_slice(),
+        include_bytes!("../tests/fixtures/modern-triangle.skp").as_slice(),
+    ] {
+        for length in [0, 1, 2, 10, 24, 64, 100, bytes.len() / 2] {
+            assert!(
+                import_skp(&bytes[..length.min(bytes.len())], "Truncated").is_err(),
+                "length={length}"
+            );
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn legacy_skp_keeps_geometry_after_tag_line_style_records() {
+    for bytes in [
+        include_bytes!("../tests/fixtures/tag-line-styles-2019.skp").as_slice(),
+        include_bytes!("../tests/fixtures/tag-line-styles-2020.skp").as_slice(),
+    ] {
+        let model = import_skp(bytes, "Line styles").unwrap();
+        assert_eq!(model.faces.len(), 6);
+        assert_eq!(model.edges.len(), 18);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn modern_skp_recovers_an_intact_model_with_a_missing_zip_directory() {
+    let bytes = include_bytes!("../tests/fixtures/modern-triangle.skp");
+    let directory = bytes.windows(4).position(|sig| sig == b"PK\x01\x02").unwrap();
+    let (expected, recovered) = import_skp_with_recovery(bytes, "Triangle").unwrap();
+    assert!(!recovered);
+    let (model, recovered) = import_skp_with_recovery(&bytes[..directory], "Triangle").unwrap();
+    assert!(recovered);
+    assert_eq!(model, expected);
+
+    let mut corrupt = bytes[..directory].to_vec();
+    let entry = corrupt.windows(4).position(|sig| sig == b"PK\x03\x04").unwrap();
+    corrupt[entry + 14] ^= 1;
+    assert!(import_skp(&corrupt, "Triangle").is_err());
+}
