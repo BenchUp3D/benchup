@@ -49,6 +49,14 @@ fn supported_language(locale: &str) -> Option<&'static str> {
             .iter()
             .find_map(|&(code, _)| (code == "zh_CN").then_some(code));
     }
+
+    // Brazilian Portuguese is the only Portuguese catalog, so it also serves
+    // bare pt and other Portuguese regions instead of falling back to English.
+    if parts.first() == Some(&"pt") {
+        return supported
+            .iter()
+            .find_map(|&(code, _)| (code == "pt_BR").then_some(code));
+    }
     None
 }
 
@@ -71,6 +79,9 @@ mod tests {
             "zh-SG",
         ] {
             assert_eq!(preferred_language([locale]), "zh_CN", "{locale}");
+        }
+        for locale in ["pt", "pt_BR", "pt-BR", "pt_BR.UTF-8", "pt-PT", "pt-AO"] {
+            assert_eq!(preferred_language([locale]), "pt_BR", "{locale}");
         }
     }
 
@@ -97,5 +108,7 @@ mod tests {
         assert_eq!(preferred_language(["fr-CA", "zh-Hans", "en-US"]), "zh_CN");
         assert_eq!(preferred_language(["en-CA", "zh-CN"]), "en");
         assert_eq!(preferred_language(["zh-Hant", "zh-Hans"]), "zh_CN");
+        assert_eq!(preferred_language(["fr-CA", "pt-BR", "en-US"]), "pt_BR");
+        assert_eq!(preferred_language(["en-US", "pt-BR"]), "en");
     }
 }

@@ -159,10 +159,11 @@ pub(super) fn detected_language() -> &'static str {
     language::detected_language()
 }
 
-fn languages() -> [(&'static str, &'static str); 2] {
+fn languages() -> [(&'static str, &'static str); 3] {
     [
         (DEFAULT_LANGUAGE, tr!("settings.language_english")),
         ("zh_CN", tr!("settings.language_simplified_chinese")),
+        ("pt_BR", tr!("settings.language_brazilian_portuguese")),
     ]
 }
 
@@ -1135,6 +1136,15 @@ mod tests {
     }
 
     #[test]
+    fn supported_languages_include_brazilian_portuguese() {
+        assert!(languages().contains(&("pt_BR", "Brazilian Portuguese")));
+        let mut settings = GeneralSettings::default();
+        settings.language = "pt_BR".into();
+        settings.normalize();
+        assert_eq!(settings.language, "pt_BR");
+    }
+
+    #[test]
     fn settings_labels_switch_languages_in_the_same_window() {
         struct Reset;
         impl Drop for Reset {
@@ -1147,6 +1157,7 @@ mod tests {
         for (language, title, group) in [
             ("en", "Settings", "Workspace"),
             ("zh_CN", "设置", "工作区"),
+            ("pt_BR", "Configurações", "Área de trabalho"),
             ("en", "Settings", "Workspace"),
         ] {
             app.general_settings.language = language.into();

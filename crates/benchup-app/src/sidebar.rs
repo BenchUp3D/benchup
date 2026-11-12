@@ -3046,7 +3046,7 @@ mod preference_tests {
 
     #[test]
     fn first_launch_language_is_saved_without_a_model_edit_and_not_redetected() {
-        for language in ["en", "zh_CN"] {
+        for language in ["en", "zh_CN", "pt_BR"] {
             let ctx = egui::Context::default();
             let mut storage = SavedPreferences::default();
             let mut app = BenchUpApp::with_document(Document::default(), None, true);

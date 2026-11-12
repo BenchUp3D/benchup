@@ -1,12 +1,24 @@
 use std::cell::Cell;
 
+/// A bundled message catalog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Language {
+    English,
+    SimplifiedChinese,
+    BrazilianPortuguese,
+}
+
 thread_local! {
     // UI and export operations resolve messages on their calling thread.
-    static CHINESE: Cell<bool> = const { Cell::new(false) };
+    static LANGUAGE: Cell<Language> = const { Cell::new(Language::English) };
 }
 
 pub fn set_language(language: &str) {
-    CHINESE.set(matches!(language, "zh_CN" | "zh-CN" | "zh-Hans"));
+    LANGUAGE.set(match language {
+        "zh_CN" | "zh-CN" | "zh-Hans" => Language::SimplifiedChinese,
+        "pt_BR" | "pt-BR" => Language::BrazilianPortuguese,
+        _ => Language::English,
+    });
 }
 
 /// Start an operation with the language selected by its caller.
@@ -16,15 +28,19 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    let chinese = is_chinese();
+    let language = current_language();
     std::thread::spawn(move || {
-        CHINESE.set(chinese);
+        LANGUAGE.set(language);
         operation()
     })
 }
 
+pub fn current_language() -> Language {
+    LANGUAGE.get()
+}
+
 pub fn is_chinese() -> bool {
-    CHINESE.get()
+    current_language() == Language::SimplifiedChinese
 }
 
 include!(concat!(env!("OUT_DIR"), "/messages.rs"));
@@ -59,6 +75,16 @@ mod tests {
         );
         assert_eq!(count, 1);
         assert_eq!(tr!("app.selection_entities", count = 2), "2 个图元");
+        super::set_language("pt_BR");
+        assert_eq!(tr!("common.cancel"), "Cancelar");
+        assert_eq!(tr!("settings.settings"), "Configurações");
+        #[cfg(not(target_arch = "wasm32"))]
+        assert_eq!(
+            super::spawn_localized(super::current_language).join().unwrap(),
+            super::Language::BrazilianPortuguese
+        );
+        assert_eq!(tr!("app.selection_entities", count = 1), "1 entidade");
+        assert_eq!(tr!("app.selection_entities", count = 2), "2 entidades");
         super::set_language("en");
         assert_eq!(tr!("common.cancel"), "Cancel");
         super::set_language("unsupported");
