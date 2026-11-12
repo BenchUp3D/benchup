@@ -673,6 +673,8 @@
   "cutting_plan.the_project_name_is_too_long_to_fit": "The project name is too long to fit above the workshop labels.",
   "cutting_plan.unnamed_part": "Unnamed part",
   "cutting_plan.workshop_labels": "Workshop Labels",
+  "desktop_files.missing_project_output_path": "Missing BenchUp project output path",
+  "desktop_files.missing_sketchup_file_path": "Missing SketchUp file path",
   "drawing_groups.the_drawing_could_not_be_grouped": "The drawing could not be grouped",
   "entity_gizmo.axis_lengths": "Axis lengths: {}. {}. {}.",
   "entity_gizmo.object_lenghts": "Object lenghts",

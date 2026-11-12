@@ -3,7 +3,9 @@
 use benchup_core::tr;
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
-    if let Some(result) = benchup_app::desktop_files::thumbnail_command() {
+    if let Some(result) = benchup_app::desktop_files::thumbnail_command()
+        .or_else(benchup_app::desktop_files::convert_command)
+    {
         if let Err(error) = result { eprintln!("{error}"); std::process::exit(1); }
         return Ok(());
     }
