@@ -1,5 +1,34 @@
 [
   {
+    "version": "0.7.1",
+    "date": "2026-11-12",
+    "title": "More languages, flexible navigation, and SketchUp conversion",
+    "sections": [
+      {
+        "title": "Language and navigation",
+        "changes": [
+          "Choose Brazilian Portuguese as the application language.",
+          "Use more complete translations for controls, export scale settings, dialogs, and history actions.",
+          "Choose whether middle mouse dragging pans or orbits, with the preference remembered across sessions."
+        ]
+      },
+      {
+        "title": "Import and modeling",
+        "changes": [
+          "Convert SketchUp files to BenchUp projects from the command line without opening a window.",
+          "Keep routed edges visible when working in scoped views.",
+          "Improve snapping cache invalidation after model changes."
+        ]
+      },
+      {
+        "title": "Documentation",
+        "changes": [
+          "Explore updated examples of wood materials, joinery, routing, and PDF exports on the website and in the README."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.7.0",
     "date": "2026-11-12",
     "title": "Woodworking tools, grain-aware cutting plans, and procedural finishes",

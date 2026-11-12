@@ -176,6 +176,17 @@ def main():
                     desktop.prepare(window)
                     stable_frame(window, process)
                     desktop.dismiss_modals(window)
+                    # Older executables do not dismiss release notes with Escape.
+                    desktop.x.XWarpPointer(desktop.display, 0, window, 0, 0, 0, 0, 1227, 92)
+                    desktop.x.XFlush(desktop.display)
+                    xtest = C.CDLL(ctypes.util.find_library("Xtst") or "libXtst.so.6")
+                    xtest.XTestFakeButtonEvent.argtypes = [C.c_void_p, C.c_uint, C.c_int, C.c_ulong]
+                    for pressed in (1, 0):
+                        xtest.XTestFakeButtonEvent(desktop.display, 1, pressed, 0)
+                    desktop.x.XFlush(desktop.display)
+                    time.sleep(0.5)
+                    desktop.dismiss_modals(window)
+                    desktop.prepare(window)
                     image = stable_frame(window, process)
                     destination = ROOT / "assets/screenshots/benchup.jpg"
                     temporary = destination.with_suffix(".jpg.tmp")
