@@ -12,6 +12,28 @@ function runStartup(document, fetch) {
     return vm.runInNewContext(startup, {document, fetch, Math: {random: () => 0, floor: Math.floor}});
 }
 
+// Catalog text must not introduce destinations absent from the source message.
+// Include bare domains and normalize full-width ASCII used to disguise addresses.
+function assertSafeTranslation(source, translated, key) {
+    assert.doesNotMatch(translated, /[\p{Cc}\p{Cf}]/gu, key);
+    const references = text => text.normalize('NFKC').match(
+        /\b[a-z][a-z\d+.-]*:\/\/[^\s<>"'，。；（）]+|\b(?:javascript|data|mailto):[^\s<>"'，。；（）]*|\b(?:[a-z\d](?:[a-z\d-]*[a-z\d])?\.)+[a-z]{2,63}\b/gi,
+    ) || [];
+    const allowed = new Set(references(source));
+    for (const reference of references(translated)) {
+        assert.ok(allowed.has(reference), `${key}: introduced address ${reference}`);
+    }
+}
+
+test('translation safety rejects introduced destinations and hidden text controls', () => {
+    for (const text of ['https://example.com/login', 'example.cn', 'ｗｗｗ．example．com',
+        'javascript:alert(1)', 'data:text/html,test', 'Click\u202ehere', 'exam\u200bple.com']) {
+        assert.throws(() => assertSafeTranslation('Open project', text, 'fixture'));
+    }
+    assertSafeTranslation('Visit https://example.com/help', '访问 https://example.com/help', 'fixture');
+    assertSafeTranslation('Save .bup', '保存 .bup', 'fixture');
+});
+
 test('the browser shell uses English catalog messages while loading', async () => {
     const loading = {};
     const attributes = {};
@@ -47,10 +69,12 @@ for (const [language, file] of [['Chinese', 'zh_CN'], ['Brazilian Portuguese', '
             assert.equal(typeof translated[key], typeof message, key);
             if (typeof message === 'string') {
                 assert.deepEqual(argumentsOf(translated[key]), argumentsOf(message), key);
+                assertSafeTranslation(message.replace(/[\n\r\t]/g, ''), translated[key].replace(/[\n\r\t]/g, ''), key);
             } else {
                 assert.deepEqual(Object.keys(translated[key]).sort(), Object.keys(message).sort(), key);
                 for (const [form, text] of Object.entries(message)) {
                     assert.deepEqual(argumentsOf(translated[key][form]), argumentsOf(text), `${key}.${form}`);
+                    assertSafeTranslation(text.replace(/[\n\r\t]/g, ''), translated[key][form].replace(/[\n\r\t]/g, ''), `${key}.${form}`);
                 }
             }
         }
