@@ -343,6 +343,8 @@ explicitly. It launches the desktop app in an isolated temporary profile, loads
 camera and display settings, dismisses open dialogs and popups, captures the
 settled window at 1920 × 1080, and updates `assets/screenshots/benchup.jpg` and its
 README link. Visually verify that no modal remains open before using the image.
+For a release, update the landing page and its social preview references to
+the same capture.
 It never compiles the app, runs tests, or starts benchmarks. The screenshot
 reflects the existing executable; a missing executable is reported without
 building one.
