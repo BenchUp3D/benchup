@@ -122,6 +122,7 @@ const TOOLS: &[(&str, bool)] = &[
     ("erase", true),
     ("add_joint", true),
     ("remove_joint", true),
+    ("flip_joint", true),
     ("add_dimension", true),
     ("add_text", true),
     ("select", false),
@@ -281,7 +282,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
         def("paint", "Paint objects or faces with an RGB color.",
             json!({"ids": ids(), "rgb": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 255}, "minItems": 3, "maxItems": 3}}), &["ids", "rgb"]),
         def("erase", "Delete entities (objects, faces, edges, dimensions, texts). Joints that use an erased board are removed with it; use remove_joint to delete a joint alone.", json!({"ids": ids()}), &["ids"]),
-        def("add_joint", "Add a wood joint between two boards that already overlap where they meet; the overlap is the joint's depth. a carries the tenon, tongue, tails, fingers or lap: the board that goes into the other (shelf, apron, drawer side). b receives the mortise, groove or sockets (side, leg, drawer front). params.depth_axis is the direction a goes into b; width_axis is the axis across which the tongue, tenon or fingers are spread (width_ratio of it); the third axis is the height (height_ratio, mortise_tenon only). Axes are 0=x, 1=y, 2=z (a's own axes if it is rotated). Omit them and the first orientation that can be cut is chosen. Ranges: ratios 0.1-0.9 (0.5), fingers 2-16 (4), dovetails 1-16 (1), taper_degrees 0-30 (8), clearance_mm 0-5 (0.1). The joint must be cuttable or the call fails; joints on one board must not cross, touch or end in the same plane. Both boards must be at the same group level. Returns joint_id and the orientation used; get_object on a joint shows its settings and supported orientations.",
+        def("add_joint", "Add a wood joint between two boards that already overlap where they meet; the overlap is the joint's depth. a carries the tenon, tongue, tails, fingers or lap: the board that goes into the other (shelf, apron, drawer side). b receives the mortise, groove or sockets (side, leg, drawer front). params.depth_axis is the direction a goes into b; width_axis is the axis across which the tongue, tenon or fingers are spread (width_ratio of it); the third axis is the height (height_ratio, mortise_tenon only). Axes are 0=x, 1=y, 2=z (a's own axes if it is rotated). Omit them and the first orientation that can be cut is chosen. Params by kind: mortise_tenon uses width_ratio and height_ratio; tongue_groove and rabbet use width_ratio; dovetail uses dovetails, width_ratio (share of the width taken by tails) and taper_degrees; finger uses fingers; all use clearance_mm. Ranges: ratios 0.1-0.9 (0.5), fingers 2-16 (4), dovetails 1-16 (1), taper_degrees 0-30 (8), clearance_mm 0-5 (0.1). The joint must be cuttable or the call fails; joints on one board must not cross, touch or end in the same plane. Both boards must be at the same group level. Returns joint_id and the orientation used; get_object on a joint shows its settings and supported orientations.",
             json!({"a": id(), "b": id(), "kind": {"type": "string", "enum": joint_kinds},
                 "params": {"type": "object", "properties": {
                     "width_ratio": number(), "height_ratio": number(),
@@ -293,12 +294,14 @@ pub fn definitions() -> Vec<ToolDefinition> {
             &["a", "b", "kind"]),
         def("remove_joint", "Delete wood joints by id (from the joints list in get_scene); the boards stay.",
             json!({"ids": ids()}), &["ids"]),
-        def("add_dimension", "Add a dimension between two points (they snap to nearby vertices). offset_mm moves the dimension line away from the measured points, perpendicular to them (e.g. [0, -150, 0] draws it 150 mm in front).",
-            json!({"start_mm": vec3(), "end_mm": vec3(), "offset_mm": vec3()}), &["start_mm", "end_mm", "offset_mm"]),
+        def("flip_joint", "Swap a joint's a and b (the board that carries the tenon or tongue and the one that receives it), keeping its kind and settings and re-picking the orientation. Use it when check_model reports joint_roles_reversed.",
+            json!({"ids": ids()}), &["ids"]),
+        def("add_dimension", "Add a dimension between two points. It measures the straight distance between them, or only along axis (x, y or z) when given. A point exactly on a vertex, edge or face attaches to it and follows it when the part moves; there is no snapping to nearby points. offset_mm moves the dimension line away from the measured points, perpendicular to them (e.g. [0, -150, 0] draws it 150 mm in front). Returns length_mm and whether each end attached.",
+            json!({"start_mm": vec3(), "end_mm": vec3(), "offset_mm": vec3(), "axis": axis_enum()}), &["start_mm", "end_mm", "offset_mm"]),
         def("add_text", "Add a text note anchored at point_mm; offset_mm places the label away from the anchor with a leader line ([0, 0, 0] puts it on the point).",
             json!({"point_mm": vec3(), "offset_mm": vec3(), "text": text()}), &["point_mm", "offset_mm", "text"]),
         def("select", "Select entities in the editor so the designer sees them.", json!({"ids": ids()}), &["ids"]),
-        def("enter_object", "Open a group/component for editing its inner parts. Nested parts need each level opened in turn, from the outside in. The group stays open until exit_to_root or the end of the session (with the benchup CLI, one command or --batch). push_pull does not need it.", json!({"id": id()}), &["id"]),
+        def("enter_object", "Open a group/component so that creating tools (create_board, draw_polyline, add_dimension...) put new parts inside it. Editing tools reach parts inside groups by themselves when all the ids share one group. Nested groups open from the outside in. The group stays open until exit_to_root or the end of the session (with the benchup CLI, one command or --batch).", json!({"id": id()}), &["id"]),
         def("exit_to_root", "Leave any open group and edit the top level again.", json!({}), &[]),
     ]
 }
@@ -513,6 +516,7 @@ struct DimensionArgs {
     start_mm: V3,
     end_mm: V3,
     offset_mm: V3,
+    axis: Option<AxisArg>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -929,7 +933,7 @@ fn group(model: &mut Model, a: GroupArgs) -> Res {
         Value::Array(members.iter().filter_map(|id| scene::object_entry(model, *id)).collect()),
     );
     let note = if done.extra["members"].as_array().is_some_and(Vec::is_empty) {
-        "The group holds loose faces and edges; it is created[0]."
+        "Made a new part from the faces and edges: it is created[0]. check_model tells whether it is a closed solid."
     } else {
         "Member ids may have changed; use the ids in members."
     };
@@ -1001,6 +1005,48 @@ fn erase(model: &mut Model, a: IdsArg) -> Res {
     if !orphaned.is_empty() {
         done.extra.insert("removed_joints".into(), json!(orphaned));
     }
+    Ok(done)
+}
+fn flip_joint(model: &mut Model, env: &ToolEnv, a: IdsArg) -> Res {
+    if a.ids.is_empty() || a.ids.len() > MAX_IDS {
+        return Err(fail("bad ids", format!("Pass between 1 and {MAX_IDS} joint ids.")));
+    }
+    let mut boards = BTreeSet::new();
+    let mut orientations = Vec::new();
+    for id in &a.ids {
+        let Some(connection) = model.connections.get(id).cloned() else {
+            return Err(fail(format!("{id} is not a joint"), "Use ids from the joints list in get_scene."));
+        };
+        let ConnectionOperation::Joinery(mut settings) = connection.operation else {
+            return Err(fail(format!("{id} is not a wood joint"), "Only wood joints can be flipped."));
+        };
+        let members = [connection.members[1], connection.members[0]];
+        for board in members {
+            if !model.contains_entity(&board) {
+                return Err(fail(format!("board {board} of joint {id} was erased"), "Remove the joint with remove_joint."));
+            }
+            if model.is_locked(board) {
+                return Err(fail(format!("board {board} of joint {id} is locked"), "Locked entities cannot be changed; tell the designer to unlock it."));
+            }
+            if !leased(model, env, board) {
+                return Err(fail("not-leased", "select it first so you hold the edit lease"));
+            }
+            boards.insert(board);
+        }
+        let supported = model.supported_joinery_axes(members, &settings);
+        if let Some((d, w)) = preferred_axes(model, members, &settings).filter(|axes| supported.contains(axes)).or(supported.first().copied()) {
+            (settings.depth_axis, settings.width_axis) = (d, w);
+        }
+        orientations.push(json!({"joint": id, "a": members[0], "b": members[1], "depth_axis": settings.depth_axis, "width_axis": settings.width_axis}));
+        // The entry face belonged to the old first board.
+        model.connections.insert(*id, Connection { members, entry_face: None, operation: ConnectionOperation::Joinery(settings) });
+    }
+    let errors = scene::joint_errors(model);
+    if let Some((id, error)) = a.ids.iter().find_map(|id| errors.get(id).map(|e| (id, e))) {
+        return Err(fail(format!("joint {id} cannot be cut once flipped: {error}"), "Check the overlap, or remove the joint and add it again with other params."));
+    }
+    let mut done = modified(&boards);
+    done.extra.insert("flipped".into(), json!(orientations));
     Ok(done)
 }
 fn remove_joint(model: &mut Model, env: &ToolEnv, a: IdsArg) -> Res {
@@ -1185,8 +1231,15 @@ fn add_joint(model: &mut Model, a: JointArgs) -> Res {
     Ok(done)
 }
 fn add_dimension(model: &mut Model, a: DimensionArgs) -> Res {
-    let id = model.add_dimension(point(a.start_mm)?, point(a.end_mm)?, point(a.offset_mm)?)?;
-    Ok(Done { created: vec![id], ..Default::default() })
+    let axis = a.axis.as_ref().map(AxisArg::axis);
+    let id = model.add_dimension_with_axis(point(a.start_mm)?, point(a.end_mm)?, point(a.offset_mm)?, axis)?;
+    let mut done = Done { created: vec![id], ..Default::default() };
+    if let Some(dimension) = model.dimensions.get(&id) {
+        done.extra.insert("length_mm".into(), json!(scene::mm(dimension.length(model))));
+        done.extra.insert("start_attached".into(), json!(!dimension.start.weights.is_empty()));
+        done.extra.insert("end_attached".into(), json!(!dimension.end.weights.is_empty()));
+    }
+    Ok(done)
 }
 fn add_text(model: &mut Model, a: TextArgs) -> Res {
     if a.text.chars().count() > MAX_TEXT_CHARS {
@@ -1281,6 +1334,7 @@ fn run(model: &mut Model, env: &mut ToolEnv, name: &str, arguments: &str) -> Res
         "erase" => erase(model, parse(arguments)?),
         "add_joint" => add_joint(model, parse(arguments)?),
         "remove_joint" => remove_joint(model, env, parse(arguments)?),
+        "flip_joint" => flip_joint(model, env, parse(arguments)?),
         "add_dimension" => add_dimension(model, parse(arguments)?),
         "add_text" => add_text(model, parse(arguments)?),
         "select" => {
@@ -1339,12 +1393,50 @@ fn error_outcome(error: String, hint: Option<String>) -> ToolOutcome {
 /// Tools that only add new entities: nothing existing is touched, so there is
 /// nothing to lease. (`create_copy` reads its source without changing it.)
 const CREATING: &[&str] = &["create_board", "create_copy", "draw_polyline", "add_dimension", "add_text"];
+/// Editing tools that open the group around their targets by themselves.
+const AUTO_SCOPE: &[&str] = &[
+    "move", "move_to", "rotate", "scale", "resize_board", "rename", "set_material", "set_grain",
+    "group", "ungroup", "tag", "paint", "erase", "add_joint", "create_copy",
+];
+
+/// The group to open so that all `ids` are editable, if they share one that is
+/// reachable from the current scope through unlocked, visible groups.
+fn auto_scope(model: &Model, ids: &[u64]) -> Option<u64> {
+    if ids.is_empty() || !ids.iter().all(|id| model.contains_entity(id)) {
+        return None;
+    }
+    if ids.iter().all(|id| model.entity_in_context(*id) == Some(*id)) {
+        return None;
+    }
+    let owner = model.parent(ids[0]).filter(|o| model.objects.contains_key(o))?;
+    if ids.iter().any(|id| model.parent(*id) != Some(owner)) {
+        return None;
+    }
+    let top = model.entity_in_context(owner)?;
+    let mut current = Some(owner);
+    for _ in 0..256 {
+        let object = current?;
+        if model.is_hidden(object) || model.is_locked(object) {
+            return None;
+        }
+        if object == top {
+            return Some(owner);
+        }
+        current = model.parent(object);
+    }
+    None
+}
 
 /// Existing entities a mutating call names, read from the raw arguments.
 fn target_ids(name: &str, arguments: &str) -> Vec<u64> {
     if CREATING.contains(&name) {
         return Vec::new();
     }
+    named_ids(arguments)
+}
+
+/// Every id the raw arguments name (ids, id, face_id, a, b).
+fn named_ids(arguments: &str) -> Vec<u64> {
     let Ok(Value::Object(map)) = serde_json::from_str::<Value>(arguments) else { return Vec::new() };
     let mut ids: Vec<u64> = map.get("ids").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64).collect();
     ids.extend(["id", "face_id", "a", "b"].iter().filter_map(|key| map.get(*key)?.as_u64()));
@@ -1475,7 +1567,20 @@ pub fn execute(model: &mut Model, call: &Call, env: &mut ToolEnv) -> ToolOutcome
     // `catch_unwind` cannot help on wasm32, where a panic aborts. Every tool
     // therefore validates its arguments (counts, ranges, lengths) before it
     // touches the model, and the result is range-checked below.
+    // Editing parts inside a group: open that group for this call only, as the
+    // designer would, when every id shares it and the way there is editable.
+    let saved_context = model.edit_context;
+    let opened = mutating && AUTO_SCOPE.contains(&name) && {
+        let owner = auto_scope(model, &named_ids(arguments));
+        if let Some(owner) = owner {
+            model.edit_context = Some(owner);
+        }
+        owner.is_some()
+    };
     let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(model, env, name, arguments)));
+    if opened {
+        model.edit_context = saved_context;
+    }
     let result = match attempt {
         Ok(result) => result,
         Err(_) => Err(Fail::from("internal error while applying the tool")),

@@ -266,28 +266,29 @@ fn grouped_project(dir: &Path) -> (String, u64, u64) {
 }
 
 #[test]
-fn an_open_group_lasts_for_one_command() {
+fn parts_inside_groups_are_edited_directly_and_an_open_group_lasts_one_command() {
     let dir = tempfile::tempdir().unwrap();
     let (path, group, inner) = grouped_project(dir.path());
+    // Editing a part inside a group needs no enter_object.
     let rename = json!({"id": inner, "name": "Inner"}).to_string();
-    // Opened in one command, the group is closed again in the next.
+    assert!(benchup(&["call", &path, "rename", &rename], None).status.success());
+    let doc = files::decode(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(doc.model.objects[&inner].name, "Inner");
+    // Creating inside a group needs it open, in the same command.
     assert!(benchup(&["call", &path, "enter_object", &json!({"id": group}).to_string()], None).status.success());
-    let output = benchup(&["call", &path, "rename", &rename], None);
-    assert_eq!(output.status.code(), Some(1));
-    let hint = json_out(&output)["hint"].as_str().unwrap().to_owned();
-    assert!(hint.contains(&format!("enter_object{{id:{group}}}")) && hint.contains("--batch"), "{hint}");
-    // In one batch it works, and the file is left at the top level.
+    let alone = json_out(&benchup(&["call", &path, "create_board", &board("C", [0., 500., 0.], [10., 10., 10.]).to_string()], None));
+    let doc = files::decode(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(doc.model.parent(alone["created"][0].as_u64().unwrap()), None, "the group closed with its command");
     let batch = format!(
         "{}\n{}\n",
         json!({"tool": "enter_object", "arguments": {"id": group}}),
-        json!({"tool": "rename", "arguments": {"id": inner, "name": "Inner"}})
+        json!({"tool": "create_board", "arguments": board("D", [0., 700., 0.], [10., 10., 10.])})
     );
-    assert!(benchup(&["call", &path, "--batch", "-"], Some(&batch)).status.success());
+    let inside = json_out(&benchup(&["call", &path, "--batch", "-"], Some(&batch)));
     let doc = files::decode(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(doc.model.objects[&inner].name, "Inner");
+    assert_eq!(doc.model.parent(inside["results"][1]["created"][0].as_u64().unwrap()), Some(group));
     assert_eq!(doc.model.edit_context, None);
 }
-
 
 #[test]
 fn batch_calls_can_use_earlier_results() {
@@ -312,6 +313,7 @@ fn batch_calls_can_use_earlier_results() {
     let output = benchup(&["call", &path, "--batch", "-"], Some(&format!("{}\n{bad}", batch[0])));
     assert_eq!(output.status.code(), Some(1));
     assert!(json_out(&output)["result"]["error"].as_str().unwrap().contains("only 1 earlier"));
+    assert_eq!(json_out(&output)["earlier_results"].as_array().unwrap().len(), 1, "what ran before the failure");
     assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
@@ -329,7 +331,8 @@ fn dry_run_and_brief_output() {
     assert_eq!(std::fs::read(&path).unwrap(), before, "and leaves the file alone");
 
     let result = json_out(&benchup(&["call", &path, "create_board", &args, "--brief"], None));
-    assert!(result["objects"].is_null() && result["bounds_mm"].is_null());
+    assert!(result["objects"].is_null(), "no object summaries");
+    assert!(result["bounds_mm"].is_object(), "bounds stay");
     assert_eq!(result["created"].as_array().unwrap().len(), 1);
     let scene = json_out(&benchup(&["call", &path, "get_scene", "--brief"], None));
     assert_eq!(scene["objects"].as_array().unwrap().len(), 1, "a brief scene keeps its objects");

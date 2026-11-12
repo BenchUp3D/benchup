@@ -70,6 +70,18 @@ fn material_json(model: &Model, object: &benchup_core::Object) -> Option<Value> 
     Some(json!({"id": object.stock_material_id, "name": stock.name}))
 }
 
+/// The stock material of the nearest group around `id` that has one.
+fn inherited_material(model: &Model, id: u64) -> Option<(u64, Value)> {
+    let mut current = model.parent(id);
+    while let Some(object) = current.and_then(|c| model.objects.get(&c)) {
+        if let Some(material) = material_json(model, object) {
+            return Some((object.id, material));
+        }
+        current = model.parent(object.id);
+    }
+    None
+}
+
 pub fn object_entry(model: &Model, id: u64) -> Option<Value> {
     let object = model.objects.get(&id)?;
     let mut entry = json!({
@@ -93,6 +105,9 @@ pub fn object_entry(model: &Model, id: u64) -> Option<Value> {
         map.insert("definition".into(), json!(definition.to_string()[..8]));
     }
     if let Some(material) = material_json(model, object) {
+        map.insert("material".into(), material);
+    } else if let Some((owner, mut material)) = inherited_material(model, id) {
+        material["inherited_from"] = json!(owner);
         map.insert("material".into(), material);
     }
     if let Some(grain) = object.world_grain_axis() {
@@ -139,13 +154,28 @@ pub fn joint_detail(model: &Model, id: u64) -> Option<Value> {
             "a": "carries the tenon, tongue, tails, fingers or lap (the board that goes into the other)",
             "b": "receives the mortise, groove, sockets or lap",
         });
-        joint["params"] = json!({
+        use benchup_core::joinery::JointKind;
+        let mut params = json!({
             "depth_axis": s.depth_axis, "width_axis": s.width_axis,
             "depth_axis_name": axes[s.depth_axis.min(2)], "width_axis_name": axes[s.width_axis.min(2)],
-            "width_ratio": s.width_ratio, "height_ratio": s.height_ratio,
-            "fingers": s.fingers, "dovetails": s.dovetails, "taper_degrees": s.taper_degrees,
             "clearance_mm": mm(s.clearance),
         });
+        // Only the settings this kind of joint uses.
+        match s.kind {
+            JointKind::MortiseTenon => {
+                params["width_ratio"] = json!(s.width_ratio);
+                params["height_ratio"] = json!(s.height_ratio);
+            }
+            JointKind::TongueGroove | JointKind::Rabbet => params["width_ratio"] = json!(s.width_ratio),
+            JointKind::Dovetail => {
+                params["dovetails"] = json!(s.dovetails);
+                params["width_ratio"] = json!(s.width_ratio);
+                params["taper_degrees"] = json!(s.taper_degrees);
+            }
+            JointKind::Finger => params["fingers"] = json!(s.fingers),
+            JointKind::HalfLap => {}
+        }
+        joint["params"] = params;
         let supported: Vec<Value> = model
             .supported_joinery_axes(connection.members, s)
             .into_iter()
@@ -392,10 +422,14 @@ pub fn describe(model: &Model, id: u64) -> Option<Value> {
 pub fn annotation_json(model: &Model, id: u64) -> Option<Value> {
     if let Some(dimension) = model.dimensions.get(&id) {
         let (a, b) = dimension.points(model);
-        return Some(json!({
+        let mut entry = json!({
             "id": id, "kind": "dimension", "start_mm": point_mm(a), "end_mm": point_mm(b),
-            "offset_mm": point_mm(dimension.offset), "length_mm": mm(a.distance(b)),
-        }));
+            "offset_mm": point_mm(dimension.offset), "length_mm": mm(dimension.length(model)),
+        });
+        if let Some(axis) = dimension.axis {
+            entry["axis"] = json!(axis_name(axis.vector()));
+        }
+        return Some(entry);
     }
     let text = model.texts.get(&id)?;
     Some(json!({

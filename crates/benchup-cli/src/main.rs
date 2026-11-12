@@ -35,7 +35,7 @@ usage:
 
 options:
   --dry-run        (call) report the results without changing the file
-  --brief          (call) leave out object summaries and bounds from results
+  --brief          (call) leave out the object summaries of changing calls
   --allow-shared   edit the local copy of a shared project
 
 Every change is one undo step in BenchUp and the file is saved atomically.
@@ -149,28 +149,27 @@ fn run_calls(project: &mut Project, calls: &[(String, Value)], save: bool) -> Re
         Applied::Ok(mut results) if !batch => ok(results.pop().unwrap_or(Value::Null)),
         Applied::Ok(results) => ok(json!({"ok": true, "results": results})),
         Applied::Failed { result, .. } if !batch => Output { value: result, ok: false },
-        Applied::Failed { index, result } => Output {
+        Applied::Failed { index, result, earlier } => Output {
             value: json!({
                 "ok": false,
                 "failed_call": index + 1,
                 "tool": calls[index].0,
                 "result": result,
-                "note": "nothing was changed; fix this call and run the whole batch again",
+                "earlier_results": earlier,
+                "note": "nothing was changed: earlier_results shows what the calls before it returned, then everything was rolled back; fix this call and run the whole batch again",
             }),
             ok: false,
         },
     })
 }
 
-/// Drops the bulky parts of tool results, keeping ids, errors and answers.
+/// Drops the object summaries that changing tools attach to their results,
+/// keeping ids, bounds, errors and the answers of reading tools.
 fn brief(value: &mut Value) {
     if let Some(map) = value.as_object_mut() {
-        // A scene's object list is the answer, not a summary.
-        if map.contains_key("object_count") {
-            return;
+        if map.contains_key("created") {
+            map.remove("objects");
         }
-        map.remove("objects");
-        map.remove("bounds_mm");
         for key in ["results", "result"] {
             match map.get_mut(key) {
                 Some(Value::Array(items)) => items.iter_mut().for_each(brief),

@@ -31,7 +31,8 @@ pub enum Applied {
     /// Every call succeeded; one result per call.
     Ok(Vec<Value>),
     /// Call `index` failed; nothing was changed or saved.
-    Failed { index: usize, result: Value },
+    /// Call `index` failed; `earlier` holds the results of the calls before it.
+    Failed { index: usize, result: Value, earlier: Vec<Value> },
 }
 
 impl Project {
@@ -104,6 +105,7 @@ impl Project {
                     self.env.selection = selection_before;
                     return Ok(Applied::Failed {
                         index,
+                        earlier: results,
                         result: json!({"ok": false, "error": error,
                             "hint": "Refer to an earlier call as \"$N.field\" (N counts calls from 1), e.g. \"$1.created[0]\" or \"$3.joint_id\"."}),
                     });
@@ -114,7 +116,7 @@ impl Project {
             if !outcome.ok {
                 self.doc = original;
                 self.env.selection = selection_before;
-                return Ok(Applied::Failed { index, result: outcome.result });
+                return Ok(Applied::Failed { index, result: outcome.result, earlier: results });
             }
             mutated |= outcome.mutated;
             let mut result = outcome.result;

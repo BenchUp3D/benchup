@@ -226,13 +226,16 @@ fn copy_group_ungroup_and_selection_scope() {
     let group = grouped.created[0];
     assert_eq!(model.objects[&group].name, "Pair");
     assert_eq!(grouped.result["members"].as_array().unwrap().len(), 2);
-    // Parts are now inside the group: editing one needs its scope open.
+    // Parts are now inside the group: editing tools open it for the call.
     let inner = grouped.result["members"][0]["id"].as_u64().unwrap();
-    let message = err(&mut model, &mut env, "rename", json!({"id": inner, "name": "Inner"}));
+    ok(&mut model, &mut env, "rename", json!({"id": inner, "name": "Inner"}));
+    assert_eq!(model.edit_context, None, "the group closes again after the call");
+    // Ids in different groups are not opened together.
+    let outside = board(&mut model, &mut env, "Outside", [0., 900., 0.], [10., 10., 10.]);
+    let message = err(&mut model, &mut env, "move", json!({"ids": [inner, outside], "delta_mm": [1, 0, 0]}));
     assert!(message.contains("not editable"), "{message}");
     ok(&mut model, &mut env, "enter_object", json!({"id": group}));
     assert_eq!(model.edit_context, Some(group));
-    ok(&mut model, &mut env, "rename", json!({"id": inner, "name": "Inner"}));
     assert!(err(&mut model, &mut env, "enter_object", json!({"id": 99999})).contains("cannot open"));
     ok(&mut model, &mut env, "exit_to_root", json!({}));
     assert_eq!(model.edit_context, None);
@@ -640,8 +643,10 @@ fn scope_errors_name_every_object_to_open() {
     let outer = ok(&mut model, &mut env, "group", json!({"ids": [inner, other], "name": "Outer", "component": false})).created[0];
     let inner = model.objects[&outer].entities.iter().copied().find(|id| model.objects.get(id).is_some_and(|o| o.name == "Inner")).unwrap();
     let part = *model.objects[&inner].entities.iter().find(|id| model.objects.contains_key(id)).unwrap();
+    // Mixed with a top-level board, the nested part is not opened automatically.
+    let loose = board(&mut model, &mut env, "Loose", [0., 900., 0.], [10., 10., 10.]);
     let hint = |model: &mut Model, env: &mut ToolEnv| {
-        run(model, env, "rename", json!({"id": part, "name": "P"})).result["hint"].as_str().unwrap().to_owned()
+        run(model, env, "move", json!({"ids": [part, loose], "delta_mm": [1, 0, 0]})).result["hint"].as_str().unwrap().to_owned()
     };
     let from_root = hint(&mut model, &mut env);
     assert!(from_root.contains(&format!("enter_object{{id:{outer}}}, then enter_object{{id:{inner}}}")), "{from_root}");
@@ -843,4 +848,78 @@ fn cut_list_uses_materials_set_on_groups() {
     assert_eq!(cut["pieces"][0]["material"], "Birch 18");
     let check = ok(&mut model, &mut env, "check_model", json!({})).result;
     assert!(check["issues"].as_array().unwrap().iter().all(|i| i["kind"] != "no_material"), "{check}");
+}
+
+#[test]
+fn flip_joint_swaps_roles_and_keeps_settings() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let side = board(&mut model, &mut env, "Side", [0., 0., 0.], [18., 300., 900.]);
+    let shelf = board(&mut model, &mut env, "Shelf", [9., 0., 400.], [500., 300., 18.]);
+    let joint = ok(&mut model, &mut env, "add_joint", json!({"a": side, "b": shelf, "kind": "tongue_groove", "params": {"width_ratio": 0.4}})).joints[0];
+    let flipped = ok(&mut model, &mut env, "flip_joint", json!({"ids": [joint]}));
+    assert!(flipped.mutated);
+    assert_eq!(model.connections[&joint].members, [shelf, side]);
+    let detail = ok(&mut model, &mut env, "get_object", json!({"id": joint})).result;
+    assert_eq!(detail["params"]["width_ratio"], 0.4, "settings are kept");
+    assert_eq!(detail["params"]["width_axis_name"], "z", "the orientation is re-picked for the new a");
+    assert!(detail["params"].get("fingers").is_none(), "only this kind's settings");
+    let check = ok(&mut model, &mut env, "check_model", json!({})).result;
+    assert_eq!(check["warnings"], 0, "{check}");
+    assert_eq!(check["joints"]["ok"], 1);
+}
+
+#[test]
+fn editing_tools_reach_parts_inside_groups() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "A", [0., 0., 0.], [100., 100., 20.]);
+    let b = board(&mut model, &mut env, "B", [200., 0., 0.], [100., 100., 20.]);
+    let group = ok(&mut model, &mut env, "group", json!({"ids": [a, b], "name": "Pair", "component": false})).created[0];
+    let inner: Vec<u64> = model.objects[&group].entities.iter().copied().filter(|id| model.objects.contains_key(id)).collect();
+    ok(&mut model, &mut env, "move", json!({"ids": [inner[0]], "delta_mm": [0, 0, 50]}));
+    near(bounds(&model, inner[0]).0, [bounds(&model, inner[0]).0.x, 0., 0.05]);
+    ok(&mut model, &mut env, "resize_board", json!({"id": inner[1], "size_mm": [100, 100, 30]}));
+    assert_eq!(model.edit_context, None);
+    assert_eq!(model.parent(inner[0]), Some(group), "the part stays in its group");
+}
+
+#[test]
+fn check_model_reports_boards_passing_through_and_thickness() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    board(&mut model, &mut env, "Divider", [491., 0., 0.], [18., 300., 1800.]);
+    let shelf = board(&mut model, &mut env, "Long shelf", [9., 0., 1000.], [1200., 300., 18.]);
+    let id = ok(&mut model, &mut env, "create_stock_material", json!({"name": "Board 16", "thickness_mm": 16, "width_mm": 1220, "length_mm": 2440})).result["material_id"].clone();
+    ok(&mut model, &mut env, "set_material", json!({"ids": [shelf], "material_id": id}));
+    let check = ok(&mut model, &mut env, "check_model", json!({})).result;
+    let kinds: Vec<&str> = check["issues"].as_array().unwrap().iter().map(|i| i["kind"].as_str().unwrap()).collect();
+    assert!(kinds.contains(&"passes_through"), "{check}");
+    assert!(kinds.contains(&"thickness_mismatch"), "{check}");
+    assert_eq!(check["errors"], 1);
+}
+
+#[test]
+fn dimensions_measure_along_an_axis_and_report_attachment() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    board(&mut model, &mut env, "Side", [0., 0., 0.], [18., 300., 900.]);
+    let straight = ok(&mut model, &mut env, "add_dimension", json!({"start_mm": [0, 0, 0], "end_mm": [300, 0, 900], "offset_mm": [-100, 0, 0]}));
+    assert!(straight.result["length_mm"].as_f64().unwrap() > 900.);
+    assert_eq!(straight.result["start_attached"], true, "a corner of the board");
+    let along = ok(&mut model, &mut env, "add_dimension", json!({"start_mm": [0, 0, 0], "end_mm": [300, 0, 900], "offset_mm": [-150, 0, 0], "axis": "z"}));
+    assert_eq!(along.result["length_mm"], 900.0);
+    let free = ok(&mut model, &mut env, "add_dimension", json!({"start_mm": [-50, -50, 0], "end_mm": [-50, -50, 100], "offset_mm": [-10, 0, 0]}));
+    assert_eq!(free.result["start_attached"], false, "no snapping to nearby corners");
+    let scene = ok(&mut model, &mut env, "get_scene", json!({})).result;
+    assert_eq!(scene["dimensions"][1]["axis"], "z");
+}
+
+#[test]
+fn the_scene_shows_materials_inherited_from_groups() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let shelf = board(&mut model, &mut env, "Shelf", [0., 0., 0.], [500., 300., 18.]);
+    let id = ok(&mut model, &mut env, "create_stock_material", json!({"name": "MDF", "thickness_mm": 18, "width_mm": 1220, "length_mm": 2440})).result["material_id"].clone();
+    let group = ok(&mut model, &mut env, "group", json!({"ids": [shelf], "name": "Unit", "component": false})).created[0];
+    ok(&mut model, &mut env, "set_material", json!({"ids": [group], "material_id": id}));
+    let inner = *model.objects[&group].entities.iter().find(|id| model.objects.contains_key(id)).unwrap();
+    let entry = ok(&mut model, &mut env, "get_object", json!({"id": inner})).result;
+    assert_eq!(entry["material"]["name"], "MDF");
+    assert_eq!(entry["material"]["inherited_from"], group);
 }

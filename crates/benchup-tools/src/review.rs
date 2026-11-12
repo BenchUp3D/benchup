@@ -161,6 +161,27 @@ pub fn check(model: &Model) -> Value {
                 continue;
             }
             let (name_a, name_b) = (&model.objects[a].name, &model.objects[b].name);
+            // One board crossing the other completely, cutting it in two: the
+            // shared region spans the other on two axes and it continues on
+            // both sides along the third. A housed end only notches the board.
+            let shared = (box_a.0.max(box_b.0), box_a.1.min(box_b.1));
+            let splits = |board: (DVec3, DVec3)| {
+                let full: Vec<usize> = (0..3).filter(|i| shared.1[*i] - shared.0[*i] >= board.1[*i] - board.0[*i] - 1.0e-4).collect();
+                full.len() == 2 && {
+                    let i = 3 - full[0] - full[1];
+                    board.0[i] < shared.0[i] - 1.0e-4 && board.1[i] > shared.1[i] + 1.0e-4
+                }
+            };
+            if splits(*box_a) || splits(*box_b) {
+                let (through, pierced) = if splits(*box_b) { (name_a, name_b) } else { (name_b, name_a) };
+                issue(
+                    "error",
+                    "passes_through",
+                    format!("{through} passes right through {pierced}, cutting it in two; a joint cannot fix this. Shorten or move it."),
+                    vec![*a, *b],
+                );
+                continue;
+            }
             let approximate = if *aligned_a && *aligned_b { "" } else { " (measured on bounding boxes; a board is rotated)" };
             issue(
                 "warning",
@@ -184,7 +205,7 @@ pub fn check(model: &Model) -> Value {
                     issue(
                         "warning",
                         "joint_roles_reversed",
-                        format!("Joint {id} looks reversed: {} goes into {}, so it should be a and {} b (remove_joint, then add_joint).",
+                        format!("Joint {id} looks reversed: {} goes into {}, so it should be a and {} b (flip_joint).",
                             model.objects[&b].name, model.objects[&a].name, model.objects[&a].name),
                         vec![*id, a, b],
                     );
@@ -206,6 +227,16 @@ pub fn check(model: &Model) -> Value {
         issue("info", "loose_geometry", format!("{} loose edges and faces at the top level; group them into a part or erase them.", loose.len()),
             loose.into_iter().take(20).collect());
     }
+    for id in &all {
+        let Some(name) = material_name(model, *id) else { continue };
+        let Some(stock) = model.stock_materials.values().find(|m| m.name == name).filter(|m| m.dimensions[0] > 0) else { continue };
+        let Some([thickness, ..]) = blank(model, *id) else { continue };
+        let expected = stock.dimensions[0] as f64 / 10.;
+        if (mm(thickness) - expected).abs() > 0.5 {
+            issue("warning", "thickness_mismatch",
+                format!("{} is {} mm thick but its material {name} is {expected} mm.", model.objects[id].name, mm(thickness)), vec![*id]);
+        }
+    }
     let unassigned: Vec<u64> = all.iter().copied().filter(|id| material_name(model, *id).is_none()).collect();
     if !unassigned.is_empty() {
         issue("info", "no_material", format!("{} boards have no stock material.", unassigned.len()), unassigned.into_iter().take(20).collect());
@@ -214,7 +245,13 @@ pub fn check(model: &Model) -> Value {
     let errors = issues.iter().filter(|i| i["severity"] == "error").count();
     let warnings = issues.iter().filter(|i| i["severity"] == "warning").count();
     issues.truncate(MAX_LISTED_ISSUES);
-    let mut out = json!({"boards": all.len(), "errors": errors, "warnings": warnings, "issues": issues});
+    let joint_errors = scene::joint_errors(model);
+    let wood_joints = model.connections.values().filter(|c| matches!(c.operation, ConnectionOperation::Joinery(_))).count();
+    let mut out = json!({
+        "boards": all.len(), "errors": errors, "warnings": warnings,
+        "joints": {"total": wood_joints, "ok": wood_joints - joint_errors.len().min(wood_joints), "failing": joint_errors.keys().collect::<Vec<_>>()},
+        "issues": issues,
+    });
     if total > MAX_LISTED_ISSUES {
         out["issues_omitted"] = json!(total - MAX_LISTED_ISSUES);
     }
