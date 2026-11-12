@@ -186,11 +186,19 @@ impl BenchUpApp {
                     ),
                     (
                         tr!("shortcuts.temporary_orbit"),
-                        tr!("shortcuts.middle_drag"),
+                        if self.general_settings.middle_mouse_pan {
+                            tr!("shortcuts.shift_middle_drag")
+                        } else {
+                            tr!("shortcuts.middle_drag")
+                        },
                     ),
                     (
                         tr!("shortcuts.temporary_pan"),
-                        tr!("shortcuts.shift_middle_drag"),
+                        if self.general_settings.middle_mouse_pan {
+                            tr!("shortcuts.middle_drag")
+                        } else {
+                            tr!("shortcuts.shift_middle_drag")
+                        },
                     ),
                     (tr!("shortcuts.zoom_to_pointer"), tr!("shortcuts.scroll")),
                     (tr!("shortcuts.toggle_sidebar"), tr!("shortcuts.tab")),

@@ -3229,10 +3229,13 @@ impl BenchUpApp {
                     } else if drawing_orbit {
                         tr!("app.move_the_cursor_to_orbit_hold_shift_to")
                     } else if navigating {
-                        if ctx.input(|i| i.modifiers.shift) {
-                            tr!("app.panning_release_shift_to_orbit")
-                        } else {
-                            tr!("app.orbiting_hold_shift_to_pan")
+                        let shift = ctx.input(|i| i.modifiers.shift);
+                        let button = self.gesture.as_ref().map(|gesture| gesture.button);
+                        match (self.general_settings.navigation_pans(button, shift), shift) {
+                            (true, true) => tr!("app.panning_release_shift_to_orbit"),
+                            (true, false) => tr!("app.panning_hold_shift_to_orbit"),
+                            (false, true) => tr!("app.orbiting_release_shift_to_pan"),
+                            (false, false) => tr!("app.orbiting_hold_shift_to_pan"),
                         }
                     } else if self.paste_preview.is_some() {
                         tr!("app.click_to_place_the_copy_escape_to_cancel")
@@ -4727,8 +4730,14 @@ impl BenchUpApp {
         }
     }
 
-    fn navigate(&mut self, ctx: &egui::Context, delta: DVec2, pivot: &mut Option<DVec3>) {
-        if ctx.input(|i| i.modifiers.shift) {
+    fn navigate(
+        &mut self,
+        ctx: &egui::Context,
+        delta: DVec2,
+        pivot: &mut Option<DVec3>,
+        button: Option<egui::PointerButton>,
+    ) {
+        if self.general_settings.navigation_pans(button, ctx.input(|i| i.modifiers.shift)) {
             self.doc.camera.pan(
                 delta * self.general_settings.mouse_pan_speed(),
                 self.viewport.height() as f64,
@@ -4764,10 +4773,13 @@ impl BenchUpApp {
         };
         *dragged = true;
         if delta != Vec2::ZERO {
-            if ctx.input(|i| i.modifiers.shift) {
+            if self.general_settings.navigation_pans(
+                Some(gesture.button),
+                ctx.input(|i| i.modifiers.shift),
+            ) {
                 // Share Orbit's pan speed, viewport scale, and pivot reset.
                 // Read Shift on every movement so it can change mid-drag.
-                self.navigate(ctx, dv(delta), pivot);
+                self.navigate(ctx, dv(delta), pivot, Some(gesture.button));
             } else {
                 let center = *pivot.get_or_insert_with(|| self.orbit_center());
                 // Keep the compass's own sensitivity, while honoring orbit inversion.
@@ -5064,7 +5076,7 @@ impl BenchUpApp {
                     if self.drawing_orbit_down && in_viewport && !mouse_navigation {
                         if let Some(previous) = self.viewport_pointer {
                             let mut pivot = self.drawing_orbit_pivot;
-                            self.navigate(ctx, dv(pos - previous), &mut pivot);
+                            self.navigate(ctx, dv(pos - previous), &mut pivot, None);
                             self.drawing_orbit_pivot = pivot;
                         }
                     }
@@ -5073,7 +5085,7 @@ impl BenchUpApp {
                         self.update_compass_orbit(ctx, &mut gesture, pos);
                         match &mut gesture.kind {
                             GestureKind::Navigate { pivot } => {
-                                self.navigate(ctx, dv(pos - gesture.last), pivot);
+                                self.navigate(ctx, dv(pos - gesture.last), pivot, Some(gesture.button));
                             }
                             GestureKind::Erase { ids } => {
                                 ids.extend(self.sweep_erase(gesture.last, pos));

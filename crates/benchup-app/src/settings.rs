@@ -189,6 +189,7 @@ pub(super) struct GeneralSettings {
     pub section: Section,
     pub language: String,
     pub navigation_type: NavigationType,
+    pub middle_mouse_pan: bool,
     pub orbit_speed: f64,
     pub pan_speed: f64,
     pub zoom_speed: f64,
@@ -212,6 +213,7 @@ impl Default for GeneralSettings {
             section: Section::default(),
             language: DEFAULT_LANGUAGE.into(),
             navigation_type: NavigationType::default(),
+            middle_mouse_pan: false,
             orbit_speed: 1.,
             pan_speed: 1.,
             zoom_speed: 1.,
@@ -232,6 +234,12 @@ impl Default for GeneralSettings {
 }
 
 impl GeneralSettings {
+    pub(super) fn navigation_pans(&self, button: Option<egui::PointerButton>, shift: bool) -> bool {
+        // Shift switches modes during a drag; only middle-button navigation
+        // uses the alternate mapping. Orbit-tool and drawing controls stay fixed.
+        shift ^ (button == Some(egui::PointerButton::Middle) && self.middle_mouse_pan)
+    }
+
     // Keep the existing serialized fields and input-device bindings independent.
     // The selector only chooses which device's settings are being edited.
     fn navigation_speeds_mut(&mut self) -> [&mut f64; 3] {
@@ -373,6 +381,35 @@ impl BenchUpApp {
         });
         ui.text_weak(tr!("settings.adjust_navigation_sensitivity_for_the_selected_device"));
         let navigation_type = self.general_settings.navigation_type;
+        if navigation_type == NavigationType::MouseTrackpad {
+            inspector_field(
+                ui,
+                "settings/navigation/middle_mouse",
+                tr!("settings.middle_mouse_drag"),
+                |ui| {
+                    egui::ComboBox::from_id_salt("settings_middle_mouse_drag")
+                        .width(ui.available_width())
+                        .selected_text(if self.general_settings.middle_mouse_pan {
+                            tr!("settings.pan_shift_to_orbit")
+                        } else {
+                            tr!("settings.orbit_shift_to_pan")
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.general_settings.middle_mouse_pan,
+                                false,
+                                tr!("settings.orbit_shift_to_pan"),
+                            );
+                            ui.selectable_value(
+                                &mut self.general_settings.middle_mouse_pan,
+                                true,
+                                tr!("settings.pan_shift_to_orbit"),
+                            );
+                        })
+                        .response
+                },
+            );
+        }
         if navigation_type == NavigationType::SpaceMouse {
             let space_mouse = &mut self.general_settings.space_mouse;
             ui.checkbox(&mut space_mouse.enabled, tr!("settings.enable_3d_mouse"));
@@ -1079,6 +1116,14 @@ mod tests {
             output.textures_delta.clear();
             assert!(text.iter().any(|label| label == "Navigation type"));
             assert!(text.iter().any(|label| label == kind.label()));
+            assert_eq!(
+                text.iter().any(|label| label == "Middle mouse drag"),
+                kind == NavigationType::MouseTrackpad
+            );
+            assert_eq!(
+                text.iter().any(|label| label == "Orbit (Shift to pan)"),
+                kind == NavigationType::MouseTrackpad
+            );
             for label in ["Orbit speed", "Pan speed", "Zoom speed"] {
                 assert_eq!(
                     text.iter().filter(|value| value.as_str() == label).count(),

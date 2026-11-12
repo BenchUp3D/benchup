@@ -4,46 +4,54 @@ use benchup_core::Projection;
 #[test]
 fn compass_shift_matches_orbit_pan_and_can_toggle_during_drag() {
     for projection in [Projection::Perspective, Projection::Parallel] {
-        for button in [egui::PointerButton::Primary, egui::PointerButton::Middle] {
+        for (button, middle_mouse_pan) in [
+            (egui::PointerButton::Primary, false),
+            (egui::PointerButton::Primary, true),
+            (egui::PointerButton::Middle, false),
+            (egui::PointerButton::Middle, true),
+        ] {
             let mut compass = Harness::new();
             let mut orbit = Harness::new();
             for h in [&mut compass, &mut orbit] {
                 h.app.doc.camera.projection = projection;
                 h.app.general_settings.pan_speed = 2.3;
                 h.app.general_settings.orbit_speed = 1.7;
+                h.app.general_settings.middle_mouse_pan = middle_mouse_pan;
             }
             orbit.app.set_tool(Tool::Orbit);
             let start = BenchUpApp::compass_center(compass.app.viewport).unwrap();
             let orbit_start = orbit.app.viewport.center();
-            compass.pointer(start, button, true, true);
-            orbit.pointer(orbit_start, button, true, true);
-            let shift = egui::Modifiers { shift: true, ..Default::default() };
+            let pan_shift = !(button == egui::PointerButton::Middle && middle_mouse_pan);
+            let pan_modifiers = egui::Modifiers { shift: pan_shift, ..Default::default() };
+            let orbit_modifiers = egui::Modifiers { shift: !pan_shift, ..Default::default() };
+            compass.pointer(start, button, true, pan_shift);
+            orbit.pointer(orbit_start, button, true, pan_shift);
             let delta = egui::vec2(-28., -16.);
-            compass.frame(vec![egui::Event::PointerMoved(start + delta)], shift);
-            orbit.frame(vec![egui::Event::PointerMoved(orbit_start + delta)], shift);
+            compass.frame(vec![egui::Event::PointerMoved(start + delta)], pan_modifiers);
+            orbit.frame(vec![egui::Event::PointerMoved(orbit_start + delta)], pan_modifiers);
             assert_eq!(compass.app.doc.camera, orbit.app.doc.camera);
 
-            // Release Shift: retain the gizmo's original rotation sensitivity.
+            // Toggle Shift: retain the gizmo's original rotation sensitivity.
             let mut expected = compass.app.doc.camera.clone();
             expected.orbit_around(dv(delta), compass.app.orbit_center());
             compass.frame(
                 vec![egui::Event::PointerMoved(start + delta * 2.)],
-                egui::Modifiers::NONE,
+                orbit_modifiers,
             );
             assert_eq!(compass.app.doc.camera, expected);
 
-            // Press Shift again: pan, clear the old orbit pivot, then release.
+            // Toggle Shift again: pan, clear the old orbit pivot, then release.
             expected.pan(
                 dv(delta) * compass.app.general_settings.pan_speed,
                 compass.app.viewport.height() as f64,
             );
-            compass.frame(vec![egui::Event::PointerMoved(start + delta * 3.)], shift);
+            compass.frame(vec![egui::Event::PointerMoved(start + delta * 3.)], pan_modifiers);
             assert_eq!(compass.app.doc.camera, expected);
             assert!(matches!(
                 compass.app.gesture.as_ref().map(|g| &g.kind),
                 Some(GestureKind::Compass { pivot: None, dragged: true, .. })
             ));
-            compass.pointer(start + delta * 3., button, false, true);
+            compass.pointer(start + delta * 3., button, false, pan_shift);
             assert!(compass.app.gesture.is_none());
         }
     }

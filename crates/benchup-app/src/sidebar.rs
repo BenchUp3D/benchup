@@ -3119,6 +3119,32 @@ mod preference_tests {
     }
 
     #[test]
+    fn middle_mouse_mapping_defaults_and_saves_without_a_model_edit() {
+        for json in ["{}", r#"{"general":{"pan_speed":2.0}}"#] {
+            let old: InspectorPreferences = serde_json::from_str(json).unwrap();
+            assert!(!old.general.middle_mouse_pan);
+        }
+
+        let ctx = egui::Context::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        let mut storage = SavedPreferences::default();
+        for pan in [true, false] {
+            app.general_settings.middle_mouse_pan = pan;
+            storage.flushed = false;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            assert!(app.dirty_since.is_none());
+
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+            assert_eq!(restored.general_settings.middle_mouse_pan, pan);
+            restored.replace_project(Document::default(), None, &ctx);
+            assert_eq!(restored.general_settings.middle_mouse_pan, pan);
+        }
+    }
+
+    #[test]
     fn navigation_type_defaults_without_changing_legacy_device_settings() {
         let old: InspectorPreferences = serde_json::from_str(
             r#"{"general":{"orbit_speed":2.0,"pan_speed":0.5,"zoom_speed":3.0,"space_mouse":{"orbit_speed":0.4,"pan_speed":2.5,"zoom_speed":1.5}}}"#,

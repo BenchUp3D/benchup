@@ -1180,13 +1180,16 @@ fn precision_commit_uses_current_pointer_even_when_it_moved_in_the_same_frame() 
 
 #[test]
 fn mouse_inversions_apply_regardless_of_the_selected_settings_device() {
-    for kind in [
-        settings::NavigationType::MouseTrackpad,
-        settings::NavigationType::SpaceMouse,
+    for (kind, middle_mouse_pan) in [
+        (settings::NavigationType::MouseTrackpad, false),
+        (settings::NavigationType::MouseTrackpad, true),
+        (settings::NavigationType::SpaceMouse, false),
+        (settings::NavigationType::SpaceMouse, true),
     ] {
         for inverted in [false, true] {
             let mut h = Harness::new();
             h.app.general_settings.navigation_type = kind;
+            h.app.general_settings.middle_mouse_pan = middle_mouse_pan;
             h.app.general_settings.orbit_speed = 1.7;
             h.app.general_settings.pan_speed = 0.5;
             h.app.general_settings.invert_orbit = inverted;
@@ -1198,17 +1201,19 @@ fn mouse_inversions_apply_regardless_of_the_selected_settings_device() {
             let direction = if inverted { -1. } else { 1. };
             let start = h.app.viewport.center();
             let delta = egui::vec2(12., 8.);
-            h.pointer(start, egui::PointerButton::Middle, true, false);
+            let orbit_modifiers = if middle_mouse_pan { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
+            let pan_modifiers = if middle_mouse_pan { egui::Modifiers::NONE } else { egui::Modifiers::SHIFT };
+            h.pointer(start, egui::PointerButton::Middle, true, middle_mouse_pan);
             let mut expected = h.app.doc.camera.clone();
             expected.orbit_around(dv(delta) * (1.7 * direction), DVec3::ZERO);
             h.frame(
                 vec![egui::Event::PointerMoved(start + delta)],
-                egui::Modifiers::NONE,
+                orbit_modifiers,
             );
             assert_eq!(h.app.doc.camera, expected);
-            h.pointer(start + delta, egui::PointerButton::Middle, false, false);
+            h.pointer(start + delta, egui::PointerButton::Middle, false, middle_mouse_pan);
 
-            h.pointer(start, egui::PointerButton::Middle, true, true);
+            h.pointer(start, egui::PointerButton::Middle, true, !middle_mouse_pan);
             let mut expected = h.app.doc.camera.clone();
             expected.pan(
                 dv(delta) * (0.5 * direction),
@@ -1216,10 +1221,10 @@ fn mouse_inversions_apply_regardless_of_the_selected_settings_device() {
             );
             h.frame(
                 vec![egui::Event::PointerMoved(start + delta)],
-                egui::Modifiers::SHIFT,
+                pan_modifiers,
             );
             assert_eq!(h.app.doc.camera, expected);
-            h.pointer(start + delta, egui::PointerButton::Middle, false, true);
+            h.pointer(start + delta, egui::PointerButton::Middle, false, !middle_mouse_pan);
 
             let distance = h.app.doc.camera.distance;
             h.frame(
@@ -1239,6 +1244,72 @@ fn mouse_inversions_apply_regardless_of_the_selected_settings_device() {
             assert_eq!(h.app.doc.camera.distance > distance, inverted);
         }
     }
+}
+
+#[test]
+fn middle_mouse_setting_updates_the_shortcut_reference() {
+    let mut h = Harness::new();
+    for (pan, selected, option) in [
+        (true, "Orbit (Shift to pan)", "Pan (Shift to orbit)"),
+        (false, "Pan (Shift to orbit)", "Orbit (Shift to pan)"),
+    ] {
+        h.app.settings_open = true;
+        h.app.general_settings.section = settings::Section::Navigation;
+        h.frame(vec![], egui::Modifiers::NONE);
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        let output = h.click(text_position(&output, selected));
+        h.click(text_position(&output, option));
+        assert_eq!(h.app.general_settings.middle_mouse_pan, pan);
+        h.app.settings_open = false;
+
+        h.app.help = true;
+        for (action, keys) in [
+            ("Temporary orbit", if pan { "Shift + middle drag" } else { "Middle drag" }),
+            ("Temporary pan", if pan { "Middle drag" } else { "Shift + middle drag" }),
+        ] {
+            h.app.shortcut_filter = action.into();
+            h.frame(vec![], egui::Modifiers::NONE);
+            let output = h.frame(vec![], egui::Modifiers::NONE);
+            text_position(&output, action);
+            text_position(&output, keys);
+        }
+        h.app.help = false;
+    }
+    assert!(!h.app.project.modified);
+}
+
+#[test]
+fn middle_mouse_pan_switches_to_orbit_during_a_drag_and_updates_status() {
+    let mut h = Harness::new();
+    h.app.general_settings.middle_mouse_pan = true;
+    h.key(Key::L);
+    h.click(h.at(DVec3::ZERO));
+    let start = h.app.viewport.center();
+    let delta = egui::vec2(30., 15.);
+    h.pointer(start, egui::PointerButton::Middle, true, false);
+
+    let mut expected = h.app.doc.camera.clone();
+    expected.pan(dv(delta), h.app.viewport.height() as f64);
+    h.frame(vec![egui::Event::PointerMoved(start + delta)], egui::Modifiers::NONE);
+    assert_eq!(h.app.doc.camera, expected);
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    text_position(&output, "Panning · Hold Shift to orbit");
+
+    expected.orbit_around(dv(delta), h.app.orbit_center());
+    h.frame(vec![egui::Event::PointerMoved(start + delta * 2.)], egui::Modifiers::SHIFT);
+    assert_eq!(h.app.doc.camera, expected);
+    let output = h.frame(vec![], egui::Modifiers::SHIFT);
+    text_position(&output, "Orbiting · Release Shift to pan");
+
+    expected.pan(dv(delta), h.app.viewport.height() as f64);
+    h.frame(vec![egui::Event::PointerMoved(start + delta * 3.)], egui::Modifiers::NONE);
+    assert_eq!(h.app.doc.camera, expected);
+    assert!(matches!(h.app.gesture.as_ref().map(|g| &g.kind), Some(GestureKind::Navigate { pivot: None })));
+    h.pointer(start + delta * 3., egui::PointerButton::Middle, false, false);
+    assert!(h.app.gesture.is_none());
+    assert_eq!(h.app.tool, Tool::Line);
+    assert_eq!(h.app.line_start, Some(DVec3::ZERO));
+    assert!(h.app.doc.model.edges.is_empty());
 }
 
 #[test]
@@ -1394,6 +1465,7 @@ fn drawing_modifier_moves_camera_once_with_either_mouse_button_held() {
 #[test]
 fn drawing_modifier_does_not_orbit_over_panels_or_jump_on_reentry() {
     let mut h = Harness::new();
+    h.app.general_settings.middle_mouse_pan = true;
     h.key(Key::L);
     let start = h.app.viewport.center();
     h.frame(
@@ -1616,6 +1688,7 @@ fn shift_orbit_pans_and_middle_navigation_preserves_pending_line() {
 #[test]
 fn orbit_tool_shift_drag_only_translates_camera() {
     let mut h = Harness::new();
+    h.app.general_settings.middle_mouse_pan = true;
     h.key(Key::O);
     let before = h.app.doc.camera.clone();
     let p = h.app.viewport.center();
