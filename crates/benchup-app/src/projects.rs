@@ -620,6 +620,10 @@ impl BenchUpApp {
                         });
                         ui.checkbox(&mut self.project.cutting_plan_layout.allow_rotation, tr!("projects.allow_rotating_pieces_90_degrees"))
                             .on_hover_text(tr!("projects.leave_off_when_the_length_must_follow_the"));
+                        ui.checkbox(&mut self.project.cutting_plan_layout.respect_grain, tr!("projects.respect_wood_grain_direction"))
+                            .on_hover_text(tr!("projects.align_part_grain_with_stock_length"));
+                        ui.checkbox(&mut self.project.cutting_plan_layout.show_joinery, tr!("projects.show_wood_joinery"))
+                            .on_hover_text(tr!("projects.show_joinery_as_dashed_outlines"));
                     }
                     ui.text_weak(tr!("projects.only_visible_parts_with_assigned_stock_materials_are"));
                     if report == CutReport::CuttingPlan {

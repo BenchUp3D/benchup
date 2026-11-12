@@ -673,7 +673,10 @@ pub(crate) fn render_cut_report(
     if report == CutReport::CuttingPlan {
         layout_settings.validate()?;
     }
-    let plan = CuttingPlan::collect(model, selected)?;
+    let plan = CuttingPlan::collect_with_layout(model, selected, crate::cutting_layout::Settings {
+        show_joinery: report == CutReport::CuttingPlan && layout_settings.show_joinery,
+        ..layout_settings
+    })?;
     let selection = !selected.is_empty();
     match report {
         CutReport::CuttingPlan => Ok(plan.pdf_with_layout(name, selection, true, layout_settings)),

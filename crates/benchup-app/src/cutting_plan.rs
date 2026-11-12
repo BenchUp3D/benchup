@@ -1,5 +1,5 @@
 //! Woodworking cut lists. Geometry is already in world metres, including instances.
-//! Dimensions describe finished blanks, not stock-board nesting or grain direction.
+//! Measure blanks, orient them to stock grain, and project joinery onto layouts.
 use benchup_core::tr;
 use crate::cutting_layout::{self, Settings as LayoutSettings};
 use benchup_core::{DVec3, Model};
@@ -30,13 +30,26 @@ pub(crate) struct CutGroup {
     pub rectangular: bool,
     /// One named group hierarchy per piece; repeated names still count as pieces.
     pub parts: Vec<String>,
+    pub(crate) grain: Grain,
+    pub(crate) joinery: BTreeMap<usize, Vec<JointLine>>,
 }
 
 #[derive(Debug)]
 pub(crate) struct CuttingPlan {
     pub groups: Vec<CutGroup>,
     pub skipped: usize,
+    pub(crate) joinery_omitted: bool,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Grain {
+    #[default]
+    Unassigned,
+    AlongLength,
+    ThroughThickness,
+}
+
+pub(crate) type JointLine = [[u64; 2]; 2];
 
 /// Purchasing quantities calculated with the same layout used by the PDF.
 pub(crate) struct MaterialRequirement {
@@ -65,11 +78,14 @@ fn stock_layout(
             length: group.dimensions[2],
             width: group.dimensions[1],
             quantity: group.parts.len(),
+            grain_along_length: group.grain == Grain::AlongLength,
         };
         // Purchase the full bounding blank, even when the finished part has
         // notches, holes, or other cuts. Shape checks are informational only;
         // stock fit depends on the blank's dimensions.
-        if group.dimensions[0] <= stock.dimensions[0] {
+        if group.dimensions[0] <= stock.dimensions[0]
+            && !(settings.respect_grain && group.grain == Grain::ThroughThickness)
+        {
             fitting.push(piece);
         } else {
             excluded.push(piece);
@@ -80,28 +96,46 @@ fn stock_layout(
     layout
 }
 
+#[derive(Clone, Copy)]
 struct MeasuredPart {
     dimensions: [u64; 3],
     axes: [DVec3; 3],
+    origin: DVec3,
+    bounds: (DVec3, DVec3),
     rectangular: bool,
+    grain: Grain,
 }
 
 impl CuttingPlan {
     /// An empty selection means all visible parts in the project.
     /// Selecting a face/edge includes its connected visible geometry in that scope.
+    #[cfg(test)]
     pub fn collect(model: &Model, selected: &BTreeSet<u64>) -> Result<Self, String> {
-        Self::collect_parts(model, selected, false)
+        Self::collect_with_layout(model, selected, LayoutSettings::default())
+    }
+
+    pub fn collect_with_layout(
+        model: &Model,
+        selected: &BTreeSet<u64>,
+        settings: LayoutSettings,
+    ) -> Result<Self, String> {
+        Self::collect_parts(model, selected, false, settings)
     }
 
     /// Estimates ignore unassigned geometry entirely, including omission counts.
-    pub fn collect_assigned(model: &Model, selected: &BTreeSet<u64>) -> Result<Self, String> {
-        Self::collect_parts(model, selected, true)
+    pub fn collect_assigned(
+        model: &Model,
+        selected: &BTreeSet<u64>,
+        settings: LayoutSettings,
+    ) -> Result<Self, String> {
+        Self::collect_parts(model, selected, true, LayoutSettings { show_joinery: false, ..settings })
     }
 
     fn collect_parts(
         model: &Model,
         selected: &BTreeSet<u64>,
         assigned_only: bool,
+        settings: LayoutSettings,
     ) -> Result<Self, String> {
         let requested = model.expand_entities(selected);
         let parents: BTreeMap<_, _> = model
@@ -122,6 +156,12 @@ impl CuttingPlan {
         let mut parts = Vec::new();
         let mut skipped = 0;
         for (scope, mut remaining) in scopes {
+            let grain = if settings.respect_grain {
+                std::iter::successors(scope, |id| parents.get(id).copied())
+                    .find_map(|id| model.objects[&id].world_grain_axis())
+            } else {
+                None
+            };
             let vertices: BTreeMap<_, _> = remaining
                 .iter()
                 .map(|id| (*id, entity_vertices(model, *id)))
@@ -165,7 +205,7 @@ impl CuttingPlan {
                     }
                     continue;
                 };
-                let Some(part) = measure(model, &component) else {
+                let Some(part) = measure(model, &component, grain) else {
                     if included {
                         skipped += 1;
                     }
@@ -181,15 +221,15 @@ impl CuttingPlan {
                     parent = parents.get(&id).copied();
                 }
                 path.reverse();
-                parts.push((path.join("/"), part, included, material));
+                parts.push((path.join("/"), part, included, material, scope));
             }
         }
         // Infer a common cutting direction from the longest visible blank in
         // each named group and thickness. Include unselected parts so selecting
         // just a short cut does not change its width/length assignment.
         let mut references: BTreeMap<_, &MeasuredPart> = BTreeMap::new();
-        for (path, part, _, material) in &parts {
-            if path.is_empty() || !part.rectangular {
+        for (path, part, _, material, _) in &parts {
+            if path.is_empty() || !part.rectangular || part.grain != Grain::Unassigned {
                 continue;
             }
             let reference = references
@@ -199,43 +239,52 @@ impl CuttingPlan {
                 *reference = part;
             }
         }
-        let mut groups: BTreeMap<([u64; 3], bool, MaterialKey), Vec<String>> = BTreeMap::new();
-        for (path, part, included, material) in &parts {
+        let (cuts, joinery_omitted) = if settings.show_joinery {
+            let scopes = parts.iter().filter(|(_, _, included, _, _)| *included)
+                .filter_map(|(_, _, _, _, scope)| *scope).collect();
+            joinery_cuts(model, &scopes)
+        } else {
+            (BTreeMap::new(), false)
+        };
+        let mut groups = BTreeMap::new();
+        for (path, part, included, material, scope) in &parts {
             if !included {
                 continue;
             }
-            let mut dimensions = part.dimensions;
-            if part.rectangular {
-                if let Some(reference) = references.get(&(path.as_str(), dimensions[0], material)) {
+            let mut part = *part;
+            if part.rectangular && part.grain == Grain::Unassigned {
+                if let Some(reference) = references.get(&(path.as_str(), part.dimensions[0], material)) {
                     if part.axes[0].dot(reference.axes[0]).abs() > 1. - 1e-8
                         && part.axes[1].dot(reference.axes[2]).abs() > 1. - 1e-8
                     {
-                        dimensions.swap(1, 2);
+                        part.dimensions.swap(1, 2);
+                        part.axes.swap(1, 2);
+                        let (lo, hi) = part.bounds;
+                        part.bounds = (DVec3::new(lo.x, lo.z, lo.y), DVec3::new(hi.x, hi.z, hi.y));
                     }
                 }
             }
-            groups
-                .entry((dimensions, part.rectangular, material.clone()))
-                .or_default()
-                .push(path.clone());
+            let group = groups.entry((part.dimensions, part.rectangular, material.clone(), part.grain))
+                .or_insert_with(|| CutGroup {
+                    material: material.1.clone(), material_id: material.0,
+                    dimensions: part.dimensions, rectangular: part.rectangular,
+                    parts: Vec::new(), grain: part.grain, joinery: BTreeMap::new(),
+                });
+            if let Some(segments) = scope.and_then(|id| cuts.get(&id)) {
+                let lines = project_joinery(part, segments);
+                if !lines.is_empty() {
+                    group.joinery.insert(group.parts.len(), lines);
+                }
+            }
+            group.parts.push(path.clone());
         }
         if groups.is_empty() {
             return Err(tr!("cutting_plan.no_visible_three_dimensional_parts_with_assigned_stock").into());
         }
         Ok(Self {
-            groups: groups
-                .into_iter()
-                .map(
-                    |((dimensions, rectangular, (material_id, material)), parts)| CutGroup {
-                        material_id,
-                        material,
-                        dimensions,
-                        rectangular,
-                        parts,
-                    },
-                )
-                .collect(),
+            groups: groups.into_values().collect(),
             skipped,
+            joinery_omitted,
         })
     }
 
@@ -303,6 +352,9 @@ impl CuttingPlan {
                 ),
                 9.,
             );
+        }
+        if settings.show_joinery && self.joinery_omitted {
+            pdf.paragraph(tr!("cutting_plan.joinery_omitted"), 9.);
         }
         pdf.gap(8.);
         let groups = self.ordered_groups();
@@ -516,6 +568,9 @@ fn cut_row(pdf: &mut Pdf, index: usize, group: &CutGroup, colored: bool) {
                 pdf.text(100., pdf.y, 8., tr!("cutting_plan.check_shape_bounding_blank_only"));
                 pdf.y -= 12.;
             }
+            if group.grain == Grain::ThroughThickness {
+                pdf.paragraph(tr!("cutting_plan.grain_through_thickness"), 8.);
+            }
         }
         pdf.separator();
         offset += count;
@@ -540,6 +595,71 @@ fn mark_color(mark: usize) -> [f64; 3] {
     }
 }
 
+fn joinery_cuts(model: &Model, scopes: &BTreeSet<u64>) -> (BTreeMap<u64, Vec<[DVec3; 2]>>, bool) {
+    use benchup_core::connections::ConnectionOperation;
+    let connections: Vec<_> = model.connections.iter().filter(|(_, connection)| {
+        matches!(connection.operation, ConnectionOperation::Joinery(_))
+            && connection.members.iter().any(|member| scopes.contains(member))
+    }).collect();
+    if connections.is_empty() {
+        return (BTreeMap::new(), false);
+    }
+    let evaluated = model.evaluate_joinery();
+    let failed: BTreeSet<_> = evaluated.errors.iter().map(|(id, _)| *id).collect();
+    let mut omitted = connections.iter().any(|(id, _)| failed.contains(id));
+    let members: BTreeSet<_> = connections.into_iter()
+        .filter(|(id, _)| !failed.contains(id))
+        .flat_map(|(_, connection)| connection.members)
+        .filter(|member| scopes.contains(member))
+        .collect();
+    let mut cuts = BTreeMap::new();
+    for member in members {
+        match model.joinery_cut_edges(&evaluated.model, member) {
+            Ok(edges) => { cuts.insert(member, edges); }
+            Err(_) => omitted = true,
+        }
+    }
+    (cuts, omitted)
+}
+
+fn project_joinery(part: MeasuredPart, segments: &[[DVec3; 2]]) -> Vec<JointLine> {
+    let (lo, hi) = part.bounds;
+    let mut lines = BTreeSet::new();
+    for segment in segments {
+        let [a, b] = segment.map(|point| project(point - part.origin, part.axes));
+        let Some(segment) = clip_segment_to_bounds(a, b, lo, hi) else { continue };
+        let mut line = segment.map(|point| {
+            let point = (point - lo) * 10_000.;
+            [(point.z.round() as u64).min(part.dimensions[2]),
+             (point.y.round() as u64).min(part.dimensions[1])]
+        });
+        if line[0] != line[1] {
+            line.sort_unstable();
+            lines.insert(line);
+        }
+    }
+    lines.into_iter().collect()
+}
+
+fn clip_segment_to_bounds(a: DVec3, b: DVec3, lo: DVec3, hi: DVec3) -> Option<[DVec3; 2]> {
+    let delta = b - a;
+    let mut start: f64 = 0.;
+    let mut end: f64 = 1.;
+    for axis in 0..3 {
+        if delta[axis].abs() < 1e-9 {
+            if a[axis] < lo[axis] - 1e-8 || a[axis] > hi[axis] + 1e-8 {
+                return None;
+            }
+            continue;
+        }
+        let low = (lo[axis] - a[axis]) / delta[axis];
+        let high = (hi[axis] - a[axis]) / delta[axis];
+        start = start.max(low.min(high));
+        end = end.min(low.max(high));
+    }
+    (start < end).then(|| [a + start * delta, a + end * delta])
+}
+
 fn draw_layout(
     pdf: &mut Pdf,
     title: &str,
@@ -548,11 +668,12 @@ fn draw_layout(
     settings: LayoutSettings,
     groups: &[(usize, &CutGroup)],
 ) {
+    let groups: BTreeMap<_, _> = groups.iter().copied().collect();
     if !layout.oversized.is_empty() {
         pdf.ensure(70.);
         pdf.heading(tr!("cutting_plan.does_not_fit_selected_stock"), 10.);
         for (mark, quantity) in layout.oversized_marks() {
-            let group = groups.iter().find(|(index, _)| *index == mark).unwrap().1;
+            let group = groups[&mark];
             pdf.paragraph(
                 &tr!(
                     "cutting_plan.oversized_cut",
@@ -577,7 +698,14 @@ fn draw_layout(
         } else {
             48.
         };
-        pdf.ensure(height + 115.);
+        let has_grain = settings.respect_grain && stock.placements.iter().any(|placement| {
+            groups[&placement.mark].grain == Grain::AlongLength
+        });
+        let has_joinery = settings.show_joinery && stock.placements.iter().any(|placement| {
+            groups[&placement.mark].joinery.contains_key(&placement.part_index)
+        });
+        let legend_height = 16. * f64::from(u8::from(has_grain) + u8::from(has_joinery));
+        pdf.ensure(height + 115. + legend_height);
         pdf.heading(
             &tr!(
                 "cutting_plan.stock_page_heading",
@@ -597,6 +725,12 @@ fn draw_layout(
             ),
             8.,
         );
+        if has_grain {
+            pdf.paragraph(tr!("cutting_plan.grain_along_stock_length"), 8.);
+        }
+        if has_joinery {
+            pdf.paragraph(tr!("cutting_plan.joinery_dashed_outlines"), 8.);
+        }
         let top = pdf.y;
         pdf.rectangle(42., top - height, width, height, [0.94; 3]);
         let x_scale = width / stock.length as f64;
@@ -608,6 +742,20 @@ fn draw_layout(
             let w = r.length as f64 * x_scale;
             let h = r.width as f64 * y_scale;
             pdf.rectangle(x, y, w, h, mark_color(placement.mark));
+            if settings.show_joinery {
+                let group = groups[&placement.mark];
+                if let Some(lines) = group.joinery.get(&placement.part_index) {
+                    let position = |[length, width]: [u64; 2]| {
+                        let [u, v] = if placement.rotated {
+                            [group.dimensions[1] - width, length]
+                        } else {
+                            [length, width]
+                        };
+                        [x + u as f64 * x_scale, y + h - v as f64 * y_scale]
+                    };
+                    pdf.joinery_lines(lines.iter().map(|line| line.map(position)));
+                }
+            }
             let label = piece_mark(placement.mark);
             let size = (w / (label.len() as f64 * 0.6 + 1.)).min(9.);
             if size >= 5. && h >= size + 4. {
@@ -641,7 +789,7 @@ fn draw_layout(
         }
         for (mark, (quantity, rotated)) in legend {
             pdf.ensure(22.);
-            let group = groups.iter().find(|(index, _)| *index == mark).unwrap().1;
+            let group = groups[&mark];
             pdf.rectangle(42., pdf.y - 1., 7., 7., mark_color(mark));
             pdf.text(
                 55.,
@@ -676,7 +824,7 @@ fn entity_vertices(model: &Model, id: u64) -> BTreeSet<u64> {
     }
 }
 
-fn measure(model: &Model, entities: &BTreeSet<u64>) -> Option<MeasuredPart> {
+fn measure(model: &Model, entities: &BTreeSet<u64>, grain: Option<DVec3>) -> Option<MeasuredPart> {
     if !entities.iter().any(|id| model.faces.contains_key(id)) {
         return None;
     }
@@ -745,12 +893,29 @@ fn measure(model: &Model, entities: &BTreeSet<u64>) -> Option<MeasuredPart> {
     }
     let mut order = [0, 1, 2];
     order.sort_by(|a, b| sizes[*a].total_cmp(&sizes[*b]));
-    let dimensions = order.map(|axis| (sizes[axis] * 10_000.).round() as u64);
-    let rectangular = is_box(model, entities, origin, basis, bounds);
+    let mut rectangular = is_box(model, entities, origin, basis, bounds);
+    let mut axes = order.map(|axis| basis[axis]);
+    let mut direction = Grain::Unassigned;
+    if let Some(grain) = grain {
+        let thickness = axes[0];
+        let in_plane = grain - thickness * grain.dot(thickness);
+        if in_plane.length_squared() > 1e-12 {
+            let length = in_plane.normalize();
+            rectangular &= axes[1].dot(length).abs().max(axes[2].dot(length).abs()) > 1. - 1e-8;
+            axes = [thickness, thickness.cross(length), length];
+            direction = Grain::AlongLength;
+        } else {
+            direction = Grain::ThroughThickness;
+        }
+    }
+    let bounds = projected_bounds(&points, axes);
     Some(MeasuredPart {
-        dimensions,
-        axes: order.map(|axis| basis[axis]),
+        dimensions: (bounds.1 - bounds.0).to_array().map(|extent| (extent * 10_000.).round() as u64),
+        axes,
+        origin,
+        bounds,
         rectangular,
+        grain: direction,
     })
 }
 
@@ -960,6 +1125,14 @@ impl Pdf {
             self.page,
             "q 0.6 G 0.5 w [2 2] 0 d {x:.2} {y:.2} {width:.2} {height:.2} re S Q"
         );
+    }
+    fn joinery_lines(&mut self, lines: impl Iterator<Item = [[f64; 2]; 2]>) {
+        use std::fmt::Write;
+        self.page.push_str("q 0.24 G 0.45 w [1.6 1.4] 0 d\n");
+        for [[x1, y1], [x2, y2]] in lines {
+            let _ = writeln!(self.page, "{x1:.3} {y1:.3} m {x2:.3} {y2:.3} l");
+        }
+        self.page.push_str("S Q\n");
     }
     fn line(&mut self, y: f64) {
         use std::fmt::Write;

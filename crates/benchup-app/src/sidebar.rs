@@ -2428,7 +2428,7 @@ mod preference_tests {
 
     #[test]
     fn each_additional_option_saves_independently_without_a_model_edit() {
-        let options: [(&str, fn(&mut BenchUpApp)); 16] = [
+        let options: [(&str, fn(&mut BenchUpApp)); 18] = [
             ("face center snapping", |app| app.snap_to_face_center = false),
             ("axis snapping", |app| app.doc.snap_to_axes = false),
             ("edge snapping", |app| app.snap_to_edge = false),
@@ -2443,6 +2443,12 @@ mod preference_tests {
             ("shortcut filter", |app| app.shortcut_filter = "Move".into()),
             ("stock rotation", |app| {
                 app.project.cutting_plan_layout.allow_rotation = false
+            }),
+            ("wood grain direction", |app| {
+                app.project.cutting_plan_layout.respect_grain = false
+            }),
+            ("show wood joinery", |app| {
+                app.project.cutting_plan_layout.show_joinery = false
             }),
             ("sheet width", |app| {
                 app.project.cutting_plan_layout.sheet_width_mm = 600.
@@ -2586,6 +2592,8 @@ mod preference_tests {
             assert!(preferences.shortcut_filter.is_empty());
             assert!(preferences.cutting_plan.selection.is_none());
             assert!(preferences.cutting_plan.layout.validate().is_ok());
+            assert!(preferences.cutting_plan.layout.respect_grain);
+            assert!(preferences.cutting_plan.layout.show_joinery);
             let mut storage = SavedPreferences::default();
             eframe::set_value(&mut storage, PREFERENCE_KEY, &preferences);
             let mut doc = Document::default();
