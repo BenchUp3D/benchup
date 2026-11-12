@@ -3689,6 +3689,7 @@ pub struct FaceCache {
     faces: BTreeMap<u64, CachedFace>,
     source_vertices: Vec<(u64, DVec3)>,
     glue_source: BTreeMap<u64, benchup_core::wood_glue::Coverage>,
+    glue_frames: BTreeMap<u64, benchup_core::InstanceTransform>,
     adjacent_faces: BTreeMap<(u64, u64), Vec<u64>>,
     vertex_faces: std::collections::HashMap<u64, Vec<u64>>,
     max_edge_faces: usize,
@@ -3764,6 +3765,20 @@ impl FaceCache {
             model.wood_glue.iter().map(|(&id, coverage)| (id, coverage)),
         );
         glue_dirty.extend(dirty.iter().filter(|id| model.wood_glue.contains_key(id)).copied());
+        // Instance frames can change without changing the face's vertices.
+        // Only coated faces need material coordinates for those edits.
+        let mut glue_frames = BTreeMap::new();
+        if !model.wood_glue.is_empty() {
+            for object in model.objects.values() {
+                for id in &object.entities {
+                    if model.wood_glue.contains_key(id) {
+                        glue_frames.insert(*id, object.transform.unwrap_or_default());
+                    }
+                }
+            }
+        }
+        glue_dirty.extend(changed_ids(self.glue_frames.iter().map(|(&id, frame)| (id, frame)),
+            glue_frames.iter().map(|(&id, frame)| (id, frame))));
         if dirty.is_empty() && vertices.is_empty() && glue_dirty.is_empty() {
             return;
         }
@@ -3869,11 +3884,13 @@ impl FaceCache {
                     }) {
                         plane.origin = triangle.iter().sum::<DVec3>() / 3.;
                     }
-                    GlueMesh { material: FaceMaterial::wood_glue(plane), bare, coated }
+                    let frame = glue_frames.get(&id).copied().unwrap_or_default();
+                    GlueMesh { material: FaceMaterial::wood_glue(plane, frame), bare, coated }
                 }).filter(|mesh| !mesh.coated.is_empty());
             }
         }
         self.glue_source.clone_from(&model.wood_glue);
+        self.glue_frames = glue_frames;
         self.max_edge_faces = self
             .adjacent_faces
             .values()

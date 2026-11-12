@@ -373,6 +373,11 @@ pub(crate) fn edited_geometry(
     // Membership changes require new owner slots in the affected primitives.
     for (&id, object) in &source.objects {
         if let Some(after) = model.objects.get(&id) {
+            if object.transform != after.transform {
+                faces.extend(object.entities.iter().chain(&after.entities)
+                    .filter(|id| source.wood_glue.contains_key(id) || model.wood_glue.contains_key(id))
+                    .copied());
+            }
             edges.extend(
                 object
                     .entities
@@ -1791,6 +1796,30 @@ mod tests {
                     .all(|face| face.face_id == face.interaction[1])
             );
         });
+    }
+
+    #[test]
+    fn glue_frame_edits_refresh_cached_and_retained_coordinates_without_retriangulating() {
+        let mut source = model(1);
+        let owner = source.make_object(&source.root_entities(), false, "Part").unwrap();
+        let id = *source.faces.keys().next().unwrap();
+        assert!(source.glue_face(id));
+        let mut faces = FaceCache::default();
+        faces.update(&source);
+        let point = source.vertices[&source.faces[&id].vertices[1]].position;
+        let initial = faces.get(id).glue.as_ref().unwrap().material.coordinates(point);
+        let triangles = faces.get(id).triangles.as_ptr();
+        let mut rotated = source.clone();
+        rotated.objects.get_mut(&owner).unwrap().transform = Some(benchup_core::InstanceTransform {
+            basis: glam::DMat3::from_rotation_z(std::f64::consts::FRAC_PI_2),
+            ..Default::default()
+        });
+        assert_eq!(edited_geometry(&source, &rotated).unwrap(), std::collections::BTreeSet::from([id]));
+        faces.update(&rotated);
+        assert_eq!(faces.get(id).triangles.as_ptr(), triangles);
+        assert_ne!(faces.get(id).glue.as_ref().unwrap().material.coordinates(point), initial);
+        faces.update(&source);
+        assert_eq!(faces.get(id).glue.as_ref().unwrap().material.coordinates(point), initial);
     }
 
     #[test]
