@@ -343,3 +343,35 @@ fn the_scene_names_the_project_and_the_guide_prints() {
     assert!(guide.status.success());
     assert!(String::from_utf8_lossy(&guide.stdout).contains("## Joints"));
 }
+
+/// What BenchUp writes when it has a GPU preview: a PNG with the project inside.
+#[test]
+fn projects_saved_with_a_preview_can_be_edited_and_keep_it() {
+    let chunk = |kind: &[u8; 4], data: &[u8]| -> Vec<u8> {
+        let mut c = (data.len() as u32).to_be_bytes().to_vec();
+        c.extend_from_slice(kind);
+        c.extend_from_slice(data);
+        let crc = files::png_crc(&c[4..]);
+        c.extend_from_slice(&crc.to_be_bytes());
+        c
+    };
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend(chunk(b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0]));
+    png.extend(chunk(b"IDAT", &[120, 156, 99, 96, 0, 0, 0, 2, 0, 1]));
+    png.extend(chunk(b"IEND", &[]));
+    let mut doc = benchup_core::Document::default();
+    doc.name = "Preview".into();
+    let mut value = serde_json::to_value(&doc).unwrap();
+    value[files::PREVIEW_FIELD] = serde_json::to_value(&png).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("preview.bup");
+    std::fs::write(&path, files::encode(&value.to_string()).unwrap()).unwrap();
+    let path = path.display().to_string();
+
+    assert_eq!(json_out(&benchup(&["scene", &path], None))["project"]["name"], "Preview");
+    let args = board("Side", [0., 0., 0.], [18., 300., 900.]).to_string();
+    assert!(benchup(&["call", &path, "create_board", &args], None).status.success());
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(files::has_preview(&bytes), "the file is still a PNG preview");
+    assert_eq!(files::decode(&bytes).unwrap().model.objects.len(), 1);
+}

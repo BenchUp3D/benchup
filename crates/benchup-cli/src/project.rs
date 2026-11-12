@@ -22,6 +22,8 @@ pub struct Project {
     env: ToolEnv,
     stamp: u64,
     counter: u64,
+    /// The file as last read or written; a PNG preview is kept when saving.
+    saved: Vec<u8>,
 }
 
 /// Result of applying one or more calls.
@@ -49,7 +51,7 @@ impl Project {
             selection: doc.selection.clone(),
             ..ToolEnv::default()
         };
-        Ok(Self { path, doc, env, stamp: stamp(&bytes), counter: 0 })
+        Ok(Self { path, doc, env, stamp: stamp(&bytes), counter: 0, saved: bytes })
     }
 
     /// Writes a new, empty project. Refuses to replace an existing file unless `force`.
@@ -71,9 +73,10 @@ impl Project {
         if stamp(&current) != self.stamp {
             return Err(CHANGED_ON_DISK.to_owned());
         }
-        let bytes = files::encode_document(&self.doc)?;
+        let bytes = files::reencode_like(&self.saved, &self.doc)?;
         files::save_atomic(&self.path, &bytes)?;
         self.stamp = stamp(&bytes);
+        self.saved = bytes;
         Ok(())
     }
 
