@@ -1,6 +1,7 @@
 //! Export preferences live in GeneralSettings, captured by InspectorPreferences.
 use super::*;
 use crate::inspector_table::{Column, InspectorTable};
+use benchup_core::tr;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct Preset {
@@ -8,6 +9,20 @@ pub(super) struct Preset {
     pub name: String,
     pub output: f64,
     pub model: f64,
+}
+
+impl Preset {
+    fn display_name(&self) -> &str {
+        // Localize untouched built-ins at display time. Keep their saved names
+        // stable, and leave renamed or user-created presets as entered.
+        match (self.id, self.name.as_str()) {
+            (7, "Woodworking mockup 1:2") => tr!("export_scale.woodworking_mockup_1_2"),
+            (8, "Woodworking mockup 1:5") => tr!("export_scale.woodworking_mockup_1_5"),
+            (9, "Woodworking mockup 1:10") => tr!("export_scale.woodworking_mockup_1_10"),
+            (10, "Miniature 1:12") => tr!("export_scale.miniature_1_12"),
+            _ => &self.name,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -100,19 +115,19 @@ impl Preferences {
     }
 
     pub(super) fn settings_ui(&mut self, ui: &mut egui::Ui) {
-        ui.text_label("Define ratios for STL export. Ratio = exported size : model size.");
-        ui.text_weak("Actual size (1:1) is always available. Scaling applies to all dimensions, including joints and holes.");
+        ui.text_label(tr!("export_scale.define_ratios"));
+        ui.text_weak(tr!("export_scale.actual_size_hint"));
         ui.hyperlink_to(
-            "NMRA scale reference (North America)",
+            tr!("export_scale.nmra_reference"),
             "https://www.nmra.org/beginner/scales",
         );
-        ui.text_weak("Woodworking mockup presets are conveniences, not NMRA standards. Railway names can use different ratios in other regions.");
+        ui.text_weak(tr!("export_scale.preset_standards_hint"));
         // Reserve the full single-line button width, including the theme's
         // padding and border, so the cell clip never cuts off its right edge.
         let remove_width = (ui
             .painter()
             .layout_no_wrap(
-                "Remove".into(),
+                tr!("common.remove").into(),
                 egui::TextStyle::Button.resolve(ui.style()),
                 ui.visuals().text_color(),
             )
@@ -130,7 +145,15 @@ impl Preferences {
                 Column::fixed(remove_width),
             ],
         );
-        table.header(ui, ["Name", "Exported", "Model", ""]);
+        table.header(
+            ui,
+            [
+                tr!("common.name"),
+                tr!("export_scale.exported"),
+                tr!("app.model"),
+                "",
+            ],
+        );
         let mut remove = None;
         for preset in &mut self.presets {
             table.row(
@@ -138,7 +161,10 @@ impl Preferences {
                 ("export_scale_preset", preset.id),
                 |column, cell| match column {
                     0 => {
-                        cell.text_edit_singleline(&mut preset.name);
+                        let mut name = preset.display_name().to_owned();
+                        if cell.text_edit_singleline(&mut name).changed() {
+                            preset.name = name;
+                        }
                     }
                     1 => {
                         cell.add(
@@ -156,7 +182,10 @@ impl Preferences {
                     }
                     _ => {
                         if cell
-                            .add(egui::Button::new("Remove").wrap_mode(egui::TextWrapMode::Extend))
+                            .add(
+                                egui::Button::new(tr!("common.remove"))
+                                    .wrap_mode(egui::TextWrapMode::Extend),
+                            )
                             .clicked()
                         {
                             remove = Some(preset.id);
@@ -171,7 +200,7 @@ impl Preferences {
                 self.choice = Choice::ActualSize;
             }
         }
-        if ui.button("Add preset").clicked() {
+        if ui.button(tr!("export_scale.add_preset")).clicked() {
             let id = self
                 .presets
                 .iter()
@@ -181,7 +210,7 @@ impl Preferences {
                 .saturating_add(1);
             self.presets.push(Preset {
                 id,
-                name: "New scale".into(),
+                name: tr!("export_scale.new_scale").into(),
                 output: 1.,
                 model: 1.,
             });
@@ -190,36 +219,49 @@ impl Preferences {
 
     fn picker(&mut self, ui: &mut egui::Ui) {
         let label = match self.choice {
-            Choice::ActualSize => "Actual size (1:1)".into(),
-            Choice::Custom => "Custom ratio".into(),
+            Choice::ActualSize => tr!("export_scale.actual_size").into(),
+            Choice::Custom => tr!("export_scale.custom_ratio").into(),
             Choice::Preset(id) => self
                 .presets
                 .iter()
                 .find(|p| p.id == id)
-                .map(|p| format!("{} ({}:{})", p.name, p.output, p.model))
+                .map(|p| format!("{} ({}:{})", p.display_name(), p.output, p.model))
                 .unwrap_or_default(),
         };
         egui::ComboBox::from_id_salt("stl_export_scale_choice")
             .width(ui.available_width())
             .selected_text(label)
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut self.choice, Choice::ActualSize, "Actual size (1:1)");
+                ui.selectable_value(
+                    &mut self.choice,
+                    Choice::ActualSize,
+                    tr!("export_scale.actual_size"),
+                );
                 for preset in &self.presets {
                     ui.selectable_value(
                         &mut self.choice,
                         Choice::Preset(preset.id),
-                        format!("{} ({}:{})", preset.name, preset.output, preset.model),
+                        format!(
+                            "{} ({}:{})",
+                            preset.display_name(),
+                            preset.output,
+                            preset.model
+                        ),
                     );
                 }
-                ui.selectable_value(&mut self.choice, Choice::Custom, "Custom ratio");
+                ui.selectable_value(
+                    &mut self.choice,
+                    Choice::Custom,
+                    tr!("export_scale.custom_ratio"),
+                );
             });
         if self.choice == Choice::Custom {
-            ui.text_label("Exported size : model size (using the same units)");
+            ui.text_label(tr!("export_scale.ratio_units_hint"));
             let mut table = InspectorTable::new(
                 ui.available_width(),
                 [Column::flex(1.), Column::fixed(12.), Column::flex(1.)],
             );
-            table.header(ui, ["Exported", "", "Model"]);
+            table.header(ui, [tr!("export_scale.exported"), "", tr!("app.model")]);
             table.row(ui, "custom_export_ratio", |column, cell| match column {
                 0 => {
                     cell.text_edit_singleline(&mut self.custom_output);
@@ -233,21 +275,16 @@ impl Preferences {
             });
         }
         if let Some(scale) = self.factor() {
-            ui.text_label(format!(
-                "Scale: {:.6}% — 1000 mm in the model exports as {:.4} mm.",
-                scale * 100.,
-                scale * 1000.
+            ui.text_label(tr!(
+                "export_scale.scale_preview",
+                percent = scale * 100.,
+                size = scale * 1000.
             ));
         } else {
-            ui.colored_label(
-                egui::Color32::RED,
-                "Enter two finite numbers greater than zero.",
-            );
+            ui.colored_label(egui::Color32::RED, tr!("export_scale.invalid_ratio"));
         }
-        ui.text_weak(
-            "STL coordinates are exported in millimetres. The project stays at its original size.",
-        );
-        ui.text_weak("Manage presets in Settings → Export scales.");
+        ui.text_weak(tr!("export_scale.stl_units_hint"));
+        ui.text_weak(tr!("export_scale.manage_presets_hint"));
     }
 }
 
@@ -259,16 +296,16 @@ impl BenchUpApp {
         let mut export = false;
         let response = Modal::new("stl_export_scale", 520.).show(ctx, |modal| {
             modal.header(|ui| {
-                ui.text_heading("Export STL");
+                ui.text_heading(tr!("export_scale.export_stl"));
             });
             modal.body(|ui| self.general_settings.export_scale.picker(ui));
             modal.footer(|ui| {
-                if ui.button("Cancel").clicked() {
+                if ui.button(tr!("common.cancel")).clicked() {
                     ui.close();
                 }
                 if primary_button(
                     ui,
-                    "Export",
+                    tr!("app.export"),
                     self.general_settings.export_scale.factor().is_some(),
                 )
                 .clicked()
@@ -293,6 +330,134 @@ impl BenchUpApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::ContextExt as _;
+
+    struct ResetLanguage;
+
+    impl Drop for ResetLanguage {
+        fn drop(&mut self) {
+            benchup_core::i18n::set_language("en");
+        }
+    }
+
+    fn contains_text(shapes: &[egui::epaint::ClippedShape], expected: &str) -> bool {
+        fn contains(shape: &egui::Shape, expected: &str) -> bool {
+            match shape {
+                egui::Shape::Text(text) => text.galley.job.text.contains(expected),
+                egui::Shape::Vec(shapes) => shapes.iter().any(|shape| contains(shape, expected)),
+                _ => false,
+            }
+        }
+        shapes.iter().any(|shape| contains(&shape.shape, expected))
+    }
+
+    #[test]
+    fn localized_preset_names_preserve_saved_and_custom_preferences() {
+        let _reset = ResetLanguage;
+        let ctx = egui::Context::default();
+        let mut prefs = Preferences::default();
+        prefs.presets[8].name = "My workshop model".into();
+        let mut custom = prefs.presets[6].clone();
+        custom.id = 100;
+        prefs.presets.push(custom);
+        let saved = serde_json::to_string(&prefs).unwrap();
+        for (language, mockup) in [
+            ("en", "Woodworking mockup 1:2"),
+            ("zh_CN", "木工样机 1:2"),
+            ("pt_BR", "Maquete de marcenaria 1:2"),
+            ("en", "Woodworking mockup 1:2"),
+        ] {
+            benchup_core::i18n::set_language(language);
+            let output = ctx.run_test_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1100., 1200.),
+                    )),
+                    ..Default::default()
+                },
+                |ui| prefs.settings_ui(ui),
+            );
+            assert!(contains_text(&output.shapes, mockup));
+            assert!(contains_text(
+                &output.shapes,
+                tr!("export_scale.add_preset")
+            ));
+            assert_eq!(prefs.presets[6].display_name(), mockup);
+            assert_eq!(prefs.presets[8].display_name(), "My workshop model");
+            assert_eq!(
+                prefs.presets.last().unwrap().display_name(),
+                "Woodworking mockup 1:2"
+            );
+            assert_eq!(serde_json::to_string(&prefs).unwrap(), saved);
+        }
+    }
+
+    #[test]
+    fn export_dialog_switches_labels_preview_and_validation_without_restart() {
+        let _reset = ResetLanguage;
+        let ctx = egui::Context::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        app.project.export_scale_open = true;
+        for (language, title, actual, custom, preview, error) in [
+            (
+                "en",
+                "Export STL",
+                "Actual size (1:1)",
+                "Custom ratio",
+                "Scale: 50.000000%",
+                "Enter two finite numbers greater than zero.",
+            ),
+            (
+                "zh_CN",
+                "导出 STL",
+                "实际尺寸 (1:1)",
+                "自定义比例",
+                "比例：50.000000%",
+                "请输入两个大于零的有限数值。",
+            ),
+            (
+                "pt_BR",
+                "Exportar STL",
+                "Tamanho real (1:1)",
+                "Proporção personalizada",
+                "Escala: 50.000000%",
+                "Insira dois números finitos maiores que zero.",
+            ),
+            (
+                "en",
+                "Export STL",
+                "Actual size (1:1)",
+                "Custom ratio",
+                "Scale: 50.000000%",
+                "Enter two finite numbers greater than zero.",
+            ),
+        ] {
+            benchup_core::i18n::set_language(language);
+            let input = || egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100., 800.),
+                )),
+                ..Default::default()
+            };
+            app.general_settings.export_scale.choice = Choice::ActualSize;
+            ctx.run_test_ui(input(), |_| app.export_scale_window(&ctx));
+            let output = ctx.run_test_ui(input(), |_| app.export_scale_window(&ctx));
+            for text in [title, actual, tr!("common.cancel"), tr!("app.export")] {
+                assert!(contains_text(&output.shapes, text), "{language}: {text}");
+            }
+            app.general_settings.export_scale.choice = Choice::Custom;
+            app.general_settings.export_scale.custom_model = "2".into();
+            let output = ctx.run_test_ui(input(), |_| app.export_scale_window(&ctx));
+            for text in [custom, preview] {
+                assert!(contains_text(&output.shapes, text), "{language}: {text}");
+            }
+            app.general_settings.export_scale.custom_model = "0".into();
+            let output = ctx.run_test_ui(input(), |_| app.export_scale_window(&ctx));
+            assert!(contains_text(&output.shapes, error), "{language}: {error}");
+        }
+    }
 
     #[test]
     fn stl_export_waits_for_scale_confirmation_and_escape_cancels() {

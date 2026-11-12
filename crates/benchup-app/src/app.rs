@@ -3107,7 +3107,7 @@ impl BenchUpApp {
                                 self.prepare_cut_report(CutReport::WorkshopLabels);
                                 ui.close();
                             }
-                            if ui.add_enabled(!self.project.blocked(), Self::menu_item_button(ui, tr!("app.prepare_cutting_plan"), Some(tr!("app.dimension"))))
+                            if ui.add_enabled(!self.project.blocked(), Self::menu_item_button(ui, tr!("app.prepare_cutting_plan"), Some("dimension")))
                                 .on_hover_text(tr!("app.summarize_matching_parts_and_export_finished_cutting_dimensions"))
                                 .clicked() {
                                 self.prepare_cut_report(CutReport::CuttingPlan);

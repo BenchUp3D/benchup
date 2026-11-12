@@ -50,7 +50,10 @@ All current and future right-sidebar tables use `crate::inspector_table::Inspect
 
 # Application language
 
-All user-facing application text must be in English, even when the user requests features or changes in French. This includes section titles, menus, controls, tooltips, notifications, and errors. Use “Automatic Fasteners” for the automatic fastener section. Preserve stable internal preference keys and saved-project compatibility when translating visible text.
+English is the source language for all user-facing application text, even when the user requests features or changes in any language. Display text in the user's selected application language through the existing translation system. This includes section titles, menus, controls, tooltips, notifications, and errors. Preserve stable internal preference keys and saved-project compatibility when translating visible text.
+
+- Every new or changed user-facing label must be translatable. Use the existing `tr!` message lookup with a stable catalog key instead of hard-coded display text.
+- Reuse an existing message key when appropriate; otherwise add the English source message to `assets/i18n/en.json` and corresponding translations to every supported language catalog in `assets/i18n/`. Keep named placeholders and plural forms consistent across catalogs.
 
 # PDF export header
 

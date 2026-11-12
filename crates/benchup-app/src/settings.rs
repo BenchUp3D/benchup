@@ -69,7 +69,7 @@ impl Section {
             Self::Diagnostics => tr!("settings.diagnostics"),
             Self::Rendering => tr!("settings.rendering"),
             Self::Tools => tr!("settings.tools"),
-            Self::ExportScales => "Export scales",
+            Self::ExportScales => tr!("settings.export_scales"),
         }
     }
 
@@ -1199,11 +1199,11 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = BenchUpApp::with_document(Document::default(), None, true);
         app.settings_open = true;
-        for (language, title, group) in [
-            ("en", "Settings", "Workspace"),
-            ("zh_CN", "设置", "工作区"),
-            ("pt_BR", "Configurações", "Área de trabalho"),
-            ("en", "Settings", "Workspace"),
+        for (language, title, group, export_scales) in [
+            ("en", "Settings", "Workspace", "Export scales"),
+            ("zh_CN", "设置", "工作区", "导出比例"),
+            ("pt_BR", "Configurações", "Área de trabalho", "Escalas de exportação"),
+            ("en", "Settings", "Workspace", "Export scales"),
         ] {
             app.general_settings.language = language.into();
             let input = || egui::RawInput {
@@ -1215,6 +1215,7 @@ mod tests {
             let text = rendered_text(&output.shapes);
             assert!(text.iter().any(|label| label == title));
             assert!(text.iter().any(|label| label == group));
+            assert_eq!(Section::ExportScales.label(), export_scales);
         }
     }
 
