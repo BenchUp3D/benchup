@@ -250,8 +250,14 @@ impl Camera {
         let anchor =
             ray.origin + ray.direction * ((self.target - ray.origin).dot(forward) / denominator);
         let old = self.distance;
-        self.distance = (old * (-scroll * 0.002).exp()).clamp(0.05, 1e6);
+        let requested = old * (-scroll * 0.002).exp();
+        self.distance = requested.clamp(0.05, 1e6);
         self.target += (anchor - self.target) * (1.0 - self.distance / old);
+        if self.projection == Projection::Perspective && requested < self.distance {
+            // Keep the orbit radius numerically safe, but continue dollying along
+            // the pointer ray. The small radius naturally limits close-up speed.
+            self.target += ray.direction * ((self.distance - requested) / denominator);
+        }
     }
     pub fn fit(&mut self, bounds: Option<(DVec3, DVec3)>, size: DVec2) {
         if let Some((lo, hi)) = bounds {
@@ -453,6 +459,36 @@ impl CameraView {
 #[cfg(test)]
 mod projection_tests {
     use super::*;
+
+    #[test]
+    fn close_perspective_zoom_keeps_moving_slowly_along_pointer_ray() {
+        let size = DVec2::new(1200., 800.);
+        for point in [size * 0.5, size * 0.75] {
+            let mut camera = Camera { distance: 0.051, ..Camera::default() };
+            let direction = camera.ray(point, size).direction;
+            for _ in 0..100 {
+                let before = camera.eye();
+                camera.zoom(20., point, size);
+                let movement = camera.eye() - before;
+                assert!(movement.dot(direction) > 0.001);
+                assert!(movement.length() < 0.004);
+                assert!(movement.cross(direction).length() < 1e-10);
+                assert!(camera.valid());
+            }
+            assert_eq!(camera.distance, 0.05);
+        }
+    }
+
+    #[test]
+    fn parallel_zoom_does_not_dolly_at_minimum_scale() {
+        let size = DVec2::new(1200., 800.);
+        let mut camera = Camera {
+            distance: 0.05, projection: Projection::Parallel, ..Camera::default()
+        };
+        let before = camera.clone();
+        camera.zoom(20., size * 0.75, size);
+        assert_eq!(camera, before);
+    }
 
     #[test]
     fn older_cameras_default_to_perspective_and_new_options_round_trip() {
