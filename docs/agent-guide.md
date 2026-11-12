@@ -91,7 +91,7 @@ Two joints cut into the same board must not cross, and must not meet face to fac
 
 ## Shaped boards (curves, chamfers, angled ends)
 
-There are no arc, fillet or chamfer tools. Draw the board's outline as one closed `draw_polyline`, using many short segments for a curve, on the plane where the board starts. Then `push_pull` its face to the thickness and `group` everything the two calls created. Finish with `set_grain` and a name. In one batch:
+The tools have no arc tool and do not expose BenchUp's Router yet (edge chamfers, bevels, roundovers, coves, rabbets, grooves and other profiles). For a profile along an edge, say that the user can apply it with the Router in BenchUp, or cut the shape into the outline as below. Draw the board's outline as one closed `draw_polyline`, using many short segments for a curve, on the plane where the board starts. Then `push_pull` its face to the thickness and `group` everything the two calls created. Finish with `set_grain` and a name. In one batch:
 
 ```jsonl
 {"tool": "draw_polyline", "arguments": {"points_mm": [[0,0,0],[440,0,0],[450,10,0],[450,350,0],[0,350,0]], "close": true}}
@@ -119,3 +119,4 @@ Avoid cutting through a finished board with a negative `push_pull` of its full t
 
 - Joints are cut from the overlap when BenchUp evaluates the model. The tools show the boards before cutting; use the joint's `status` to confirm.
 - There is no fixing hardware (screws, dowels, metal runners). Leave a top resting on its frame, and note the fixing with `add_text` if it matters.
+- Some BenchUp features are not available through the tools yet: the Router's edge profiles, the Cutting Plan (stock layouts with saw kerf and grain), Workshop Labels and the Time & Cost Estimates PDFs, trimming excess material at joints, and wood finishes. `get_cut_list` gives an area lower bound; for a real layout, the user can export the Cutting Plan from BenchUp's Tools menu.
