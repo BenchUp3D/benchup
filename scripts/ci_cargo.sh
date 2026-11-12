@@ -19,7 +19,7 @@ awk '
         if (message != "") print "::error::" message
         message = ""
     }
-    /^error(\[[[:alnum:]]+\])?:/ || /^test .* \.\.\. FAILED$/ {
+    /^error(\[[[:alnum:]]+\])?:/ || /^test .* \.\.\. FAILED$/ || /^thread .* panicked at / {
         annotate()
         if (++count > 12) exit
         message = escape($0)

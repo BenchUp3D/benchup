@@ -576,7 +576,11 @@ mod tests {
             .is_err()
         );
         assert!(import(circle.trim_end_matches("0\nEOF\n").as_bytes(), "dxf", "Bad").is_err());
-        let metres = include_str!("../tests/fixtures/profile-mm.dxf").replace("70\n4", "70\n6");
+        // Windows checkouts can use CRLF. Normalize before replacing the DXF
+        // group code and value so the test actually changes the drawing units.
+        let metres = include_str!("../tests/fixtures/profile-mm.dxf")
+            .replace("\r\n", "\n")
+            .replace("70\n4", "70\n6");
         assert!(
             import(metres.as_bytes(), "dxf", "Metres")
                 .unwrap()
