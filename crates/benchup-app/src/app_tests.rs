@@ -4797,7 +4797,7 @@ fn properties_show_edge_lengths_totals_units_and_geometry_changes() {
 }
 
 #[test]
-fn properties_show_face_sides_and_include_holes_in_the_perimeter() {
+fn properties_include_holes_in_the_perimeter_without_side_lists() {
     let mut h = Harness::new();
     // A tilted square ensures lengths are measured in 3D, not projected onto XY.
     let face = properties_outline(
@@ -4824,10 +4824,10 @@ fn properties_show_face_sides_and_include_holes_in_the_perimeter() {
     let output = properties_output(&mut h);
     text_position(&output, "Perimeter");
     text_position(&output, "24.00 m");
-    text_position(&output, "Side lengths");
-    text_position(&output, "5.00 m · 5.00 m · 5.00 m · 5.00 m");
-    text_position(&output, "Hole 1 side lengths");
-    text_position(&output, "1.00 m · 1.00 m · 1.00 m · 1.00 m");
+    assert!(!output.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Text(text) if text.galley.job.text.contains("side lengths")
+            || text.galley.job.text == "Side lengths"
+    )));
     text_position(&output, "Surface area");
 }
 
@@ -6866,4 +6866,81 @@ fn wood_glue_pointer_clicks_and_automatic_selection_record_one_edit_each() {
     assert!((h.app.doc.model.wood_glue_area() - 1.5).abs() < 1e-9);
     h.app.undo(&h.ctx, false);
     assert_eq!(h.app.doc.model.wood_glue_area(), 1.);
+}
+
+
+#[test]
+fn view_menu_toggles_selected_edge_lengths_without_model_edits() {
+    let mut h = Harness::new();
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    assert!(!h.app.doc.display.face_side_lengths);
+    h.click(text_position(&output, "View"));
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    h.click(menu_text_position(&output, "Selected Edge Lengths"));
+    assert!(h.app.doc.display.face_side_lengths);
+    assert!(!h.app.project.modified);
+    assert!(h.app.doc.history.is_empty());
+}
+
+
+#[test]
+fn selected_edge_lengths_appear_in_the_viewport() {
+    let mut h = Harness::new();
+    h.app.doc.display.face_side_lengths = true;
+    let face = properties_outline(&mut h.app.doc.model, &[
+        DVec3::ZERO, DVec3::X * 3., DVec3::new(3., 5., 0.), DVec3::Y * 5.,
+    ]);
+    h.app.doc.camera.set_standard_view(benchup_core::StandardView::Top);
+    h.app.fit(&h.ctx);
+    h.app.selected = BTreeSet::from([face]);
+    h.app.doc.display.units.precision.length = Some(2);
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    assert!(!output.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Text(text) if text.galley.job.text == "3.00 m"
+            || text.galley.job.text == "5.00 m"
+    )));
+    h.app.selected = h.app.doc.model.edges.keys().copied().collect();
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    text_position(&output, "3.00 m");
+    text_position(&output, "5.00 m");
+    h.app.doc.display.face_side_lengths = false;
+    let output = h.frame(vec![], egui::Modifiers::NONE);
+    assert!(!output.shapes.iter().any(|shape| matches!(
+        &shape.shape, egui::Shape::Text(text) if text.galley.job.text == "3.00 m"
+            || text.galley.job.text == "5.00 m"
+    )));
+}
+
+
+#[test]
+fn selected_edge_length_labels_hide_behind_faces() {
+    fn contains_length(shape: &egui::Shape) -> bool {
+        match shape {
+            egui::Shape::Text(text) => text.galley.job.text == "3.00 m",
+            egui::Shape::Vec(shapes) => shapes.iter().any(contains_length),
+            _ => false,
+        }
+    }
+    for cover_height in [1., -1., 0.] {
+        let mut h = Harness::new();
+        h.app.doc.display.face_side_lengths = true;
+        let edge = h.app.doc.model.add_edge(DVec3::ZERO, DVec3::X * 3.).unwrap();
+        properties_outline(&mut h.app.doc.model, &[
+            DVec3::new(-10., -10., cover_height),
+            DVec3::new(10., -10., cover_height),
+            DVec3::new(10., 10., cover_height),
+            DVec3::new(-10., 10., cover_height),
+        ]);
+        h.app.selected = BTreeSet::from([edge]);
+        h.app.doc.camera.set_standard_view(benchup_core::StandardView::Top);
+        h.app.doc.display.units.precision.length = Some(2);
+        h.app.fit(&h.ctx);
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 800.));
+        let app = &mut h.app;
+        let output = h.ctx.run_test_ui(egui::RawInput {
+            screen_rect: Some(rect), ..Default::default()
+        }, |ui| app.paint_scene(ui, rect));
+        assert_eq!(output.shapes.iter().any(|shape| contains_length(&shape.shape)),
+            cover_height <= 0., "cover height {cover_height}");
+    }
 }

@@ -1953,6 +1953,27 @@ mod preference_tests {
     }
 
     #[test]
+    fn face_side_lengths_restore_without_model_edits_and_default_off() {
+        let old: DisplaySettings = serde_json::from_str("{}").unwrap();
+        assert!(!old.face_side_lengths);
+        let ctx = egui::Context::default();
+        let mut storage = SavedPreferences::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        for enabled in [false, true] {
+            app.doc.display.face_side_lengths = enabled;
+            storage.flushed = false;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&ctx, Some(&storage));
+            assert_eq!(restored.doc.display.face_side_lengths, enabled);
+            restored.new_model(&ctx);
+            assert_eq!(restored.doc.display.face_side_lengths, enabled);
+        }
+    }
+
+    #[test]
     fn grain_direction_visibility_and_tool_restore_without_model_edits() {
         let old: DisplaySettings = serde_json::from_str("{}").unwrap();
         assert!(old.grain_direction);
@@ -5172,6 +5193,7 @@ impl BenchUpApp {
         for (value, label) in [
             (&mut d.group_names, tr!("sidebar.group_names")),
             (&mut d.dimensions, tr!("sidebar.dimensions")),
+            (&mut d.face_side_lengths, "Selected Edge Lengths"),
             (&mut d.grain_direction, tr!("grain_direction.show")),
             (&mut d.wood_joinery, tr!("sidebar.wood_joinery")),
         ] {
@@ -5189,6 +5211,7 @@ impl BenchUpApp {
         }
 
         // These application preferences do not modify the project.
+        before.face_side_lengths = d.face_side_lengths;
         before.grain_direction = d.grain_direction;
         before.group_emphasis = d.group_emphasis;
         if before != self.doc.display {

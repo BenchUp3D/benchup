@@ -3867,24 +3867,7 @@ impl BenchUpApp {
                     },
                     &self.doc.display.units.format_length(perimeter),
                 );
-                if let [face] = selected_faces.as_slice() {
-                    for (index, ring) in std::iter::once(&face.vertices)
-                        .chain(face.holes.iter())
-                        .enumerate()
-                    {
-                        let label = if index == 0 {
-                            tr!("app.side_lengths").to_owned()
-                        } else {
-                            tr!("app.hole_side_lengths", index = index)
-                        };
-                        let lengths = side_lengths(ring)
-                            .into_iter()
-                            .map(|length| self.doc.display.units.format_length(length))
-                            .collect::<Vec<_>>()
-                            .join(tr!("app.selection_separator"));
-                        Self::property_row(ui, &label, &lengths);
-                    }
-                }
+
             }
             if self.selected.len() == 1
                 && let Some(&id) = self.selected.first()
@@ -4015,22 +3998,7 @@ impl BenchUpApp {
                 },
                 &units.format_length(s.perimeter),
             );
-            for (i, ring) in s.sides.iter().enumerate() {
-                let label = if i == 0 {
-                    tr!("app.side_lengths").to_owned()
-                } else {
-                    tr!("app.hole_side_lengths", index = i)
-                };
-                Self::property_row(
-                    ui,
-                    &label,
-                    &ring
-                        .iter()
-                        .map(|v| units.format_length(*v))
-                        .collect::<Vec<_>>()
-                        .join(tr!("app.selection_separator")),
-                );
-            }
+
         }
         if let Some(volume) = s.volume {
             Self::property_row(ui, tr!("app.volume"), &units.format_volume(volume));
@@ -5795,6 +5763,65 @@ impl BenchUpApp {
         let screen = |point: DVec3| view.project(point).map(|v| rect.min + pv(v));
         self.picking_cache.set_display(display);
         self.picking_cache.update(&self.face_cache);
+        if display.face_side_lengths && self.history_preview.is_none() {
+            // Keep the serialized preference key for compatibility. Only explicit
+            // edge selections produce labels; selecting a face/group does not.
+            // Match existing viewport text: cached glyphs render on the GPU,
+            // with CPU projection limited to the selected edge endpoints.
+            let vertex = |id: &u64| model.vertices.get(id)
+                .or_else(|| self.doc.model.vertices.get(id)).map(|v| v.position);
+            // Font-atlas labels do not expose a world-depth test in egui. Use
+            // the retained picking BVH for two bounded visibility queries per
+            // selected edge, without projecting/tessellating scene faces.
+            let label_owners = BTreeSet::new();
+            let edge_labels: Vec<_> = self.selected.iter().filter_map(|id| {
+                let edge = model.edges.get(id).or_else(|| self.doc.model.edges.get(id))?;
+                if !entities.get(edge.id).displayed(display) { return None; }
+                let (a, b) = (vertex(&edge.a)?, vertex(&edge.b)?);
+                let midpoint = (a + b) * 0.5;
+                if !self.picking_cache.marker_visible(
+                    &self.face_cache, entities, camera, size, midpoint, &label_owners,
+                ) { return None; }
+                Some((screen(a)?, screen(b)?, screen(midpoint)?, midpoint, a.distance(b)))
+            }).collect();
+            let center = edge_labels.iter().map(|(_, _, midpoint, _, _)| midpoint.to_vec2())
+                .fold(egui::Vec2::ZERO, |sum, point| sum + point)
+                / edge_labels.len().max(1) as f32;
+            for (start, end, midpoint, world_midpoint, length) in edge_labels {
+                let edge = end - start;
+                if edge.length_sq() < 1e-6 { continue; }
+                let mut normal = egui::vec2(edge.y, -edge.x).normalized();
+                // Offset away from the selected edges' center. For a single
+                // edge, choose the upper/right side independent of vertex order.
+                let radial = midpoint.to_vec2() - center;
+                let dot = normal.dot(radial);
+                if dot < -1e-4 || (dot.abs() <= 1e-4
+                    && (normal.y > 0. || (normal.y.abs() < 1e-4 && normal.x < 0.)))
+                {
+                    normal = -normal;
+                }
+                let position = midpoint + normal * 30.;
+                if !rect.contains(position) { continue; }
+                // The offset label is a billboard at the edge midpoint's view
+                // depth; also hide it when its displayed center is covered.
+                let ray = view.ray(dv(position - rect.min));
+                let forward = (camera.target - camera.eye()).normalize();
+                let denominator = ray.direction.dot(forward);
+                if denominator.abs() < 1e-8 { continue; }
+                let depth = (world_midpoint - ray.origin).dot(forward) / denominator;
+                let label_anchor = ray.origin + ray.direction * depth;
+                if !self.picking_cache.marker_visible(
+                    &self.face_cache, entities, camera, size, label_anchor, &label_owners,
+                ) { continue; }
+                let galley = p.layout_no_wrap(
+                    display.units.format_length(length),
+                    egui::FontId::proportional(13.), colors.ink,
+                );
+                let label = Rect::from_center_size(position, galley.size());
+                p.rect_filled(label.expand2(egui::vec2(4., 2.)), 3., colors.paper);
+                p.galley(label.min, galley, colors.ink);
+            }
+        }
         if display.group_names {
             #[cfg(not(target_arch = "wasm32"))]
             let _profile = viewport_benchmark::scope("group_labels");

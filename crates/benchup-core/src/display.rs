@@ -53,6 +53,8 @@ pub struct DisplaySettings {
     pub axes: bool,
     pub guides: bool,
     pub dimensions: bool,
+    /// Show selected edge lengths in the viewport (legacy serialized key).
+    pub face_side_lengths: bool,
     pub hidden_geometry: bool,
     pub hidden_objects: bool,
     pub group_emphasis: bool,
@@ -112,6 +114,7 @@ impl Default for DisplaySettings {
             axes: true,
             guides: true,
             dimensions: true,
+            face_side_lengths: false,
             hidden_geometry: false,
             hidden_objects: false,
             group_emphasis: true,
