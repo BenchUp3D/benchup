@@ -71,3 +71,9 @@ with an image editor: it may discard project data. Previous BenchUp versions
 cannot open this format. Existing gzip and plain JSON projects remain readable.
 `benchup-app --thumbnail input.bup output.png` extracts the image without
 launching the editor or initializing a GPU.
+
+`benchup-app --convert input.skp output.bup` converts a SketchUp file to a
+project without a window or GPU. The result matches File → Import SketchUp into
+an empty model followed by Save, except that it has no viewport preview. The
+project is named after the output file, and the SketchUp group after the input
+file. Use a `.bup` output path.

@@ -673,6 +673,8 @@
   "cutting_plan.the_project_name_is_too_long_to_fit": "项目名称过长，无法放在车间标签上方。",
   "cutting_plan.unnamed_part": "未命名部件",
   "cutting_plan.workshop_labels": "车间标签",
+  "desktop_files.missing_project_output_path": "缺少 BenchUp 项目输出路径",
+  "desktop_files.missing_sketchup_file_path": "缺少 SketchUp 文件路径",
   "drawing_groups.the_drawing_could_not_be_grouped": "无法对绘图进行分组",
   "entity_gizmo.axis_lengths": "轴长度：{}。{}。{}。",
   "entity_gizmo.object_lenghts": "对象长度",

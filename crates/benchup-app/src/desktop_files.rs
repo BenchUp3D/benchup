@@ -1,4 +1,5 @@
-//! Desktop shell entry points. Thumbnail extraction never starts a GPU or UI.
+//! Desktop shell entry points. Thumbnail extraction and conversion never start a GPU or UI.
+use benchup_core::{DVec2, Document, Model, tr};
 use std::{
     collections::VecDeque,
     path::PathBuf,
@@ -25,6 +26,50 @@ pub fn thumbnail_command() -> Option<Result<(), String>> {
         )
     })())
 }
+pub fn convert_command() -> Option<Result<(), String>> {
+    let mut args = std::env::args_os().skip(1);
+    if args.next()?.to_str()? != "--convert" {
+        return None;
+    }
+    Some((|| {
+        let input = args.next().ok_or(tr!("desktop_files.missing_sketchup_file_path"))?;
+        let output = args.next().ok_or(tr!("desktop_files.missing_project_output_path"))?;
+        convert_skp(std::path::Path::new(&input), std::path::Path::new(&output))
+    })())
+}
+/// Same document as File > Import into an empty model, then Save, without a preview.
+fn convert_skp(input: &std::path::Path, output: &std::path::Path) -> Result<(), String> {
+    let bytes = std::fs::read(input).map_err(|e| e.to_string())?;
+    let name = input
+        .file_stem()
+        .and_then(|n| n.to_str())
+        .unwrap_or(tr!("project_files.sketchup_import"));
+    let imported = crate::interchange::import_skp(&bytes, name)?;
+    let crate::project_files::Outcome::Imported(model, selected) =
+        crate::project_files::prepare_import(Model::default(), &imported)?
+    else {
+        unreachable!("prepare_import always imports")
+    };
+    let mut doc = Document {
+        model: *model,
+        selection: selected,
+        ..Document::default()
+    };
+    doc.history.record_applied_attributed(
+        tr!("projects.import_sketchup"),
+        Model::default(),
+        &doc.model,
+        None,
+        None,
+    );
+    doc.camera.fit(doc.model.bounds(), DVec2::new(1440., 900.));
+    crate::project_files::set_document_name(&mut doc, output);
+    let json = serde_json::to_string(&doc).map_err(|e| e.to_string())?;
+    crate::project_files::write(output, &crate::project_files::encode(&json)?)
+}
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "desktop_file_tests.rs"]
+mod tests;
 pub fn initialize() {
     for arg in std::env::args_os().skip(1) {
         let path = PathBuf::from(arg);
