@@ -729,8 +729,7 @@ impl BenchUpApp {
                     if let Some((_, rect, _)) = views.iter().find(|(id, _, _)| *id == owner) {
                         self.activate_viewport(owner);
                         self.viewport = *rect;
-                        self.doc.camera.zoom(scroll * self.general_settings.mouse_zoom_speed(),
-                            dv(anchor - rect.min), dv(rect.size()));
+                        self.zoom_camera_at(scroll, anchor);
                         self.changed(ctx);
                     }
                 }

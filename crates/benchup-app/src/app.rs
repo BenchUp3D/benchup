@@ -4573,17 +4573,32 @@ impl BenchUpApp {
         }
     }
 
+    pub(super) fn zoom_camera_at(&mut self, scroll: f64, pos: Pos2) {
+        let point = dv(pos - self.viewport.min);
+        let size = dv(self.viewport.size());
+        let ray = self.doc.camera.ray(point, size);
+        let (faces, entities, picking) = if !self.doc.model.has_machining() && self.doc.model.connections.is_empty() {
+            self.prepare_picking();
+            (&self.face_cache, &self.entity_cache, &self.picking_cache)
+        } else {
+            let (_, faces, entities, picking) = self.joinery_geometry
+                .evaluated_picking(&self.doc.model, &self.doc.display);
+            (faces, entities, &*picking)
+        };
+        let surface = picking.nearest_unscoped(faces, entities, ray)
+            .map(|(_, _, hit)| hit);
+        self.doc.camera.zoom_to_surface(
+            scroll * self.general_settings.mouse_zoom_speed(), point, size, surface,
+        );
+    }
+
     fn zoom_viewport(&mut self, ctx: &egui::Context) -> Option<Pos2> {
         let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
         if scroll.abs() <= 0.01 {
             return None;
         }
         let pos = ctx.input(|i| i.pointer.hover_pos())?;
-        self.doc.camera.zoom(
-            scroll as f64 * self.general_settings.mouse_zoom_speed(),
-            dv(pos - self.viewport.min),
-            dv(self.viewport.size()),
-        );
+        self.zoom_camera_at(scroll as f64, pos);
         self.camera_changed(ctx);
         Some(pos)
     }

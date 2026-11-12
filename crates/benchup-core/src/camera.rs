@@ -259,6 +259,27 @@ impl Camera {
             self.target += ray.direction * ((self.distance - requested) / denominator);
         }
     }
+    /// Limit perspective dolly speed by the visible surface depth, rather than
+    /// letting a distant orbit target carry the eye through nearby geometry.
+    pub fn zoom_to_surface(&mut self, scroll: f64, point: DVec2, size: DVec2, surface: Option<DVec3>) {
+        if self.projection != Projection::Perspective {
+            self.zoom(scroll, point, size);
+            return;
+        }
+        let eye = self.eye();
+        let forward = (self.target - eye).normalize();
+        let depth = surface.map(|hit| (hit - eye).dot(forward));
+        let Some(depth) = depth.filter(|depth| depth.is_finite() && *depth > 0. && *depth < self.distance) else {
+            self.zoom(scroll, point, size);
+            return;
+        };
+        let ray = self.ray(point, size);
+        let movement = depth * (1. - (-scroll * 0.002).exp());
+        self.distance = (self.distance - movement).clamp(0.05, 1e6);
+        self.target = eye + ray.direction * (movement / ray.direction.dot(forward))
+            + forward * self.distance;
+    }
+
     pub fn fit(&mut self, bounds: Option<(DVec3, DVec3)>, size: DVec2) {
         if let Some((lo, hi)) = bounds {
             self.target = (lo + hi) * 0.5;
@@ -488,6 +509,25 @@ mod projection_tests {
                 assert!(camera.valid());
             }
             assert_eq!(camera.distance, 0.05);
+        }
+    }
+
+    #[test]
+    fn surface_zoom_slows_down_before_reaching_nearby_geometry() {
+        let size = DVec2::new(1200., 800.);
+        for point in [size * 0.5, size * 0.75] {
+            let mut camera = Camera::default();
+            let ray = camera.ray(point, size);
+            let surface = ray.origin + ray.direction * 0.1;
+            let mut previous = 0.1;
+            for _ in 0..100 {
+                camera.zoom_to_surface(20., point, size, Some(surface));
+                let gap = camera.eye().distance(surface);
+                assert!(gap < previous);
+                assert!((gap / previous - (-0.04_f64).exp()).abs() < 1e-8);
+                assert!(camera.valid());
+                previous = gap;
+            }
         }
     }
 
