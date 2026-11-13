@@ -758,15 +758,16 @@ mod tests {
             }
         }
         let _reset = ResetLanguage;
+        let key = "wood_glue.contacts_applied";
         for saved_label in [
-            "Glue contact surfaces",
-            "为接触面涂胶",
-            "Colar superfícies de contato",
-            "wood_glue.contacts_applied",
+            crate::i18n::catalog_message("en", key),
+            crate::i18n::catalog_message("zh_CN", key),
+            crate::i18n::catalog_message("pt_BR", key),
+            key.to_owned(),
         ] {
             let mut doc = Document::default();
             line(&mut doc, 0., "Workshop cleanup");
-            line(&mut doc, 1., saved_label);
+            line(&mut doc, 1., &saved_label);
             let author = HistoryAuthor {
                 id: "test-author".into(), name: "Lin".into(),
                 kind: "account".into(), verified: true,
@@ -779,9 +780,13 @@ mod tests {
             let mut history: History = serde_json::from_str(&saved).unwrap();
             for language in ["en", "zh_CN", "pt_BR", "zh_CN"] {
                 crate::i18n::set_language(language);
-                let translated = crate::i18n::catalog_message(language, "wood_glue.contacts_applied");
+                let translated = crate::i18n::catalog_message(language, key);
                 let label = translated.as_str();
-                assert_eq!(history.labels().collect::<Vec<_>>(), ["Workshop cleanup", label]);
+                assert_eq!(
+                    history.labels().collect::<Vec<_>>(),
+                    ["Workshop cleanup", label],
+                    "saved label {saved_label:?}, language {language}",
+                );
                 assert_eq!(history.undo_label(), Some(label));
                 assert_eq!(history.attributed_labels().last(), Some((label, Some(&author), Some(123))));
                 assert_eq!(serde_json::to_string(&history).unwrap(), saved);
