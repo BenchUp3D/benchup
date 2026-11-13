@@ -321,12 +321,23 @@ impl BenchUpApp {
         let delta = self.snap.map_or(DVec3::ZERO, |snap| snap.point - origin);
         match self.tool {
             Tool::Rectangle | Tool::Image => {
+                // Either side may be left empty (Tab-separated floating inputs)
+                // to keep the size under the cursor.
                 let (width, height) = self
                     .length_input
                     .split_once(',')
-                    .ok_or(tr!("precision.enter_width_height_such_as_5m_50mm"))?;
-                let width = positive_length(width, self.doc.display.units.length)?;
-                let height = positive_length(height, self.doc.display.units.length)?;
+                    .unwrap_or((self.length_input.as_str(), ""));
+                let side = |typed: &str, live: f64| {
+                    if typed.trim().is_empty() {
+                        (live > 1e-7)
+                            .then_some(live)
+                            .ok_or(tr!("precision.enter_width_height_such_as_5m_50mm"))
+                    } else {
+                        positive_length(typed, self.doc.display.units.length)
+                    }
+                };
+                let width = side(width, delta.dot(drawing.u).abs())?;
+                let height = side(height, delta.dot(drawing.v).abs())?;
                 let direction = |value: f64| if value < 0. { -1. } else { 1. };
                 let a = drawing.u * width * direction(delta.dot(drawing.u));
                 let b = drawing.v * height * direction(delta.dot(drawing.v));

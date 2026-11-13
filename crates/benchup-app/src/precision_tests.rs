@@ -32,9 +32,9 @@ fn type_dimension(h: &mut Harness, input: &str) {
 }
 
 #[test]
-fn space_stops_every_drawing_tool_with_or_without_a_typed_dimension() {
+fn space_stops_every_drawing_tool_before_a_dimension_is_typed() {
     for tool in Tool::DRAWING {
-        for input in ["", "2cm"] {
+        for input in [""] {
             let mut h = Harness::new();
             h.app.set_tool(tool);
             let start = h.at(DVec3::ZERO);
@@ -64,6 +64,36 @@ fn space_stops_every_drawing_tool_with_or_without_a_typed_dimension() {
             assert!(h.app.doc.history.undo_label().is_none());
         }
     }
+}
+
+#[test]
+fn space_inside_a_typed_dimension_separates_number_and_unit() {
+    for tool in Tool::DRAWING {
+        let mut h = Harness::new();
+        h.app.set_tool(tool);
+        let start = h.at(DVec3::ZERO);
+        let end = h.at(DVec3::new(2., 1., 0.));
+        if tool == Tool::Freehand {
+            h.pointer(start, egui::PointerButton::Primary, true, false);
+        } else {
+            h.click(start);
+        }
+        h.frame(vec![egui::Event::PointerMoved(end)], egui::Modifiers::NONE);
+        // Space is the Select shortcut and C the Circle shortcut; neither may
+        // fire while a dimension is being typed.
+        type_dimension(&mut h, "2 cm");
+        assert_eq!(h.app.length_input, "2 cm", "{tool:?}");
+        assert_eq!(h.app.tool, tool, "{tool:?}");
+        assert!(h.app.line_start.is_some() || h.app.drawing.is_some(), "{tool:?}");
+        // Esc still cancels a dimension that contains spaces.
+        h.key(Key::Escape);
+        assert!(h.app.length_input.is_empty(), "{tool:?}");
+    }
+    let units = benchup_core::UnitSettings::default().length;
+    assert_eq!(
+        precision::positive_length("2 cm", units),
+        precision::positive_length("2cm", units),
+    );
 }
 
 #[test]
@@ -271,6 +301,8 @@ fn circles_and_polygons_accept_a_radius_with_units() {
 #[test]
 fn rectangle_dimensions_can_be_entered_in_the_focused_measurements_field() {
     let mut h = Harness::new();
+    // The status-bar field is shown when floating dimension boxes are off.
+    h.app.doc.display.dimension_input_overlay = false;
     h.key(Key::R);
     h.click(h.at(DVec3::ZERO));
     let output = h.frame(vec![], egui::Modifiers::NONE);
@@ -415,4 +447,128 @@ fn modeling_distances_use_the_same_units_in_previews_and_commits() {
         assert!(h.app.modeling.is_none());
         h.app.doc.model.validate().unwrap();
     }
+}
+
+#[test]
+fn rectangle_tab_switches_between_width_and_height_fields() {
+    let mut h = Harness::new();
+    h.app.set_tool(Tool::Rectangle);
+    h.click(h.at(DVec3::ZERO));
+    type_dimension(&mut h, "50cm");
+    assert_eq!(h.app.length_input, "50cm");
+    h.key(Key::Tab);
+    assert!(h.app.rect_height_active);
+    type_dimension(&mut h, "20cm");
+    assert_eq!(h.app.length_input, "50cm,20cm");
+    // Tab returns to width and selects it: typing replaces the whole value.
+    h.key(Key::Tab);
+    assert!(!h.app.rect_height_active);
+    type_dimension(&mut h, "100cm");
+    assert_eq!(h.app.length_input, "100cm,20cm");
+    // Once replaced, Backspace edits only the active side, one character at a time.
+    h.key(Key::Backspace);
+    assert_eq!(h.app.length_input, "100c,20cm");
+    type_dimension(&mut h, "m");
+    assert_eq!(h.app.length_input, "100cm,20cm");
+    // Backspace right after Tab clears the selected side.
+    h.key(Key::Tab);
+    h.key(Key::Backspace);
+    assert_eq!(h.app.length_input, "100cm,");
+    type_dimension(&mut h, "20cm");
+    assert_eq!(h.app.length_input, "100cm,20cm");
+    // A typed comma still moves to height for the classic syntax.
+    h.key(Key::Tab);
+    h.key(Key::Tab);
+    type_dimension(&mut h, ",");
+    assert!(h.app.rect_height_active);
+    h.key(Key::Enter);
+    assert!(!h.app.doc.model.edges.is_empty());
+    // Tab is not captured once the rectangle is finished.
+    h.frame(vec![], egui::Modifiers::NONE);
+    assert!(!h.app.rect_height_active);
+}
+
+#[test]
+fn rectangle_keeps_the_cursor_size_for_an_untyped_side() {
+    let mut h = Harness::new();
+    h.app.doc.snap_to_geometry = false;
+    h.app.set_tool(Tool::Rectangle);
+    h.click(h.at(DVec3::ZERO));
+    let corner = h.at(DVec3::new(0.3, 0.4, 0.));
+    h.frame(vec![egui::Event::PointerMoved(corner)], egui::Modifiers::NONE);
+    type_dimension(&mut h, "50cm");
+    let points = h.app.precise_drawing_points().unwrap();
+    let width = points[0].distance(points[1]);
+    let height = points[1].distance(points[2]);
+    assert!((width - 0.5).abs() < 1e-9, "{width}");
+    assert!(height > 1e-3, "{height}");
+    assert!((height - h.app.raw_drawing_points()[1].distance(h.app.raw_drawing_points()[2])).abs() < 1e-9);
+}
+
+#[test]
+fn tab_switches_rectangle_fields_only_while_sizing_and_otherwise_toggles_the_inspector() {
+    let mut h = Harness::new();
+    let inspector = h.app.inspector;
+    h.key(Key::Tab);
+    assert_ne!(h.app.inspector, inspector);
+    assert!(!h.app.rect_height_active);
+    h.app.set_tool(Tool::Rectangle);
+    h.click(h.at(DVec3::ZERO));
+    let inspector = h.app.inspector;
+    h.key(Key::Tab);
+    assert_eq!(h.app.inspector, inspector);
+    assert!(h.app.rect_height_active);
+    // Shift+Tab also switches back while sizing.
+    let shift_tab = |pressed| egui::Event::Key {
+        key: Key::Tab,
+        physical_key: None,
+        pressed,
+        repeat: false,
+        modifiers: egui::Modifiers::SHIFT,
+    };
+    h.frame(vec![shift_tab(true)], egui::Modifiers::SHIFT);
+    h.frame(vec![shift_tab(false)], egui::Modifiers::SHIFT);
+    assert!(!h.app.rect_height_active);
+    assert_eq!(h.app.inspector, inspector);
+}
+
+#[test]
+fn rectangle_field_input_over_the_limit_leaves_the_fields_unchanged() {
+    let mut h = Harness::new();
+    h.app.set_tool(Tool::Rectangle);
+    h.click(h.at(DVec3::ZERO));
+    type_dimension(&mut h, "5m");
+    h.key(Key::Tab);
+    assert_eq!(h.app.length_input, "5m,");
+    h.app.rect_input_text(&"1".repeat(precision::MAX_INPUT_LEN));
+    assert_eq!(h.app.length_input, "5m,");
+    assert!(h.app.rect_height_active);
+    assert!(h.app.rect_field_selected);
+    // Bounded input still applies, including the separator in the count.
+    let fits = "1".repeat(precision::MAX_INPUT_LEN - "5m,".len());
+    h.app.rect_input_text(&fits);
+    assert_eq!(h.app.length_input, format!("5m,{fits}"));
+    assert!(!h.app.rect_field_selected);
+}
+
+#[test]
+fn invalid_rectangle_side_is_reported_and_blocks_the_commit() {
+    let mut h = Harness::new();
+    h.app.doc.snap_to_geometry = false;
+    h.app.set_tool(Tool::Rectangle);
+    h.click(h.at(DVec3::ZERO));
+    let corner = h.at(DVec3::new(0.3, 0.4, 0.));
+    h.frame(vec![egui::Event::PointerMoved(corner)], egui::Modifiers::NONE);
+    for input in ["5kg", "5kg,20cm", "20cm,5kg", "0m"] {
+        h.app.length_input = input.into();
+        assert!(h.app.precise_drawing_points().is_err(), "{input}");
+        h.key(Key::Enter);
+        assert!(h.app.doc.model.edges.is_empty(), "{input}");
+        assert!(h.app.drawing.is_some());
+    }
+    // Height typed alone keeps the cursor width.
+    h.app.length_input = ",20cm".into();
+    let points = h.app.precise_drawing_points().unwrap();
+    assert!((points[1].distance(points[2]) - 0.2).abs() < 1e-9);
+    assert!(points[0].distance(points[1]) > 1e-3);
 }
