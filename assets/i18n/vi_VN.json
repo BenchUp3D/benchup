@@ -2181,5 +2181,6 @@
   "app.measurements_unavailable": "Không có phép đo.",
   "app.calculating_measurements": "Tính số đo…",
   "sidebar.move_wireframe": "Hiển thị khung dây cho đối tượng khác khi di chuyển",
-  "sidebar.selected_edge_lengths": "Chiều dài các cạnh đã chọn"
+  "sidebar.selected_edge_lengths": "Chiều dài các cạnh đã chọn",
+  "cli.agent_edit": "Chỉnh sửa của tác nhân"
 }

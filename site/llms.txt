@@ -21,6 +21,7 @@ BenchUp helps woodworkers, furniture makers, and DIY builders model shelves, tab
 - Workshop Labels PDF: one label per piece with a part mark matching the cutting plan, group or component name, dimensions, and dotted cut borders. Cutting plans and labels can cover selected parts or all visible parts; assign stock materials first and verify dimensions before cutting.
 - Storage: local autosave and portable .bup project files (default), with support for legacy .bup files. No account required. Download projects to keep backups; clearing browser data can remove browser autosaves.
 - Interchange: import SketchUp (.skp) geometry; export Wavefront OBJ (.obj) geometry. SketchUp textures, scenes, and some features are not supported; OBJ export does not include materials.
+- Command line and AI agents: the `benchup` command, built from the source repository for now (it is not in the desktop releases yet), reads and edits .bup projects from a shell or an AI coding agent, and serves the same tools over MCP. Agents should run `benchup guide` first; changes are undoable steps in the project history, and the command can open the result in the desktop app.
 - Intended use: furniture layout, exploring proportions, dimensioned 3D woodworking models, wood joinery, grain orientation, and workshop planning. Mobile modeling and cloud storage are outside this version.
 
 ## Official resources
@@ -29,5 +30,7 @@ BenchUp helps woodworkers, furniture makers, and DIY builders model shelves, tab
 - [Browser editor](https://benchup3d.github.io/editor/play/): try the application.
 - [Source repository](https://github.com/BenchUp3D/editor): implementation and developer documentation.
 - [User guide](https://github.com/BenchUp3D/editor/tree/main/docs): modeling instructions and workflows.
+- [Command line and AI agents](https://github.com/BenchUp3D/editor/blob/main/docs/cli.md): installing and using the `benchup` command and its MCP server.
+- [Agent guide](https://github.com/BenchUp3D/editor/blob/main/docs/agent-guide.md): conventions, workflow and woodworking recipes for agents editing projects.
 - [Latest desktop release](https://github.com/BenchUp3D/editor/releases/latest): downloads and release notes.
 - [MIT license](https://github.com/BenchUp3D/editor/blob/main/LICENSE).

@@ -38,6 +38,9 @@ jobs:
       - name: Test core
         run: cargo test --locked -p benchup-core
 
+      - name: Test agent tools and CLI
+        run: cargo test --locked -p benchup-tools -p benchup-cli
+
   app:
     name: Test settings and estimate PDF export
     runs-on: ubuntu-24.04

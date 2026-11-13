@@ -2181,5 +2181,6 @@
   "app.measurements_unavailable": "Mediciones no disponibles.",
   "app.calculating_measurements": "Calculando mediciones…",
   "sidebar.move_wireframe": "Estructura alámbrica de otros objetos al mover",
-  "sidebar.selected_edge_lengths": "Longitudes de aristas seleccionadas"
+  "sidebar.selected_edge_lengths": "Longitudes de aristas seleccionadas",
+  "cli.agent_edit": "Edición del agente"
 }

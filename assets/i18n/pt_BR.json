@@ -2181,5 +2181,6 @@
   "app.measurements_unavailable": "Medições indisponíveis.",
   "app.calculating_measurements": "Calculando medições…",
   "sidebar.move_wireframe": "Exibir outros objetos em aramado ao mover",
-  "sidebar.selected_edge_lengths": "Comprimentos das arestas selecionadas"
+  "sidebar.selected_edge_lengths": "Comprimentos das arestas selecionadas",
+  "cli.agent_edit": "Edição do agente"
 }

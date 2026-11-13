@@ -13,7 +13,11 @@
 //! The crate has no network or UI dependencies and builds for `wasm32`.
 pub mod files;
 pub mod ops;
+pub mod review;
 pub mod scene;
+
+/// Conventions, workflow and recipes for agents (`get_guide`, `benchup guide`).
+pub const GUIDE: &str = include_str!("../../../docs/agent-guide.md");
 
 pub use ops::{
     Call, ToolDefinition, ToolEnv, ToolOutcome, definitions, execute, is_known, is_mutating, mcp_tools,
