@@ -245,7 +245,7 @@ mod guide_preference_tests {
         assert_eq!(restored.drawing_tool, Tool::Line);
         assert_eq!(restored.images.preferences, app.images.preferences);
         for key in ["reference_image_defaults", "reference_image_appearance"] {
-            let id = egui::Id::new(("test/image-section", key));
+            let id = egui::Id::unique(("test/image-section", key));
             restore_section(&restored_ctx, id, key, true);
             assert!(!egui::collapsing_header::CollapsingState::load_with_default_open(&restored_ctx, id, true).is_open());
         }
@@ -3046,7 +3046,7 @@ mod preference_tests {
 
     #[test]
     fn first_launch_language_is_saved_without_a_model_edit_and_not_redetected() {
-        for language in ["en", "zh_CN", "pt_BR"] {
+        for language in ["en", "zh_CN", "pt_BR", "vi"] {
             let ctx = egui::Context::default();
             let mut storage = SavedPreferences::default();
             let mut app = BenchUpApp::with_document(Document::default(), None, true);

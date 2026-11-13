@@ -83,6 +83,9 @@ mod tests {
         for locale in ["pt", "pt_BR", "pt-BR", "pt_BR.UTF-8", "pt-PT", "pt-AO"] {
             assert_eq!(preferred_language([locale]), "pt_BR", "{locale}");
         }
+        for locale in ["vi", "vi-VN", "vi_VN", "vi_VN.UTF-8"] {
+            assert_eq!(preferred_language([locale]), "vi", "{locale}");
+        }
     }
 
     #[test]
@@ -109,6 +112,7 @@ mod tests {
         assert_eq!(preferred_language(["en-CA", "zh-CN"]), "en");
         assert_eq!(preferred_language(["zh-Hant", "zh-Hans"]), "zh_CN");
         assert_eq!(preferred_language(["fr-CA", "pt-BR", "en-US"]), "pt_BR");
+        assert_eq!(preferred_language(["fr-CA", "vi-VN", "en-US"]), "vi");
         assert_eq!(preferred_language(["en-US", "pt-BR"]), "en");
     }
 }

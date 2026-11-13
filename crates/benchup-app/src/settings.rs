@@ -159,11 +159,12 @@ pub(super) fn detected_language() -> &'static str {
     language::detected_language()
 }
 
-fn languages() -> [(&'static str, &'static str); 3] {
+fn languages() -> [(&'static str, &'static str); 4] {
     [
         (DEFAULT_LANGUAGE, tr!("settings.language_english")),
         ("zh_CN", tr!("settings.language_simplified_chinese")),
         ("pt_BR", tr!("settings.language_brazilian_portuguese")),
+        ("vi", tr!("settings.language_vietnamese")),
     ]
 }
 
@@ -1190,6 +1191,15 @@ mod tests {
     }
 
     #[test]
+    fn supported_languages_include_vietnamese() {
+        assert!(languages().contains(&("vi", "Vietnamese")));
+        let mut settings = GeneralSettings::default();
+        settings.language = "vi".into();
+        settings.normalize();
+        assert_eq!(settings.language, "vi");
+    }
+
+    #[test]
     fn settings_labels_switch_languages_in_the_same_window() {
         struct Reset;
         impl Drop for Reset {
@@ -1203,6 +1213,7 @@ mod tests {
             ("en", "Settings", "Workspace", "Export scales"),
             ("zh_CN", "设置", "工作区", "导出比例"),
             ("pt_BR", "Configurações", "Área de trabalho", "Escalas de exportação"),
+            ("vi", "Cài đặt", "Không gian làm việc", "Tỷ lệ xuất"),
             ("en", "Settings", "Workspace", "Export scales"),
         ] {
             app.general_settings.language = language.into();

@@ -6,6 +6,7 @@ pub enum Language {
     English,
     SimplifiedChinese,
     BrazilianPortuguese,
+    Vietnamese,
 }
 
 thread_local! {
@@ -17,6 +18,7 @@ pub fn set_language(language: &str) {
     LANGUAGE.set(match language {
         "zh_CN" | "zh-CN" | "zh-Hans" => Language::SimplifiedChinese,
         "pt_BR" | "pt-BR" => Language::BrazilianPortuguese,
+        "vi" | "vi_VN" | "vi-VN" => Language::Vietnamese,
         _ => Language::English,
     });
 }
@@ -50,6 +52,7 @@ pub(crate) fn catalog_message(language: &str, key: &str) -> String {
     let catalog = match language {
         "zh_CN" => include_str!("../../../assets/i18n/zh_CN.json"),
         "pt_BR" => include_str!("../../../assets/i18n/pt_BR.json"),
+        "vi" => include_str!("../../../assets/i18n/vi.json"),
         "en" => include_str!("../../../assets/i18n/en.json"),
         _ => panic!("unsupported test language: {language}"),
     };
@@ -115,6 +118,41 @@ mod tests {
         );
         assert_eq!(tr!("app.selection_entities", count = 1), "1 entidade");
         assert_eq!(tr!("app.selection_entities", count = 2), "2 entidades");
+        super::set_language("vi");
+        assert_eq!(tr!("common.cancel"), "Hủy");
+        assert_eq!(tr!("settings.settings"), "Cài đặt");
+        // Vietnamese uses the `other` form even for one selected item.
+        for count in [0, 1, 2] {
+            assert_eq!(
+                tr!("app.selection_entities", count = count),
+                format!("{count} thực thể")
+            );
+            assert_eq!(
+                tr!("app.selection_edges", count = count),
+                format!("{count} cạnh")
+            );
+            assert_eq!(
+                tr!("app.selection_faces", count = count),
+                format!("{count} mặt")
+            );
+            assert_eq!(
+                tr!("app.selection_dimensions", count = count),
+                format!("{count} kích thước")
+            );
+            assert_eq!(
+                tr!("app.selection_guides", count = count),
+                format!("{count} đường dẫn")
+            );
+            assert_eq!(
+                tr!("app.selection_text_labels", count = count),
+                format!("{count} nhãn văn bản")
+            );
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        assert_eq!(
+            super::spawn_localized(super::current_language).join().unwrap(),
+            super::Language::Vietnamese
+        );
         super::set_language("en");
         assert_eq!(tr!("common.cancel"), "Cancel");
         assert_eq!(

@@ -38,6 +38,38 @@ jobs:
       - name: Test core
         run: cargo test --locked -p benchup-core
 
+  app:
+    name: Test settings and estimate PDF export
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Linux dependencies
+        run: |
+          sudo python3 scripts/install_linux_dependencies.py \
+            build-essential pkg-config libx11-dev libxcb1-dev \
+            libxkbcommon-dev libwayland-dev libegl1-mesa-dev libudev-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.97.1
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/setup-compiler-cache
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: pr-app
+
+      - name: Test Vietnamese language settings and estimate PDF export
+        run: |
+          bash scripts/ci_cargo.sh test -p benchup-app --lib --profile ci-test --locked -- \
+            settings::tests::supported_languages_include_vietnamese estimate_pdf::tests::
+
   io:
     name: Test geometry import and export
     runs-on: ubuntu-24.04
