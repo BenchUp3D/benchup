@@ -151,7 +151,7 @@ pub(super) const TOOLS: [(Tool, &str); 18] = [
     (Tool::Image, "J"),
 ];
 
-const DEFAULT_LANGUAGE: &str = "en";
+const DEFAULT_LANGUAGE: &str = "en_US";
 #[path = "language.rs"]
 mod language;
 
@@ -159,12 +159,13 @@ pub(super) fn detected_language() -> &'static str {
     language::detected_language()
 }
 
-fn languages() -> [(&'static str, &'static str); 4] {
+fn languages() -> [(&'static str, &'static str); 5] {
     [
-        (DEFAULT_LANGUAGE, tr!("settings.language_english")),
-        ("zh_CN", tr!("settings.language_simplified_chinese")),
-        ("pt_BR", tr!("settings.language_brazilian_portuguese")),
-        ("vi", tr!("settings.language_vietnamese")),
+        (DEFAULT_LANGUAGE, tr!("settings.language.english")),
+        ("zh_CN", tr!("settings.language.simplified_chinese")),
+        ("pt_BR", tr!("settings.language.brazilian_portuguese")),
+        ("vi_VN", tr!("settings.language.vietnamese")),
+        ("es_419", tr!("settings.language.spanish")),
     ]
 }
 
@@ -291,6 +292,13 @@ impl GeneralSettings {
         self.space_mouse.normalize();
         self.stock.normalize();
         self.export_scale.normalize();
+        // Earlier builds saved bare codes; every catalog now uses language_REGION.
+        match self.language.as_str() {
+            "en" => self.language = "en_US".into(),
+            "vi" => self.language = "vi_VN".into(),
+            "es" => self.language = "es_419".into(),
+            _ => {}
+        }
         if !languages().iter().any(|&(code, _)| code == self.language.as_str()) {
             self.language = DEFAULT_LANGUAGE.into();
         }
@@ -1192,11 +1200,59 @@ mod tests {
 
     #[test]
     fn supported_languages_include_vietnamese() {
-        assert!(languages().contains(&("vi", "Vietnamese")));
+        assert!(languages().contains(&("vi_VN", "Vietnamese")));
         let mut settings = GeneralSettings::default();
-        settings.language = "vi".into();
+        settings.language = "vi_VN".into();
         settings.normalize();
-        assert_eq!(settings.language, "vi");
+        assert_eq!(settings.language, "vi_VN");
+    }
+
+    #[test]
+    fn supported_languages_include_spanish() {
+        assert!(languages().contains(&("es_419", "Spanish")));
+        let mut settings = GeneralSettings::default();
+        settings.language = "es_419".into();
+        settings.normalize();
+        assert_eq!(settings.language, "es_419");
+    }
+
+    #[test]
+    fn every_language_code_uses_language_and_region() {
+        for (code, _) in languages() {
+            let (language, region) = code.split_once('_').expect(code);
+            assert!(!language.is_empty() && !region.is_empty(), "{code}");
+        }
+    }
+
+    #[test]
+    fn saved_bare_language_codes_migrate_to_regional_codes() {
+        for (saved, expected) in [("en", "en_US"), ("vi", "vi_VN"), ("es", "es_419"), ("unsupported", "en_US")] {
+            let mut settings = GeneralSettings::default();
+            settings.language = saved.into();
+            settings.normalize();
+            assert_eq!(settings.language, expected, "{saved}");
+        }
+        assert_eq!(GeneralSettings::default().language, "en_US");
+    }
+
+    #[test]
+    fn language_picker_shows_native_names_in_translated_catalogs() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) { benchup_core::i18n::set_language("en"); }
+        }
+        let _reset = Reset;
+        let native = [
+            ("en_US", "English"),
+            ("zh_CN", "简体中文"),
+            ("pt_BR", "Português (Brasil)"),
+            ("vi_VN", "Tiếng Việt"),
+            ("es_419", "Español"),
+        ];
+        for (language, _) in &native[1..] {
+            benchup_core::i18n::set_language(language);
+            assert_eq!(languages(), native, "{language}");
+        }
     }
 
     #[test]
@@ -1210,11 +1266,12 @@ mod tests {
         let mut app = BenchUpApp::with_document(Document::default(), None, true);
         app.settings_open = true;
         for (language, title, group, export_scales) in [
-            ("en", "Settings", "Workspace", "Export scales"),
+            ("en_US", "Settings", "Workspace", "Export scales"),
             ("zh_CN", "设置", "工作区", "导出比例"),
             ("pt_BR", "Configurações", "Área de trabalho", "Escalas de exportação"),
-            ("vi", "Cài đặt", "Không gian làm việc", "Tỷ lệ xuất"),
-            ("en", "Settings", "Workspace", "Export scales"),
+            ("vi_VN", "Cài đặt", "Không gian làm việc", "Tỷ lệ xuất"),
+            ("es_419", "Configuración", "Espacio de trabajo", "Escalas de exportación"),
+            ("en_US", "Settings", "Workspace", "Export scales"),
         ] {
             app.general_settings.language = language.into();
             let input = || egui::RawInput {

@@ -7281,10 +7281,11 @@ fn view_menu_localizes_display_options_and_toggles_selected_edge_lengths_without
     let _reset = ResetLanguage;
     let mut h = Harness::new();
     for (language, view, wireframe, lengths) in [
-        ("en", "View", "Wireframe other objects while moving", "Selected Edge Lengths"),
+        ("en_US", "View", "Wireframe other objects while moving", "Selected Edge Lengths"),
         ("zh_CN", "视图", "移动时以线框显示其他对象", "所选边的长度"),
         ("pt_BR", "Visualizar", "Exibir outros objetos em aramado ao mover", "Comprimentos das arestas selecionadas"),
-        ("en", "View", "Wireframe other objects while moving", "Selected Edge Lengths"),
+        ("es_419", "Vista", "Estructura alámbrica de otros objetos al mover", "Longitudes de aristas seleccionadas"),
+        ("en_US", "View", "Wireframe other objects while moving", "Selected Edge Lengths"),
     ] {
         h.app.general_settings.language = language.into();
         benchup_core::i18n::set_language(language);
