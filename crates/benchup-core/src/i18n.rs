@@ -6,6 +6,7 @@ pub enum Language {
     English,
     SimplifiedChinese,
     BrazilianPortuguese,
+    Vietnamese,
 }
 
 thread_local! {
@@ -17,6 +18,7 @@ pub fn set_language(language: &str) {
     LANGUAGE.set(match language {
         "zh_CN" | "zh-CN" | "zh-Hans" => Language::SimplifiedChinese,
         "pt_BR" | "pt-BR" => Language::BrazilianPortuguese,
+        "vi" | "vi_VN" | "vi-VN" => Language::Vietnamese,
         _ => Language::English,
     });
 }
@@ -50,6 +52,7 @@ pub(crate) fn catalog_message(language: &str, key: &str) -> String {
     let catalog = match language {
         "zh_CN" => include_str!("../../../assets/i18n/zh_CN.json"),
         "pt_BR" => include_str!("../../../assets/i18n/pt_BR.json"),
+        "vi" => include_str!("../../../assets/i18n/vi.json"),
         "en" => include_str!("../../../assets/i18n/en.json"),
         _ => panic!("unsupported test language: {language}"),
     };
@@ -115,6 +118,16 @@ mod tests {
         );
         assert_eq!(tr!("app.selection_entities", count = 1), "1 entidade");
         assert_eq!(tr!("app.selection_entities", count = 2), "2 entidades");
+        super::set_language("vi");
+        assert_eq!(tr!("common.cancel"), "Hủy");
+        assert_eq!(tr!("settings.settings"), "Cài đặt");
+        assert_eq!(tr!("app.selection_entities", count = 1), "1 thực thể");
+        assert_eq!(tr!("app.selection_entities", count = 2), "2 thực thể");
+        #[cfg(not(target_arch = "wasm32"))]
+        assert_eq!(
+            super::spawn_localized(super::current_language).join().unwrap(),
+            super::Language::Vietnamese
+        );
         super::set_language("en");
         assert_eq!(tr!("common.cancel"), "Cancel");
         assert_eq!(
