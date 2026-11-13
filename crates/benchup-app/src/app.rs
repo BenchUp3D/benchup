@@ -47,6 +47,8 @@ mod arc_tool;
 mod context_menu;
 #[path = "currency.rs"]
 mod currency;
+#[path = "cutting_view.rs"]
+mod cutting_view;
 #[path = "display_scene.rs"]
 pub(crate) mod display_scene;
 #[path = "construction_guides.rs"]

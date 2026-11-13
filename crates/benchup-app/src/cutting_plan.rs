@@ -41,6 +41,58 @@ pub(crate) struct CuttingPlan {
     pub(crate) joinery_omitted: bool,
 }
 
+/// The in-app cutting plan uses the PDF's marks, sheets and quantities.
+pub(crate) struct CutView {
+    pub sections: Vec<MaterialSection>,
+    pub skipped: usize,
+    pub joinery_omitted: bool,
+}
+
+pub(crate) struct MaterialSection {
+    pub material_id: Option<benchup_core::MaterialId>,
+    pub material: benchup_core::StockMaterial,
+    pub rows: Vec<CutRow>,
+    pub layout: cutting_layout::Layout,
+    /// Net cut area in square metres.
+    pub area: f64,
+}
+
+impl MaterialSection {
+    pub fn sheets(&self) -> usize {
+        self.layout.stock.len()
+    }
+
+    pub fn excluded(&self) -> usize {
+        self.layout.oversized.iter().map(|piece| piece.quantity).sum()
+    }
+
+    /// Square metres of pieces placed on this material's sheets.
+    pub fn used_area(&self) -> f64 {
+        self.layout
+            .stock
+            .iter()
+            .flat_map(|stock| &stock.placements)
+            .map(|p| p.rect.length as f64 * p.rect.width as f64)
+            .sum::<f64>()
+            / 100_000_000.
+    }
+
+    /// Square metres of one sheet.
+    pub fn sheet_area(&self) -> f64 {
+        self.material.dimensions[1] as f64 * self.material.dimensions[2] as f64 / 100_000_000.
+    }
+}
+
+pub(crate) struct CutRow {
+    pub mark: usize,
+    pub names: Vec<String>,
+    pub dimensions: [u64; 3],
+    pub rectangular: bool,
+    pub grain: Grain,
+    pub joinery: BTreeMap<usize, Vec<JointLine>>,
+    pub quantity: usize,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Grain {
     #[default]
@@ -299,7 +351,8 @@ impl CuttingPlan {
         groups
     }
 
-    pub fn material_requirements(&self, settings: LayoutSettings) -> Vec<MaterialRequirement> {
+    /// Shared by the in-app preview, estimates and PDF so all three use one layout.
+    pub fn view(&self, settings: LayoutSettings) -> CutView {
         let mut materials: BTreeMap<MaterialKey, Vec<(usize, &CutGroup)>> = BTreeMap::new();
         for (mark, group) in self.ordered_groups().into_iter().enumerate() {
             materials
@@ -307,16 +360,53 @@ impl CuttingPlan {
                 .or_default()
                 .push((mark, group));
         }
-        materials
+        CutView {
+            sections: materials
+                .into_iter()
+                .map(|((material_id, material), groups)| {
+                    let layout = stock_layout(&material, &groups, settings);
+                    let area = groups
+                        .iter()
+                        .map(|(_, g)| {
+                            g.dimensions[1] as f64 * g.dimensions[2] as f64 * g.parts.len() as f64
+                                / 100_000_000.
+                        })
+                        .sum();
+                    let rows = groups
+                        .iter()
+                        .map(|&(mark, group)| CutRow {
+                            mark,
+                            names: group_names(group).into_iter().map(str::to_owned).collect(),
+                            dimensions: group.dimensions,
+                            rectangular: group.rectangular,
+                            grain: group.grain,
+                            joinery: group.joinery.clone(),
+                            quantity: group.parts.len(),
+                        })
+                        .collect();
+                    MaterialSection {
+                        material_id,
+                        material,
+                        rows,
+                        layout,
+                        area,
+                    }
+                })
+                .collect(),
+            skipped: self.skipped,
+            joinery_omitted: self.joinery_omitted,
+        }
+    }
+
+    pub fn material_requirements(&self, settings: LayoutSettings) -> Vec<MaterialRequirement> {
+        self.view(settings)
+            .sections
             .into_iter()
-            .map(|((material_id, material), groups)| {
-                let layout = stock_layout(&material, &groups, settings);
-                MaterialRequirement {
-                    material_id,
-                    material,
-                    quantity: layout.stock.len(),
-                    excluded: layout.oversized.iter().map(|piece| piece.quantity).sum(),
-                }
+            .map(|section| MaterialRequirement {
+                quantity: section.sheets(),
+                excluded: section.excluded(),
+                material_id: section.material_id,
+                material: section.material,
             })
             .collect()
     }
@@ -489,7 +579,7 @@ impl CuttingPlan {
     }
 }
 
-fn piece_mark(index: usize) -> String {
+pub(crate) fn piece_mark(index: usize) -> String {
     format!("P{:03}", index + 1)
 }
 
@@ -577,8 +667,33 @@ fn cut_row(pdf: &mut Pdf, index: usize, group: &CutGroup, colored: bool) {
     }
 }
 
+/// Offset of a joint end from the placed part's top-left corner, in tenths of a millimetre.
+pub(crate) fn joinery_offset(dimensions: [u64; 3], rotated: bool, [length, width]: [u64; 2]) -> [u64; 2] {
+    if rotated {
+        [dimensions[1] - width, length]
+    } else {
+        [length, width]
+    }
+}
+
+/// Whether a sheet holds a part with grain along the stock length, and a part with joinery.
+pub(crate) fn sheet_legend<'a>(
+    stock: &cutting_layout::Stock,
+    group: impl Fn(usize) -> Option<(Grain, &'a BTreeMap<usize, Vec<JointLine>>)>,
+) -> (bool, bool) {
+    stock.placements.iter().fold((false, false), |(grained, joined), placement| {
+        match group(placement.mark) {
+            Some((grain, joinery)) => (
+                grained || grain == Grain::AlongLength,
+                joined || joinery.contains_key(&placement.part_index),
+            ),
+            None => (grained, joined),
+        }
+    })
+}
+
 /// Golden-angle hues are deterministic across stock groups and pages.
-fn mark_color(mark: usize) -> [f64; 3] {
+pub(crate) fn mark_color(mark: usize) -> [f64; 3] {
     let hue = (mark as f64 * 0.618033988749895).fract() * 6.;
     let fraction = hue.fract();
     let low = 0.42;
@@ -698,12 +813,11 @@ fn draw_layout(
         } else {
             48.
         };
-        let has_grain = settings.respect_grain && stock.placements.iter().any(|placement| {
-            groups[&placement.mark].grain == Grain::AlongLength
+        let (grained, joined) = sheet_legend(stock, |mark| {
+            groups.get(&mark).map(|group| (group.grain, &group.joinery))
         });
-        let has_joinery = settings.show_joinery && stock.placements.iter().any(|placement| {
-            groups[&placement.mark].joinery.contains_key(&placement.part_index)
-        });
+        let has_grain = settings.respect_grain && grained;
+        let has_joinery = settings.show_joinery && joined;
         let legend_height = 16. * f64::from(u8::from(has_grain) + u8::from(has_joinery));
         pdf.ensure(height + 115. + legend_height);
         pdf.heading(
@@ -745,12 +859,8 @@ fn draw_layout(
             if settings.show_joinery {
                 let group = groups[&placement.mark];
                 if let Some(lines) = group.joinery.get(&placement.part_index) {
-                    let position = |[length, width]: [u64; 2]| {
-                        let [u, v] = if placement.rotated {
-                            [group.dimensions[1] - width, length]
-                        } else {
-                            [length, width]
-                        };
+                    let position = |joint: [u64; 2]| {
+                        let [u, v] = joinery_offset(group.dimensions, placement.rotated, joint);
                         [x + u as f64 * x_scale, y + h - v as f64 * y_scale]
                     };
                     pdf.joinery_lines(lines.iter().map(|line| line.map(position)));
@@ -970,7 +1080,7 @@ fn is_box(
     sides.len() == 6 && boundaries.values().all(|count| *count == 2)
 }
 
-fn metric_length(tenths: u64) -> String {
+pub(crate) fn metric_length(tenths: u64) -> String {
     if tenths > 1000 {
         let value = format!("{}.{:02}", tenths / 100, tenths % 100);
         return tr!("cutting_plan.cm", value.trim_end_matches('0').trim_end_matches('.'));

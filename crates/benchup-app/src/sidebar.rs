@@ -509,6 +509,7 @@ impl Default for SnappingPreferences {
 struct CuttingPlanPreferences {
     layout: crate::cutting_layout::Settings,
     selection: Option<bool>,
+    used_area_cost: bool,
 }
 
 impl Default for CuttingPlanPreferences {
@@ -516,6 +517,7 @@ impl Default for CuttingPlanPreferences {
         Self {
             layout: Default::default(),
             selection: None,
+            used_area_cost: false,
         }
     }
 }
@@ -809,6 +811,7 @@ impl BenchUpApp {
             Default::default()
         };
         self.project.cutting_plan_selection_preference = preferences.cutting_plan.selection;
+        self.project.cutting_plan_used_area_cost = preferences.cutting_plan.used_area_cost;
         if let Some(snapping) = &preferences.snapping {
             self.snap_to_edge = snapping.geometry && snapping.edges;
             self.snap_to_face = snapping.geometry && snapping.faces;
@@ -905,6 +908,7 @@ impl BenchUpApp {
             cutting_plan: CuttingPlanPreferences {
                 layout: self.project.cutting_plan_layout,
                 selection: self.project.cutting_plan_selection_preference,
+                used_area_cost: self.project.cutting_plan_used_area_cost,
             },
             time_estimates: self.time_estimates.clone(),
             joinery_rates: self.joinery_rates.clone(),
@@ -2460,7 +2464,7 @@ mod preference_tests {
 
     #[test]
     fn each_additional_option_saves_independently_without_a_model_edit() {
-        let options: [(&str, fn(&mut BenchUpApp)); 20] = [
+        let options: [(&str, fn(&mut BenchUpApp)); 21] = [
             ("face center snapping", |app| app.snap_to_face_center = false),
             ("axis snapping", |app| app.doc.snap_to_axes = false),
             ("edge snapping", |app| app.snap_to_edge = false),
@@ -2500,6 +2504,7 @@ mod preference_tests {
             ("layout strategy", |app| {
                 app.project.cutting_plan_layout.strategy = crate::cutting_layout::Strategy::LargestOffcut
             }),
+            ("used-area cost", |app| app.project.cutting_plan_used_area_cost = true),
             ("whole project scope", |app| {
                 app.project.cutting_plan_selection_preference = Some(false)
             }),
@@ -2625,6 +2630,7 @@ mod preference_tests {
             r#"{"cutting_plan":{"layout":{"kerf_mm":5.0}}}"#,
             r#"{"cutting_plan":{"group_stock":false,"layout":{"kerf_mm":4.5}}}"#,
             r#"{"cutting_plan":{"layout":{"edge_trim_mm":2.0,"strategy":"rip_first"}}}"#,
+            r#"{"cutting_plan":{"used_area_cost":true,"layout":{"used_area_cost":true}}}"#,
         ] {
             let preferences: InspectorPreferences = serde_json::from_str(json).unwrap();
             assert!(preferences.snapping.is_none());

@@ -46,6 +46,8 @@ pub(super) struct Project {
     // Both reports share scope so their marks can be printed for the same parts.
     pub cutting_plan_selection_preference: Option<bool>,
     pub cutting_plan_layout: crate::cutting_layout::Settings,
+    pub cutting_plan_used_area_cost: bool,
+    pub cut_view: super::cutting_view::Cache,
 }
 impl Default for Project {
     fn default() -> Self {
@@ -66,6 +68,8 @@ impl Default for Project {
             cut_report: None,
             cutting_plan_selection_preference: None,
             cutting_plan_layout: crate::cutting_layout::Settings::default(),
+            cutting_plan_used_area_cost: false,
+            cut_view: Default::default(),
         }
     }
 }
@@ -602,12 +606,15 @@ impl BenchUpApp {
                     tr!("projects.create_one_label_per_piece_with_its_cutting"),
                 ),
             };
-            let response = Modal::new(id, 480.).show(ctx, |modal| {
+            let width = if report == CutReport::CuttingPlan { 880. } else { 480. };
+            let cut_inputs = (report == CutReport::CuttingPlan)
+                .then(|| (self.document_revision(ctx), self.document_model.shared()));
+            let response = Modal::new(id, width).show(ctx, |modal| {
                 modal.header(|ui| {
                     ui.text_heading(title);
                     ui.text_weak(description);
                 });
-                modal.body(|ui| {
+                modal.body_with_scroll(egui::ScrollArea::vertical(), |ui| {
                     ui.add_enabled_ui(!self.selected.is_empty(), |ui| {
                         ui.radio_value(&mut selection, true, tr!("projects.selected_parts_assemblies_visible_only"));
                     });
@@ -644,10 +651,25 @@ impl BenchUpApp {
                                 .speed(0.1).range(0. ..=100.).suffix(tr!("projects.mm")))
                                 .on_hover_text(tr!("projects.edge_trim_hint"));
                         });
+                        ui.checkbox(&mut self.project.cutting_plan_used_area_cost, tr!("projects.show_used_area_cost"))
+                            .on_hover_text(tr!("projects.used_area_cost_hint"));
                     }
                     ui.text_weak(tr!("projects.only_visible_parts_with_assigned_stock_materials_are"));
                     if report == CutReport::CuttingPlan {
                         ui.text_weak(tr!("projects.layouts_use_assigned_stock_dimensions_and_saw_kerf"));
+                        ui.separator();
+                        if let Some((revision, model)) = &cut_inputs {
+                            let empty = BTreeSet::new();
+                            let scope = if selection { &self.selected } else { &empty };
+                            let view = self.project.cut_view.view(ctx, *revision, model, scope, self.project.cutting_plan_layout);
+                            super::cutting_view::show(
+                                ui,
+                                view,
+                                &self.general_settings.stock,
+                                self.project.cutting_plan_layout.kerf_mm,
+                                self.project.cutting_plan_used_area_cost,
+                            );
+                        }
                     }
                 });
                 modal.footer(|ui| {
