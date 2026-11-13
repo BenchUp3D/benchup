@@ -64,7 +64,7 @@
   "app.click_a_filled_face_first": "Trước tiên, hãy nhấp vào một mặt đã tô.",
   "app.click_a_reference_point_away_from_the_pivot": "Nhấp vào điểm tham chiếu cách xa trục trước",
   "app.click_a_reference_point_away_from_the_pivot_2": "Nhấp vào điểm tham chiếu cách xa trục quay · Esc để hủy",
-  "app.click_the_opposite_corner_type_width_height_5m": "Nhấp vào góc đối diện · Nhập chiều rộng,chiều cao (5m,50mm) rồi nhấn Enter",
+  "app.click_the_opposite_corner_type_width_height_5m": "Nhấp vào góc đối diện · Nhập chiều rộng, Tab để nhập chiều cao (hoặc 5m,50mm) + Enter",
   "app.click_to_confirm_esc_to_cancel": "{} · Nhấp để xác nhận · Esc để hủy",
   "app.click_to_confirm_esc_to_cancel_2": "{value:.3} × · Nhấp để xác nhận · Esc để hủy",
   "app.click_to_confirm_esc_to_cancel_3": "{}{}{alignment} · Nhấp để xác nhận · Esc để hủy",
@@ -261,6 +261,9 @@
   "app.wavefront_obj_obj": "Wavefront OBJ (.obj)…",
   "app.wavefront_obj_obj_metres": "Wavefront OBJ (.obj; mét)…",
   "app.width_height": "Chiều rộng, chiều cao",
+  "app.push_pull_total": "Tổng: {total}",
+  "app.width": "Chiều rộng",
+  "app.height": "Chiều cao",
   "app.wood_joinery": "Mối nối gỗ",
   "app.your_model_stays_on_this_device": "Mô hình của bạn vẫn ở trên thiết bị này",
   "app.your_work_is_saved_automatically_on_this_device": "Công việc của bạn được lưu tự động trên thiết bị này. Lưu dự án .bup để giữ một bản sao di động. Các tệp .bup cũ cũng được hỗ trợ.",
@@ -2182,5 +2185,6 @@
   "app.calculating_measurements": "Tính số đo…",
   "sidebar.move_wireframe": "Hiển thị khung dây cho đối tượng khác khi di chuyển",
   "sidebar.selected_edge_lengths": "Chiều dài các cạnh đã chọn",
+  "sidebar.floating_dimension_input": "Ô nhập kích thước nổi",
   "cli.agent_edit": "Chỉnh sửa của tác nhân"
 }

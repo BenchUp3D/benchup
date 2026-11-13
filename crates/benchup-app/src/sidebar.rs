@@ -2214,6 +2214,27 @@ mod preference_tests {
     }
 
     #[test]
+    fn dimension_input_overlay_restores_without_model_edits_and_defaults_on() {
+        let old: DisplaySettings = serde_json::from_str("{}").unwrap();
+        assert!(old.dimension_input_overlay);
+        let ctx = egui::Context::default();
+        let mut storage = SavedPreferences::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        for enabled in [false, true] {
+            app.doc.display.dimension_input_overlay = enabled;
+            storage.flushed = false;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&ctx, Some(&storage));
+            assert_eq!(restored.doc.display.dimension_input_overlay, enabled);
+            restored.new_model(&ctx);
+            assert_eq!(restored.doc.display.dimension_input_overlay, enabled);
+        }
+    }
+
+    #[test]
     fn grain_direction_visibility_and_tool_restore_without_model_edits() {
         let old: DisplaySettings = serde_json::from_str("{}").unwrap();
         assert!(old.grain_direction);
@@ -5520,6 +5541,7 @@ impl BenchUpApp {
             (&mut d.group_names, tr!("sidebar.group_names")),
             (&mut d.dimensions, tr!("sidebar.dimensions")),
             (&mut d.face_side_lengths, tr!("sidebar.selected_edge_lengths")),
+            (&mut d.dimension_input_overlay, tr!("sidebar.floating_dimension_input")),
             (&mut d.grain_direction, tr!("grain_direction.show")),
             (&mut d.wood_joinery, tr!("sidebar.wood_joinery")),
         ] {
@@ -5538,6 +5560,7 @@ impl BenchUpApp {
 
         // These application preferences do not modify the project.
         before.face_side_lengths = d.face_side_lengths;
+        before.dimension_input_overlay = d.dimension_input_overlay;
         before.grain_direction = d.grain_direction;
         before.group_emphasis = d.group_emphasis;
         if before != self.doc.display {

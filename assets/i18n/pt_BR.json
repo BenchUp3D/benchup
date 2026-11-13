@@ -64,7 +64,7 @@
   "app.click_a_filled_face_first": "Clique primeiro em uma face preenchida",
   "app.click_a_reference_point_away_from_the_pivot": "Clique primeiro em um ponto de referência afastado do pivô",
   "app.click_a_reference_point_away_from_the_pivot_2": "Clique em um ponto de referência afastado do pivô · Esc para cancelar",
-  "app.click_the_opposite_corner_type_width_height_5m": "Clique no canto oposto · Digite largura,altura (5m,50mm) + Enter",
+  "app.click_the_opposite_corner_type_width_height_5m": "Clique no canto oposto · Digite a largura, Tab para a altura (ou 5m,50mm) + Enter",
   "app.click_to_confirm_esc_to_cancel": "{} · Clique para confirmar · Esc para cancelar",
   "app.click_to_confirm_esc_to_cancel_2": "{value:.3} × · Clique para confirmar · Esc para cancelar",
   "app.click_to_confirm_esc_to_cancel_3": "{}{}{alignment} · Clique para confirmar · Esc para cancelar",
@@ -261,6 +261,9 @@
   "app.wavefront_obj_obj": "Wavefront OBJ (.obj)…",
   "app.wavefront_obj_obj_metres": "Wavefront OBJ (.obj; metros)…",
   "app.width_height": "Largura, altura",
+  "app.push_pull_total": "Total: {total}",
+  "app.width": "Largura",
+  "app.height": "Altura",
   "app.wood_joinery": "Encaixes de madeira",
   "app.your_model_stays_on_this_device": "Seu modelo fica neste dispositivo",
   "app.your_work_is_saved_automatically_on_this_device": "Seu trabalho é salvo automaticamente neste dispositivo. Salve um projeto .bup para ter uma cópia portátil. Arquivos .bup antigos também são aceitos.",
@@ -2182,5 +2185,6 @@
   "app.calculating_measurements": "Calculando medições…",
   "sidebar.move_wireframe": "Exibir outros objetos em aramado ao mover",
   "sidebar.selected_edge_lengths": "Comprimentos das arestas selecionadas",
+  "sidebar.floating_dimension_input": "Caixa de medidas flutuante",
   "cli.agent_edit": "Edição do agente"
 }

@@ -57,6 +57,8 @@ pub struct DisplaySettings {
     pub dimensions: bool,
     /// Show selected edge lengths in the viewport (legacy serialized key).
     pub face_side_lengths: bool,
+    /// Show the dimension being typed in a floating box next to the active geometry.
+    pub dimension_input_overlay: bool,
     pub hidden_geometry: bool,
     pub hidden_objects: bool,
     pub group_emphasis: bool,
@@ -118,6 +120,7 @@ impl Default for DisplaySettings {
             guides: true,
             dimensions: true,
             face_side_lengths: false,
+            dimension_input_overlay: true,
             hidden_geometry: false,
             hidden_objects: false,
             group_emphasis: true,

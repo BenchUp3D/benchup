@@ -64,7 +64,7 @@
   "app.click_a_filled_face_first": "Click a filled face first",
   "app.click_a_reference_point_away_from_the_pivot": "Click a reference point away from the pivot first",
   "app.click_a_reference_point_away_from_the_pivot_2": "Click a reference point away from the pivot · Esc to cancel",
-  "app.click_the_opposite_corner_type_width_height_5m": "Click the opposite corner · Type width,height (5m,50mm) + Enter",
+  "app.click_the_opposite_corner_type_width_height_5m": "Click the opposite corner · Type width, Tab for height (or 5m,50mm) + Enter",
   "app.click_to_confirm_esc_to_cancel": "{} · Click to confirm · Esc to cancel",
   "app.click_to_confirm_esc_to_cancel_2": "{value:.3} × · Click to confirm · Esc to cancel",
   "app.click_to_confirm_esc_to_cancel_3": "{}{}{alignment} · Click to confirm · Esc to cancel",
@@ -261,6 +261,9 @@
   "app.wavefront_obj_obj": "Wavefront OBJ (.obj)…",
   "app.wavefront_obj_obj_metres": "Wavefront OBJ (.obj; metres)…",
   "app.width_height": "Width, height",
+  "app.push_pull_total": "Total: {total}",
+  "app.width": "Width",
+  "app.height": "Height",
   "app.wood_joinery": "Wood Joinery",
   "app.your_model_stays_on_this_device": "Your model stays on this device",
   "app.your_work_is_saved_automatically_on_this_device": "Your work is saved automatically on this device. Save a .bup project to keep a portable copy. Legacy .bup files are also supported.",
@@ -2182,5 +2185,6 @@
   "app.calculating_measurements": "Calculating measurements…",
   "sidebar.move_wireframe": "Wireframe other objects while moving",
   "sidebar.selected_edge_lengths": "Selected Edge Lengths",
+  "sidebar.floating_dimension_input": "Floating Dimension Input",
   "cli.agent_edit": "Agent edit"
 }

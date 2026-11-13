@@ -289,9 +289,13 @@ fn pull_readout_includes_existing_depth_and_signed_difference() {
     for (difference, total) in [(1., 3.), (-0.5, 1.5), (0., 2.)] {
         assert_eq!(
             h.app.push_pull_readout(edit, difference),
-            format!("Difference: {} · Total: {}", units.format_length(difference), units.format_length(total)),
+            format!("{} · Total: {}", units.format_length(difference), units.format_length(total)),
         );
     }
+    // A fresh face has no prior depth: the total would repeat the distance.
+    h.app.modeling.as_mut().unwrap().pull_depth = 0.;
+    let fresh = h.app.modeling.as_ref().unwrap();
+    assert_eq!(h.app.push_pull_readout(fresh, 1.), units.format_length(1.));
     assert!(!h.app.project.modified);
 }
 
@@ -563,4 +567,14 @@ fn pull_hover_supports_selected_groups_and_does_not_pick_through_other_groups() 
         assert_eq!(h.app.selected, BTreeSet::from([group]));
         assert_eq!(h.app.doc.model.edit_context, None);
     }
+}
+
+#[test]
+fn floating_push_pull_box_adds_the_total_only_for_extruded_faces() {
+    let (mut h, _) = block();
+    h.click(h.at(DVec3::new(2., 2., 2.)));
+    let note = h.app.dimension_note().expect("an extruded face shows its total depth");
+    assert!(note.starts_with("Total: "), "{note}");
+    h.app.modeling.as_mut().unwrap().pull_depth = 0.;
+    assert_eq!(h.app.dimension_note(), None);
 }
