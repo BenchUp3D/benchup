@@ -186,29 +186,29 @@
   "app.select_or_click_an_edge_or_face_first": "Chọn hoặc nhấp vào một cạnh hoặc bề mặt trước",
   "app.selected": "{selection} đã chọn",
   "app.selection_dimensions": {
-    "one": "{count}",
-    "other": "{count}"
+    "one": "{count} kích thước",
+    "other": "{count} kích thước"
   },
   "app.selection_edges": {
     "one": "{count} cạnh",
-    "other": "{count}"
+    "other": "{count} cạnh"
   },
   "app.selection_entities": {
     "one": "{count} thực thể",
-    "other": "{count}"
+    "other": "{count} thực thể"
   },
   "app.selection_faces": {
     "one": "{count} mặt",
-    "other": "{count}"
+    "other": "{count} mặt"
   },
   "app.selection_guides": {
-    "one": "{count}",
-    "other": "{count}"
+    "one": "{count} đường dẫn",
+    "other": "{count} đường dẫn"
   },
   "app.selection_separator": " · ",
   "app.selection_text_labels": {
-    "one": "{count}",
-    "other": "{count}"
+    "one": "{count} nhãn văn bản",
+    "other": "{count} nhãn văn bản"
   },
   "app.settings": "Cài đặt…",
   "app.side_lengths": "Độ dài cạnh",

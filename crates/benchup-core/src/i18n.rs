@@ -121,8 +121,33 @@ mod tests {
         super::set_language("vi");
         assert_eq!(tr!("common.cancel"), "Hủy");
         assert_eq!(tr!("settings.settings"), "Cài đặt");
-        assert_eq!(tr!("app.selection_entities", count = 1), "1 thực thể");
-        assert_eq!(tr!("app.selection_entities", count = 2), "2 thực thể");
+        // Vietnamese uses the `other` form even for one selected item.
+        for count in [0, 1, 2] {
+            assert_eq!(
+                tr!("app.selection_entities", count = count),
+                format!("{count} thực thể")
+            );
+            assert_eq!(
+                tr!("app.selection_edges", count = count),
+                format!("{count} cạnh")
+            );
+            assert_eq!(
+                tr!("app.selection_faces", count = count),
+                format!("{count} mặt")
+            );
+            assert_eq!(
+                tr!("app.selection_dimensions", count = count),
+                format!("{count} kích thước")
+            );
+            assert_eq!(
+                tr!("app.selection_guides", count = count),
+                format!("{count} đường dẫn")
+            );
+            assert_eq!(
+                tr!("app.selection_text_labels", count = count),
+                format!("{count} nhãn văn bản")
+            );
+        }
         #[cfg(not(target_arch = "wasm32"))]
         assert_eq!(
             super::spawn_localized(super::current_language).join().unwrap(),
