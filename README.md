@@ -60,6 +60,8 @@ Cutting plans and labels can cover selected parts or all visible parts in the pr
 
 This README covers developer installation, building, verification, and deployment.
 For instructions on using BenchUp, see the [user documentation](docs/README.md).
+For supported versions and instructions for reporting vulnerabilities, see the
+[security policy](SECURITY.md).
 
 ## Prerequisites
 

@@ -8,7 +8,7 @@ const {gzipSync, gunzipSync} = require('node:zlib');
 const launchSave = new Function('window', 'name', 'contents', 'description', fs.readFileSync(
     path.join(__dirname, '../crates/benchup-app/src/project_save.js'), 'utf8',
 ));
-const catalog = require('../assets/i18n/en.json');
+const catalog = require('../assets/i18n/en_US.json');
 const save = (window, name, contents) =>
     launchSave(window, name, contents, catalog['project_files.benchup_project']);
 const projectJson = '{"name":"House"}';
