@@ -46,6 +46,18 @@ pub fn is_chinese() -> bool {
 include!(concat!(env!("OUT_DIR"), "/messages.rs"));
 
 #[cfg(test)]
+pub(crate) fn catalog_message(language: &str, key: &str) -> String {
+    let catalog = match language {
+        "zh_CN" => include_str!("../../../assets/i18n/zh_CN.json"),
+        "pt_BR" => include_str!("../../../assets/i18n/pt_BR.json"),
+        "en" => include_str!("../../../assets/i18n/en.json"),
+        _ => panic!("unsupported test language: {language}"),
+    };
+    let messages: serde_json::Value = serde_json::from_str(catalog).unwrap();
+    messages[key].as_str().unwrap().to_owned()
+}
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn language_switches_labels_formats_and_plurals_without_restart() {
@@ -59,9 +71,13 @@ mod tests {
         super::set_language("zh_CN");
         assert_eq!(tr!("common.cancel"), "取消");
         assert_eq!(tr!("settings.settings"), "设置");
-        assert_eq!(crate::ImageFit::Contain.label(), "完整显示");
-        assert_eq!(crate::ImageFit::Cover.label(), "填满裁剪");
-        assert_eq!(crate::ImageFit::Stretch.label(), "拉伸");
+        for (fit, key) in [
+            (crate::ImageFit::Contain, "core.reference_images.contain"),
+            (crate::ImageFit::Cover, "core.reference_images.cover"),
+            (crate::ImageFit::Stretch, "core.reference_images.stretch"),
+        ] {
+            assert_eq!(fit.label(), super::catalog_message("zh_CN", key));
+        }
         assert_eq!(
             serde_json::to_string(&crate::ImageFit::Contain).unwrap(),
             "\"contain\""
@@ -85,9 +101,13 @@ mod tests {
         super::set_language("pt_BR");
         assert_eq!(tr!("common.cancel"), "Cancelar");
         assert_eq!(tr!("settings.settings"), "Configurações");
-        assert_eq!(crate::ImageFit::Contain.label(), "Conter");
-        assert_eq!(crate::ImageFit::Cover.label(), "Cobrir");
-        assert_eq!(crate::ImageFit::Stretch.label(), "Esticar");
+        for (fit, key) in [
+            (crate::ImageFit::Contain, "core.reference_images.contain"),
+            (crate::ImageFit::Cover, "core.reference_images.cover"),
+            (crate::ImageFit::Stretch, "core.reference_images.stretch"),
+        ] {
+            assert_eq!(fit.label(), super::catalog_message("pt_BR", key));
+        }
         #[cfg(not(target_arch = "wasm32"))]
         assert_eq!(
             super::spawn_localized(super::current_language).join().unwrap(),
@@ -97,7 +117,10 @@ mod tests {
         assert_eq!(tr!("app.selection_entities", count = 2), "2 entidades");
         super::set_language("en");
         assert_eq!(tr!("common.cancel"), "Cancel");
-        assert_eq!(crate::ImageFit::Contain.label(), "Contain");
+        assert_eq!(
+            crate::ImageFit::Contain.label(),
+            super::catalog_message("en", "core.reference_images.contain")
+        );
         super::set_language("unsupported");
         assert_eq!(tr!("settings.settings"), "Settings");
     }
