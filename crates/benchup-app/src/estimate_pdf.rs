@@ -656,14 +656,14 @@ mod tests {
             }
         }
         let _reset = ResetLanguage;
-        benchup_core::i18n::set_language("vi");
+        benchup_core::i18n::set_language("vi_VN");
         let mut report = Report {
             name: "Xưởng gỗ Việt".into(),
             currency: "VND".into(),
             notes: vec![tr!("wood_glue.estimate_note", area = "1 m²")],
             ..Default::default()
         };
-        for language in ["vi", "en"] {
+        for language in ["vi_VN", "en_US"] {
             benchup_core::i18n::set_language(language);
             let bytes =
                 render(&report).expect("Vietnamese project names and notes can be exported");

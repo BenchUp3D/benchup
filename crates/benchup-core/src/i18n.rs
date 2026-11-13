@@ -7,6 +7,7 @@ pub enum Language {
     SimplifiedChinese,
     BrazilianPortuguese,
     Vietnamese,
+    Spanish,
 }
 
 thread_local! {
@@ -18,7 +19,8 @@ pub fn set_language(language: &str) {
     LANGUAGE.set(match language {
         "zh_CN" | "zh-CN" | "zh-Hans" => Language::SimplifiedChinese,
         "pt_BR" | "pt-BR" => Language::BrazilianPortuguese,
-        "vi" | "vi_VN" | "vi-VN" => Language::Vietnamese,
+        "vi_VN" | "vi-VN" => Language::Vietnamese,
+        "es_419" | "es-419" => Language::Spanish,
         _ => Language::English,
     });
 }
@@ -52,8 +54,9 @@ pub(crate) fn catalog_message(language: &str, key: &str) -> String {
     let catalog = match language {
         "zh_CN" => include_str!("../../../assets/i18n/zh_CN.json"),
         "pt_BR" => include_str!("../../../assets/i18n/pt_BR.json"),
-        "vi" => include_str!("../../../assets/i18n/vi.json"),
-        "en" => include_str!("../../../assets/i18n/en.json"),
+        "vi_VN" => include_str!("../../../assets/i18n/vi_VN.json"),
+        "es_419" => include_str!("../../../assets/i18n/es_419.json"),
+        "en_US" => include_str!("../../../assets/i18n/en_US.json"),
         _ => panic!("unsupported test language: {language}"),
     };
     let messages: serde_json::Value = serde_json::from_str(catalog).unwrap();
@@ -118,7 +121,7 @@ mod tests {
         );
         assert_eq!(tr!("app.selection_entities", count = 1), "1 entidade");
         assert_eq!(tr!("app.selection_entities", count = 2), "2 entidades");
-        super::set_language("vi");
+        super::set_language("vi_VN");
         assert_eq!(tr!("common.cancel"), "Hủy");
         assert_eq!(tr!("settings.settings"), "Cài đặt");
         // Vietnamese uses the `other` form even for one selected item.
@@ -154,10 +157,30 @@ mod tests {
             super::Language::Vietnamese
         );
         super::set_language("en");
+        super::set_language("es_419");
+        assert_eq!(tr!("common.cancel"), "Cancelar");
+        assert_eq!(tr!("settings.settings"), "Configuración");
+        for (fit, key) in [
+            (crate::ImageFit::Contain, "core.reference_images.contain"),
+            (crate::ImageFit::Cover, "core.reference_images.cover"),
+            (crate::ImageFit::Stretch, "core.reference_images.stretch"),
+        ] {
+            assert_eq!(fit.label(), super::catalog_message("es_419", key));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        assert_eq!(
+            super::spawn_localized(super::current_language).join().unwrap(),
+            super::Language::Spanish
+        );
+        assert_eq!(tr!("app.selection_entities", count = 1), "1 entidad");
+        assert_eq!(tr!("app.selection_entities", count = 2), "2 entidades");
+        super::set_language("es-419");
+        assert_eq!(super::current_language(), super::Language::Spanish);
+        super::set_language("en_US");
         assert_eq!(tr!("common.cancel"), "Cancel");
         assert_eq!(
             crate::ImageFit::Contain.label(),
-            super::catalog_message("en", "core.reference_images.contain")
+            super::catalog_message("en_US", "core.reference_images.contain")
         );
         super::set_language("unsupported");
         assert_eq!(tr!("settings.settings"), "Settings");

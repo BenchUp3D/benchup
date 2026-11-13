@@ -111,7 +111,7 @@ fn plural(one: &str, other: &str, singular: bool) -> String {
 }
 
 fn main() {
-    let messages = read_catalog("../../assets/i18n/en.json", "English");
+    let messages = read_catalog("../../assets/i18n/en_US.json", "English");
     let translations = [
         Translation {
             variant: "SimplifiedChinese",
@@ -125,8 +125,13 @@ fn main() {
         },
         Translation {
             variant: "Vietnamese",
-            catalog: read_catalog("../../assets/i18n/vi.json", "Vietnamese"),
+            catalog: read_catalog("../../assets/i18n/vi_VN.json", "Vietnamese"),
             singular: false,
+        },
+        Translation {
+            variant: "Spanish",
+            catalog: read_catalog("../../assets/i18n/es_419.json", "Spanish"),
+            singular: true,
         },
     ];
 
