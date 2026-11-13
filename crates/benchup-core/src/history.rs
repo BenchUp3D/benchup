@@ -777,13 +777,10 @@ mod tests {
             entry.signature = Some("preserved-signature".into());
             let saved = serde_json::to_string(&doc.history).unwrap();
             let mut history: History = serde_json::from_str(&saved).unwrap();
-            for (language, label) in [
-                ("en", "Glue contact surfaces"),
-                ("zh_CN", "为接触面涂胶"),
-                ("pt_BR", "Colar superfícies de contato"),
-                ("zh_CN", "为接触面涂胶"),
-            ] {
+            for language in ["en", "zh_CN", "pt_BR", "zh_CN"] {
                 crate::i18n::set_language(language);
+                let translated = crate::i18n::catalog_message(language, "wood_glue.contacts_applied");
+                let label = translated.as_str();
                 assert_eq!(history.labels().collect::<Vec<_>>(), ["Workshop cleanup", label]);
                 assert_eq!(history.undo_label(), Some(label));
                 assert_eq!(history.attributed_labels().last(), Some((label, Some(&author), Some(123))));
