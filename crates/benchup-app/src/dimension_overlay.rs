@@ -318,7 +318,7 @@ impl BenchUpApp {
 
     fn paint_dimension_box(&self, p: &egui::Painter, rect: Rect, dimension: DimensionBox) {
         let colors = Palette::for_painter(p);
-        let editing = dimension.active && dimension.typed;
+        let show_caret = dimension.active && dimension.typed && !dimension.selected;
         let label = p.layout_no_wrap(dimension.label.to_owned(), FontId::proportional(10.), colors.muted);
         let value = p.layout_no_wrap(
             if dimension.text.is_empty() { "—".to_owned() } else { dimension.text },
@@ -330,7 +330,7 @@ impl BenchUpApp {
             .note
             .map(|note| p.layout_no_wrap(note, FontId::proportional(10.), colors.muted));
         let note_size = note.as_ref().map_or(Vec2::ZERO, |note| note.size() + egui::vec2(0., 1.));
-        let caret = if dimension.active { 5. } else { 0. };
+        let caret = if show_caret { 5. } else { 0. };
         let inner = egui::vec2(
             label.size().x.max(value.size().x + caret).max(note_size.x),
             label.size().y + 1. + value.size().y + note_size.y,
@@ -381,9 +381,8 @@ impl BenchUpApp {
         if let Some(note) = note {
             p.galley(value_at + egui::vec2(0., value_size.y + 1.), note, colors.muted);
         }
-        if dimension.active && !dimension.selected {
-            // A typed value gets a caret at its end; a live value shows where typing starts.
-            let x = if editing { value_at.x + value_size.x + 2. } else { value_at.x - 2. };
+        if show_caret {
+            let x = value_at.x + value_size.x + 2.;
             p.line_segment(
                 [egui::pos2(x, value_at.y + 1.), egui::pos2(x, value_at.y + value_size.y - 1.)],
                 Stroke::new(1.5, border),

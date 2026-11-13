@@ -97,6 +97,83 @@ fn space_inside_a_typed_dimension_separates_number_and_unit() {
 }
 
 #[test]
+fn space_cancels_rectangle_with_only_an_empty_field_separator() {
+    for clear_typed_height in [false, true] {
+        let mut h = Harness::new();
+        h.app.set_tool(Tool::Rectangle);
+        h.click(h.at(DVec3::ZERO));
+        h.key(Key::Tab);
+        if clear_typed_height {
+            type_dimension(&mut h, "2");
+            h.key(Key::Backspace);
+        }
+        assert_eq!(h.app.length_input, ",");
+        let before = h.app.doc.model.clone();
+
+        type_dimension(&mut h, " ");
+
+        assert_eq!(h.app.tool, Tool::Select);
+        assert!(h.app.drawing.is_none());
+        assert!(h.app.length_input.is_empty());
+        assert_eq!(h.app.doc.model, before);
+        assert!(h.app.doc.history.undo_label().is_none());
+    }
+}
+
+#[test]
+fn space_text_cancels_empty_input_regardless_of_key_event_order() {
+    for text_only in [false, true] {
+        let mut h = Harness::new();
+        h.app.set_tool(Tool::Line);
+        h.click(h.at(DVec3::ZERO));
+        let before = h.app.doc.model.clone();
+        let mut events = vec![egui::Event::Text(" ".into())];
+        if !text_only {
+            events.push(egui::Event::Key {
+                key: Key::Space,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        h.frame(events, egui::Modifiers::NONE);
+
+        assert_eq!(h.app.tool, Tool::Select);
+        assert!(h.app.line_start.is_none());
+        assert!(h.app.length_input.is_empty());
+        assert_eq!(h.app.doc.model, before);
+        assert!(h.app.doc.history.undo_label().is_none());
+    }
+}
+
+#[test]
+fn space_cancels_an_empty_focused_measurements_field() {
+    for text_only in [false, true] {
+        let mut h = Harness::new();
+        h.app.doc.display.dimension_input_overlay = false;
+        h.app.set_tool(Tool::Rectangle);
+        h.click(h.at(DVec3::ZERO));
+        let output = h.frame(vec![], egui::Modifiers::NONE);
+        h.click(text_position(&output, "5m,50mm"));
+        assert!(h.ctx.egui_wants_keyboard_input());
+        let before = h.app.doc.model.clone();
+
+        if text_only {
+            h.frame(vec![egui::Event::Text(" ".into())], egui::Modifiers::NONE);
+        } else {
+            type_dimension(&mut h, " ");
+        }
+
+        assert_eq!(h.app.tool, Tool::Select);
+        assert!(h.app.drawing.is_none());
+        assert!(h.app.length_input.is_empty());
+        assert_eq!(h.app.doc.model, before);
+        assert!(h.app.doc.history.undo_label().is_none());
+    }
+}
+
+#[test]
 fn space_ends_a_line_chain_and_keeps_completed_segments() {
     let mut h = Harness::new();
     h.key(Key::L);
@@ -105,7 +182,6 @@ fn space_ends_a_line_chain_and_keeps_completed_segments() {
     assert_eq!(h.app.doc.model.edges.len(), 1);
     assert!(h.app.line_start.is_some());
     let before = h.app.doc.model.clone();
-    type_dimension(&mut h, "5cm");
     h.key(Key::Space);
     assert_eq!(h.app.tool, Tool::Select);
     assert!(h.app.line_start.is_none());

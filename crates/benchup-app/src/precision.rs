@@ -306,6 +306,13 @@ impl BenchUpApp {
             || self.last_move_copy.is_some()
     }
 
+    pub(super) fn dimension_has_typed_value(&self) -> bool {
+        // Tab can insert the rectangle separator before either side is typed.
+        self.length_input.chars().any(|c| {
+            !c.is_whitespace() && !(self.rect_fields_active() && c == ',')
+        })
+    }
+
     pub(super) fn precise_drawing_points(&self) -> Result<Vec<DVec3>, &'static str> {
         if self.tool == Tool::Arc {
             return self.arc_points(true);

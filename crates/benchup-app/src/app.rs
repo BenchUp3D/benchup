@@ -2557,6 +2557,23 @@ impl BenchUpApp {
             });
             self.prompt_drawn_group_name(ctx, completed_group);
         }
+        // An empty focused precision field still allows Space to cancel the tool.
+        if self.precision_available()
+            && !self.dimension_has_typed_value()
+            && ctx.memory(|m| m.has_focus(egui::Id::unique("precision_input")))
+            && ctx.input(|i| {
+                i.modifiers.is_none()
+                    && (i.key_pressed(Key::Space)
+                        || i.events.iter().any(|event| matches!(event,
+                            egui::Event::Text(text) if text == " ")))
+                    && !i.events.iter().any(|event| matches!(event,
+                        egui::Event::Text(text) if text.chars().any(|c| !c.is_whitespace())))
+            })
+        {
+            ctx.memory_mut(|m| m.surrender_focus(egui::Id::unique("precision_input")));
+            self.set_tool(Tool::Select);
+            return;
+        }
         if ctx.egui_wants_keyboard_input()
             || self.help
             || self.object_creation.is_some()
@@ -2671,7 +2688,7 @@ impl BenchUpApp {
                     // Letter keys belong to an in-progress dimension, including
                     // unit suffixes. Letter shortcuts resume after the dimension is cleared.
                     if self.precision_available()
-                        && !self.length_input.is_empty()
+                        && self.dimension_has_typed_value()
                         && ((Key::A..=Key::Z).contains(&key) || key == Key::Space)
                     {
                         continue;
@@ -2727,6 +2744,12 @@ impl BenchUpApp {
                     }
                 }
                 egui::Event::Text(text) if self.precision_available() => {
+                    // Some backends deliver Space as text before its key event,
+                    // or as text alone. Do not seed an empty dimension with it.
+                    if text == " " && !self.dimension_has_typed_value() {
+                        self.set_tool(Tool::Select);
+                        continue;
+                    }
                     if text.chars().all(|c| {
                         c.is_ascii_alphanumeric()
                             || matches!(
@@ -3383,6 +3406,7 @@ impl BenchUpApp {
                         let field = ui.add_enabled(
                             available,
                             egui::TextEdit::singleline(&mut self.length_input)
+                                .id(egui::Id::unique("precision_input"))
                                 .desired_width(if matches!(self.tool, Tool::Rectangle | Tool::Image) { 300. } else { 212. })
                                 .font(egui::TextStyle::Monospace)
                                 .hint_text(hint)
