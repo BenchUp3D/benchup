@@ -2,7 +2,8 @@
 //!
 //! The CLI does not link the app. It asks the operating system to open the
 //! file with the installed app (macOS by bundle id, Linux and Windows through
-//! the `.bup` file association), or starts a given executable directly. If the
+//! the `.bup` file association), or starts a given executable directly. No
+//! shell parses the path, so names with `&`, `%` or `^` open as they are. If the
 //! app is already running, macOS hands it the file; the app reads the file
 //! from disk again, asking first if the open project has unsaved changes.
 use serde_json::{Value, json};
@@ -25,7 +26,26 @@ fn project_path(path: &str) -> Result<PathBuf, String> {
     if !absolute.is_file() {
         return Err(format!("{} is not a file", path.display()));
     }
-    Ok(absolute)
+    Ok(plain_path(absolute))
+}
+
+/// Windows `canonicalize` gives a verbatim `\\?\C:\...` path, which file
+/// associations and many apps do not accept; this is the usual form of it.
+#[cfg(windows)]
+fn plain_path(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy().into_owned();
+    if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{share}"))
+    } else if let Some(local) = text.strip_prefix(r"\\?\").filter(|rest| rest.as_bytes().get(1) == Some(&b':')) {
+        PathBuf::from(local)
+    } else {
+        path
+    }
+}
+
+#[cfg(not(windows))]
+fn plain_path(path: PathBuf) -> PathBuf {
+    path
 }
 
 /// The command the operating system uses to open `path` in the installed app.
@@ -36,10 +56,12 @@ fn system_command(path: &Path) -> Command {
         command.arg("-b").arg(BUNDLE_ID).arg(path);
         command
     }
+    // Explorer opens the file with its association without a shell parsing
+    // the path (`cmd /C start` would split it at `&` and expand `%NAME%`).
     #[cfg(target_os = "windows")]
     {
-        let mut command = Command::new("cmd");
-        command.args(["/C", "start", ""]).arg(path);
+        let mut command = Command::new("explorer.exe");
+        command.arg(path);
         command
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -73,7 +95,8 @@ pub fn open(path: &str, app: Option<&str>) -> Result<Value, String> {
         .stdin(Stdio::null())
         .output()
         .map_err(|e| format!("cannot run {program}: {e}. Is BenchUp installed? {DOWNLOAD_URL}"))?;
-    if !output.status.success() {
+    // Explorer exits with 1 even when it opened the file.
+    if !output.status.success() && !cfg!(target_os = "windows") {
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         return Err(format!(
             "could not open {opened} in BenchUp ({program}: {detail}). \

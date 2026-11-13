@@ -851,6 +851,30 @@ fn cut_list_uses_materials_set_on_groups() {
 }
 
 #[test]
+fn same_named_materials_are_told_apart_by_assignment() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let material = |model: &mut Model, env: &mut ToolEnv, thickness: u64, width: u64| {
+        ok(model, env, "create_stock_material", json!({"name": "Plywood", "thickness_mm": thickness, "width_mm": width, "length_mm": 2440}))
+            .result["material_id"].clone()
+    };
+    let thick = material(&mut model, &mut env, 18, 1220);
+    let thin = material(&mut model, &mut env, 12, 610);
+    assert_ne!(thick, thin);
+    let top = board(&mut model, &mut env, "Top", [0., 0., 500.], [600., 300., 18.]);
+    let back = board(&mut model, &mut env, "Back", [0., 400., 0.], [600., 12., 480.]);
+    ok(&mut model, &mut env, "set_material", json!({"ids": [top], "material_id": thick}));
+    ok(&mut model, &mut env, "set_material", json!({"ids": [back], "material_id": thin}));
+    let check = ok(&mut model, &mut env, "check_model", json!({})).result;
+    assert!(check["issues"].as_array().unwrap().iter().all(|i| i["kind"] != "thickness_mismatch"), "{check}");
+    let cut = ok(&mut model, &mut env, "get_cut_list", json!({})).result;
+    let materials = cut["materials"].as_array().unwrap();
+    assert_eq!(materials.len(), 2, "{cut}");
+    let mut stock: Vec<_> = materials.iter().map(|m| (m["material"].clone(), m["stock_mm"]["thickness"].clone(), m["stock_mm"]["width"].clone())).collect();
+    stock.sort_by_key(|(_, t, _)| t.as_f64().unwrap() as i64);
+    assert_eq!(stock, [(json!("Plywood"), json!(12.0), json!(610.0)), (json!("Plywood"), json!(18.0), json!(1220.0))]);
+}
+
+#[test]
 fn flip_joint_swaps_roles_and_keeps_settings() {
     let (mut model, mut env) = (Model::default(), ToolEnv::default());
     let side = board(&mut model, &mut env, "Side", [0., 0., 0.], [18., 300., 900.]);

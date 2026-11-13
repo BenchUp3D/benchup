@@ -47,7 +47,8 @@ pub fn reencode_like(original: &[u8], doc: &Document) -> Result<Vec<u8>, String>
     }
     let mut image = Vec::with_capacity(original.len());
     image.extend_from_slice(PNG_SIGNATURE);
-    for chunk in chunks(original)? {
+    for chunk in chunks(original) {
+        let chunk = chunk?;
         if &chunk[4..8] != DOCUMENT_CHUNK {
             image.extend_from_slice(chunk);
         }
@@ -99,20 +100,30 @@ fn with_document_chunk(png: &[u8], compressed: &[u8]) -> Result<Vec<u8>, String>
     Ok(out)
 }
 
-/// The PNG's chunks (length, type, data and CRC), after the signature.
-fn chunks(bytes: &[u8]) -> Result<Vec<&[u8]>, String> {
-    let mut out = Vec::new();
+/// The PNG's chunks (length, type, data and CRC), after the signature, up to
+/// and including `IEND`. Bytes after `IEND` are not part of the image (tools
+/// sometimes append some) and are ignored.
+fn chunks(bytes: &[u8]) -> impl Iterator<Item = Result<&[u8], String>> {
     let mut position = PNG_SIGNATURE.len();
-    while let Some(header) = bytes.get(position..position.saturating_add(8)) {
+    let mut done = false;
+    std::iter::from_fn(move || {
+        if done {
+            return None;
+        }
+        let header = bytes.get(position..position.saturating_add(8))?;
         let length = u32::from_be_bytes(header[..4].try_into().unwrap()) as usize;
-        let end = position
+        let chunk = position
             .checked_add(12)
             .and_then(|v| v.checked_add(length))
-            .ok_or(tr!("project_files.invalid_chunk_size"))?;
-        out.push(bytes.get(position..end).ok_or(tr!("project_files.truncated_chunk"))?);
-        position = end;
-    }
-    Ok(out)
+            .ok_or_else(|| tr!("project_files.invalid_chunk_size").to_string())
+            .and_then(|end| {
+                let chunk = bytes.get(position..end).ok_or_else(|| tr!("project_files.truncated_chunk").to_string())?;
+                position = end;
+                Ok(chunk)
+            });
+        done = chunk.is_err() || &header[4..8] == b"IEND";
+        Some(chunk)
+    })
 }
 
 pub fn png_crc(bytes: &[u8]) -> u32 {
@@ -131,7 +142,9 @@ pub fn project_payload(bytes: &[u8]) -> Result<&[u8], String> {
     if !bytes.starts_with(PNG_SIGNATURE) {
         return Ok(bytes);
     }
-    for chunk in chunks(bytes)? {
+    // Stops at the document chunk, so nothing after it needs to be readable.
+    for chunk in chunks(bytes) {
+        let chunk = chunk?;
         if &chunk[4..8] == DOCUMENT_CHUNK {
             let length = chunk.len() - 12;
             let checksum = u32::from_be_bytes(chunk[8 + length..].try_into().unwrap());
@@ -147,7 +160,7 @@ pub fn project_payload(bytes: &[u8]) -> Result<&[u8], String> {
 /// Write `bytes` to `path` through a temporary file next to the real file and
 /// a rename, so a crash never leaves a half-written project. A symlink is
 /// followed (the link stays, its target is replaced) and an existing file's
-/// permissions are kept.
+/// permissions are kept; a new file gets the usual ones (0o666 less the umask).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     let existed = path.exists();
@@ -156,7 +169,15 @@ pub fn save_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(std::path::Path::new("."));
-    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+    let mut builder = tempfile::Builder::new();
+    #[cfg(unix)]
+    if !existed {
+        use std::os::unix::fs::PermissionsExt;
+        // The temporary file is created with these, less the umask, as
+        // `std::fs::write` would create the project.
+        builder.permissions(std::fs::Permissions::from_mode(0o666));
+    }
+    let mut temporary = builder.tempfile_in(parent).map_err(|e| e.to_string())?;
     temporary
         .write_all(bytes)
         .and_then(|_| temporary.as_file().sync_all())
@@ -164,13 +185,6 @@ pub fn save_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     if existed {
         let permissions = std::fs::metadata(&real).map_err(|e| e.to_string())?.permissions();
         std::fs::set_permissions(temporary.path(), permissions).map_err(|e| e.to_string())?;
-    } else {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o644))
-                .map_err(|e| e.to_string())?;
-        }
     }
     temporary.persist(&real).map_err(|e| e.to_string())?;
     #[cfg(unix)]
@@ -232,6 +246,14 @@ mod tests {
         assert!(reencode_like(&encode_document(&doc).unwrap(), &doc).unwrap().starts_with(&[0x1f, 0x8b]));
         // A preview without a project is reported, not misread.
         assert!(decode(&tiny_png()).is_err());
+
+        // Bytes appended after IEND are ignored when reading and when editing.
+        let mut padded = edited.clone();
+        padded.extend_from_slice(b"trailing metadata bytes");
+        assert_eq!(decode(&padded).unwrap().name, "Edited");
+        let reedited = reencode_like(&padded, &doc).unwrap();
+        assert_eq!(decode(&reedited).unwrap().name, "Edited");
+        assert!(reedited.ends_with(&tiny_png()[tiny_png().len() - 12..]), "IEND stays last");
     }
 
     #[test]
@@ -265,9 +287,13 @@ mod tests {
         assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
         assert_eq!(std::fs::read(&real).unwrap(), b"new");
         assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o640);
+        // A new file gets the mode std::fs::write gives it under this umask.
         let fresh = dir.path().join("fresh.bup");
         save_atomic(&fresh, b"x").unwrap();
-        assert_eq!(std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777, 0o644);
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+        let usual = dir.path().join("usual");
+        std::fs::write(&usual, b"x").unwrap();
+        let mode = |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&fresh), mode(&usual));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 4);
     }
 }

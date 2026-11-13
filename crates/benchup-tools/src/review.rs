@@ -1,7 +1,7 @@
 //! Read-only reviews an agent cannot do by looking at the model: a cut list and
 //! a check for problems such as overlapping boards without a joint.
 use crate::scene::{self, mm, point_mm};
-use benchup_core::{DVec3, Model, connections::ConnectionOperation, joinery::JointSettings};
+use benchup_core::{DVec3, Model, StockMaterial, connections::ConnectionOperation, joinery::JointSettings};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -44,11 +44,12 @@ fn blank(model: &Model, id: u64) -> Option<[f64; 3]> {
 }
 
 /// The board's stock material, or the nearest one set on a group around it.
-fn material_name(model: &Model, id: u64) -> Option<String> {
+/// Found through the assignment, not the name: two materials may share one.
+fn material(model: &Model, id: u64) -> Option<&StockMaterial> {
     let mut current = Some(id);
     while let Some(object) = current.and_then(|c| model.objects.get(&c)) {
         if let Some(material) = model.object_stock_material(object) {
-            return Some(material.name.clone());
+            return Some(material);
         }
         current = model.parent(object.id);
     }
@@ -67,21 +68,27 @@ fn full_axes(board: (DVec3, DVec3), shared: DVec3) -> usize {
 
 /// Boards grouped by material and blank size, with totals per material.
 pub fn cut_list(model: &Model) -> Value {
-    let mut groups: BTreeMap<(String, [i64; 3]), (usize, BTreeSet<String>, Vec<u64>)> = BTreeMap::new();
+    // A material is its name and stock size, so same-named materials of
+    // different sizes stay apart; `None` is unassigned.
+    type Material = Option<(String, [u64; 3])>;
+    /// Count, names and ids of the boards of one material and blank size.
+    type Group = (usize, BTreeSet<String>, Vec<u64>);
+    let mut groups: BTreeMap<(Material, [i64; 3]), Group> = BTreeMap::new();
     let mut skipped = Vec::new();
     for id in boards(model) {
         let Some(size) = blank(model, id) else {
             skipped.push(id);
             continue;
         };
-        let material = material_name(model, id).unwrap_or_else(|| "unassigned".into());
+        let material = material(model, id).map(|m| (m.name.clone(), m.dimensions));
         let key = (material, size.map(|m| (m * 10_000.).round() as i64));
         let entry = groups.entry(key).or_default();
         entry.0 += 1;
         entry.1.insert(model.objects[&id].name.clone());
         entry.2.push(id);
     }
-    let mut totals: BTreeMap<String, (usize, f64, f64)> = BTreeMap::new();
+    let name = |material: &Material| material.as_ref().map_or("unassigned", |(name, _)| name.as_str()).to_owned();
+    let mut totals: BTreeMap<Material, (usize, f64, f64)> = BTreeMap::new();
     let pieces: Vec<Value> = groups
         .iter()
         .map(|((material, tenths), (count, names, ids))| {
@@ -90,23 +97,26 @@ pub fn cut_list(model: &Model) -> Value {
             total.0 += count;
             total.1 += l * w / 1.0e6 * *count as f64;
             total.2 += l * w * t / 1.0e9 * *count as f64;
-            json!({"material": material, "length_mm": l, "width_mm": w, "thickness_mm": t, "quantity": count,
+            json!({"material": name(material), "length_mm": l, "width_mm": w, "thickness_mm": t, "quantity": count,
                 "names": names, "ids": ids.iter().take(20).collect::<Vec<_>>()})
         })
         .collect();
     let materials: Vec<Value> = totals
         .iter()
-        .map(|(name, (count, area, volume))| {
-            let mut entry = json!({"material": name, "pieces": count,
+        .map(|(material, (count, area, volume))| {
+            let mut entry = json!({"material": name(material), "pieces": count,
                 "area_m2": (area * 1000.).round() / 1000., "volume_m3": (volume * 10_000.).round() / 10_000.});
-            let stock = model.stock_materials.values().find(|m| &m.name == name);
-            if let Some(stock) = stock.filter(|s| s.dimensions[1] > 0 && s.dimensions[2] > 0) {
-                let [_, w, l] = stock.dimensions.map(|v| v as f64 / 10.);
-                let stock_area = w * l / 1.0e6;
-                entry["stock_mm"] = json!({"width": w, "length": l});
-                entry["minimum_stock_pieces"] = json!((area / stock_area).ceil() as u64);
-            } else if name == "unassigned" {
-                entry["note"] = json!("Assign a stock material with sizes (create_stock_material, set_material) to get minimum_stock_pieces.");
+            match material {
+                Some((_, dimensions)) if dimensions[1] > 0 && dimensions[2] > 0 => {
+                    let [t, w, l] = dimensions.map(|v| v as f64 / 10.);
+                    let stock_area = w * l / 1.0e6;
+                    entry["stock_mm"] = json!({"thickness": t, "width": w, "length": l});
+                    entry["minimum_stock_pieces"] = json!((area / stock_area).ceil() as u64);
+                }
+                Some(_) => {}
+                None => {
+                    entry["note"] = json!("Assign a stock material with sizes (create_stock_material, set_material) to get minimum_stock_pieces.");
+                }
             }
             entry
         })
@@ -192,7 +202,9 @@ pub fn check(model: &Model) -> Value {
             );
         }
     }
-    for (id, error) in scene::joint_errors(model) {
+    let joint_errors = scene::joint_errors(model);
+    for (id, error) in &joint_errors {
+        let id = *id;
         let members = model.connections.get(&id).map_or(vec![id], |c| vec![id, c.members[0], c.members[1]]);
         issue("error", "joint_not_cut", format!("Joint {id} cannot be cut: {error}"), members);
     }
@@ -228,8 +240,8 @@ pub fn check(model: &Model) -> Value {
             loose.into_iter().take(20).collect());
     }
     for id in &all {
-        let Some(name) = material_name(model, *id) else { continue };
-        let Some(stock) = model.stock_materials.values().find(|m| m.name == name).filter(|m| m.dimensions[0] > 0) else { continue };
+        let Some(stock) = material(model, *id).filter(|m| m.dimensions[0] > 0) else { continue };
+        let name = &stock.name;
         let Some([thickness, ..]) = blank(model, *id) else { continue };
         let expected = stock.dimensions[0] as f64 / 10.;
         if (mm(thickness) - expected).abs() > 0.5 {
@@ -237,7 +249,7 @@ pub fn check(model: &Model) -> Value {
                 format!("{} is {} mm thick but its material {name} is {expected} mm.", model.objects[id].name, mm(thickness)), vec![*id]);
         }
     }
-    let unassigned: Vec<u64> = all.iter().copied().filter(|id| material_name(model, *id).is_none()).collect();
+    let unassigned: Vec<u64> = all.iter().copied().filter(|id| material(model, *id).is_none()).collect();
     if !unassigned.is_empty() {
         issue("info", "no_material", format!("{} boards have no stock material.", unassigned.len()), unassigned.into_iter().take(20).collect());
     }
@@ -245,7 +257,6 @@ pub fn check(model: &Model) -> Value {
     let errors = issues.iter().filter(|i| i["severity"] == "error").count();
     let warnings = issues.iter().filter(|i| i["severity"] == "warning").count();
     issues.truncate(MAX_LISTED_ISSUES);
-    let joint_errors = scene::joint_errors(model);
     let wood_joints = model.connections.values().filter(|c| matches!(c.operation, ConnectionOperation::Joinery(_))).count();
     let mut out = json!({
         "passed": errors == 0 && warnings == 0,

@@ -25,6 +25,7 @@ const HISTORY_LABEL_KEYS: &[&str] = &[
     "app.paint_face",
     "app.paint_group",
     "app.paste",
+    "cli.agent_edit",
     "construction_guides.delete_guides",
     "context_menu.clean_aligned_vertices",
     "context_menu.duplicate",

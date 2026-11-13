@@ -2179,5 +2179,6 @@
   "app.measurements_unavailable": "测量数据不可用。",
   "app.calculating_measurements": "正在计算测量数据…",
   "sidebar.move_wireframe": "移动时以线框显示其他对象",
-  "sidebar.selected_edge_lengths": "所选边的长度"
+  "sidebar.selected_edge_lengths": "所选边的长度",
+  "cli.agent_edit": "智能体编辑"
 }

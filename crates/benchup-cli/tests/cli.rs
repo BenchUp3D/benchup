@@ -56,7 +56,7 @@ fn a_call_edits_the_file_as_one_undo_step() {
     let doc = files::decode(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(doc.name, "Shelf");
     doc.model.validate().unwrap();
-    assert_eq!(doc.history.labels().collect::<Vec<_>>(), ["Agent: create_board"]);
+    assert_eq!(doc.history.labels().collect::<Vec<_>>(), ["Agent edit"]);
     assert_eq!(object_count(&path), 1);
 }
 
@@ -73,7 +73,7 @@ fn a_batch_is_all_or_nothing() {
     assert!(output.status.success());
     assert_eq!(json_out(&output)["results"].as_array().unwrap().len(), 2);
     let doc = files::decode(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(doc.history.labels().collect::<Vec<_>>(), ["Agent: 2 changes"]);
+    assert_eq!(doc.history.labels().collect::<Vec<_>>(), ["Agent edit"]);
 
     let before = std::fs::read(&path).unwrap();
     let bad = format!(
@@ -111,7 +111,7 @@ fn undo_and_redo_step_through_history() {
     benchup(&["call", &path, "create_board", &args], None);
 
     let undo = benchup(&["undo", &path], None);
-    assert_eq!(json_out(&undo), json!({"ok": true, "undone": "Agent: create_board"}));
+    assert_eq!(json_out(&undo), json!({"ok": true, "undone": "Agent edit"}));
     assert_eq!(object_count(&path), 0);
     assert_eq!(benchup(&["undo", &path], None).status.code(), Some(1));
 
@@ -305,7 +305,7 @@ fn batch_calls_can_use_earlier_results() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stdout));
     let doc = files::decode(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(doc.model.connections.len(), 1);
-    assert_eq!(doc.history.labels().last().unwrap(), "Agent: 4 changes", "one undo step");
+    assert_eq!(doc.history.labels().last().unwrap(), "Agent edit", "one undo step");
 
     // A reference to a call that has not run fails the batch and changes nothing.
     let bad = format!("{}\n", json!({"tool": "move", "arguments": {"ids": ["$3.created[0]"], "delta_mm": [1, 0, 0]}}));

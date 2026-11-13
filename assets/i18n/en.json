@@ -2179,5 +2179,6 @@
   "app.measurements_unavailable": "Measurements unavailable.",
   "app.calculating_measurements": "Calculating measurements…",
   "sidebar.move_wireframe": "Wireframe other objects while moving",
-  "sidebar.selected_edge_lengths": "Selected Edge Lengths"
+  "sidebar.selected_edge_lengths": "Selected Edge Lengths",
+  "cli.agent_edit": "Agent edit"
 }
