@@ -1192,7 +1192,7 @@ mod tests {
 
     #[test]
     fn supported_languages_include_vietnamese() {
-        assert!(languages().contains(&("vi", "Tiếng Việt")));
+        assert!(languages().contains(&("vi", "Vietnamese")));
         let mut settings = GeneralSettings::default();
         settings.language = "vi".into();
         settings.normalize();
