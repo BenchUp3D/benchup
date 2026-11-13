@@ -2460,7 +2460,7 @@ mod preference_tests {
 
     #[test]
     fn each_additional_option_saves_independently_without_a_model_edit() {
-        let options: [(&str, fn(&mut BenchUpApp)); 18] = [
+        let options: [(&str, fn(&mut BenchUpApp)); 20] = [
             ("face center snapping", |app| app.snap_to_face_center = false),
             ("axis snapping", |app| app.doc.snap_to_axes = false),
             ("edge snapping", |app| app.snap_to_edge = false),
@@ -2493,6 +2493,12 @@ mod preference_tests {
             }),
             ("saw kerf", |app| {
                 app.project.cutting_plan_layout.kerf_mm = 4.5
+            }),
+            ("edge trim", |app| {
+                app.project.cutting_plan_layout.edge_trim_mm = 3.
+            }),
+            ("layout strategy", |app| {
+                app.project.cutting_plan_layout.strategy = crate::cutting_layout::Strategy::LargestOffcut
             }),
             ("whole project scope", |app| {
                 app.project.cutting_plan_selection_preference = Some(false)
@@ -2618,6 +2624,7 @@ mod preference_tests {
             "{}",
             r#"{"cutting_plan":{"layout":{"kerf_mm":5.0}}}"#,
             r#"{"cutting_plan":{"group_stock":false,"layout":{"kerf_mm":4.5}}}"#,
+            r#"{"cutting_plan":{"layout":{"edge_trim_mm":2.0,"strategy":"rip_first"}}}"#,
         ] {
             let preferences: InspectorPreferences = serde_json::from_str(json).unwrap();
             assert!(preferences.snapping.is_none());

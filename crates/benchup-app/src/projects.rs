@@ -1,5 +1,6 @@
 use benchup_core::tr;
 use super::*;
+use crate::cutting_layout::Strategy;
 use crate::project_files::{self, Outcome};
 use std::{path::PathBuf, sync::mpsc::TryRecvError};
 
@@ -624,6 +625,25 @@ impl BenchUpApp {
                             .on_hover_text(tr!("projects.align_part_grain_with_stock_length"));
                         ui.checkbox(&mut self.project.cutting_plan_layout.show_joinery, tr!("projects.show_wood_joinery"))
                             .on_hover_text(tr!("projects.show_joinery_as_dashed_outlines"));
+                        ui.horizontal(|ui| {
+                            ui.text_label(tr!("projects.cut_layout_strategy"));
+                            egui::ComboBox::from_id_salt("cut_layout_strategy")
+                                .selected_text(self.project.cutting_plan_layout.strategy.label())
+                                .show_ui(ui, |ui| {
+                                    for strategy in [Strategy::Fewest, Strategy::RipFirst, Strategy::LargestOffcut] {
+                                        ui.selectable_value(&mut self.project.cutting_plan_layout.strategy, strategy, strategy.label())
+                                            .on_hover_text(strategy.hint());
+                                    }
+                                })
+                                .response
+                                .on_hover_text(self.project.cutting_plan_layout.strategy.hint());
+                        });
+                        ui.horizontal(|ui| {
+                            ui.text_label(tr!("projects.edge_trim"));
+                            ui.add(egui::DragValue::new(&mut self.project.cutting_plan_layout.edge_trim_mm)
+                                .speed(0.1).range(0. ..=100.).suffix(tr!("projects.mm")))
+                                .on_hover_text(tr!("projects.edge_trim_hint"));
+                        });
                     }
                     ui.text_weak(tr!("projects.only_visible_parts_with_assigned_stock_materials_are"));
                     if report == CutReport::CuttingPlan {
