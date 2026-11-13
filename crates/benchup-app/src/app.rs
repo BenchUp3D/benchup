@@ -7091,6 +7091,8 @@ impl eframe::App for BenchUpApp {
         self.history_preview = None;
         self.account.poll(&ctx);
         self.poll_project(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_external_file(&ctx);
         #[cfg(target_os = "macos")]
         ctx.request_repaint_after(Duration::from_millis(500));
         #[cfg(not(target_arch = "wasm32"))]
