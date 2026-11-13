@@ -167,8 +167,13 @@ pub fn apply(ctx: &egui::Context) {
         "benchup.chinese".into(),
         egui::FontData::from_static(include_bytes!("../../../assets/fonts/NotoSansSC-Regular.otf")).into(),
     );
+    fonts.font_data.insert(
+        "benchup.roboto".into(),
+        egui::FontData::from_static(include_bytes!("../../../assets/fonts/Roboto[wdth,wght].ttf")).into(),
+    );
     for family in [FontFamily::Proportional, FontFamily::Monospace] {
         fonts.families.entry(family).or_default().push("benchup.chinese".into());
+        fonts.families.entry(family).or_default().push("benchup.roboto".into());
     }
     let mut title_fonts = fonts.families[&FontFamily::Proportional].clone();
     title_fonts.insert(0, PROJECT_TITLE_FONT.into());
