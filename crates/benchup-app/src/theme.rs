@@ -172,8 +172,11 @@ pub fn apply(ctx: &egui::Context) {
         egui::FontData::from_static(include_bytes!("../../../assets/fonts/Roboto[wdth,wght].ttf")).into(),
     );
     for family in [FontFamily::Proportional, FontFamily::Monospace] {
-        fonts.families.entry(family).or_default().push("benchup.chinese".into());
-        fonts.families.entry(family).or_default().push("benchup.roboto".into());
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .extend(["benchup.chinese".into(), "benchup.roboto".into()]);
     }
     let mut title_fonts = fonts.families[&FontFamily::Proportional].clone();
     title_fonts.insert(0, PROJECT_TITLE_FONT.into());
