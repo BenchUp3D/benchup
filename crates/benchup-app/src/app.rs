@@ -5509,8 +5509,8 @@ impl BenchUpApp {
             && self.modeling.as_ref().is_none_or(|edit| edit.preview.is_none());
         let source_revision = (committed && self.doc.model.connections.is_empty()
             && self.doc.model.routes.is_empty()).then(|| self.document_revision(ui.ctx()));
-        let routing_revision = (committed && !self.doc.model.routes.is_empty())
-            .then(|| self.document_revision(ui.ctx()));
+        let machining_revision = (committed && (!self.doc.model.connections.is_empty()
+            || !self.doc.model.routes.is_empty())).then(|| self.document_revision(ui.ctx()));
         // History previews affect rendering only; editing, saving and picking
         // continue to use the committed document.
         let model = self.history_preview.as_ref().unwrap_or_else(|| {
@@ -5525,7 +5525,7 @@ impl BenchUpApp {
             let _profile = viewport_benchmark::scope("geometry_update");
             self.joinery_geometry.update_render(model,
                 self.history_preview.is_none() && self.modeling.as_ref().is_some_and(|edit| edit.preview.is_some()),
-                ui.ctx(), &self.doc.display, &self.shadow_cache, routing_revision);
+                ui.ctx(), &self.doc.display, &self.shadow_cache, machining_revision);
         } else {
             self.joinery_geometry.clear_removed_connections();
         }
@@ -5546,6 +5546,8 @@ impl BenchUpApp {
             if let Some(revision) = source_revision.filter(|_| joint_preview.is_none()) {
                 self.render_model
                     .update_from_source(self.document_model.shared(), revision)
+            } else if let Some(revision) = machining_revision.filter(|_| joint_preview.is_none()) {
+                self.render_model.update_evaluated(model, revision)
             } else {
                 self.render_model.update(model)
             };
@@ -5722,6 +5724,7 @@ impl BenchUpApp {
                 && self.tool == Tool::Move
                 && !selected_entities.is_empty();
             let mut mesh = renderer::Mesh::cached(camera, size, &mut self.scene_cache);
+            mesh.set_scene_clip_planes(camera, self.render_model.bounds());
             mesh.reference_image_depth_bounds(model);
             mesh.set_pixels_per_point(ui.ctx().pixels_per_point());
             mesh.set_display(display);
@@ -6207,7 +6210,7 @@ impl BenchUpApp {
                     .resident_context_bounds(id, model, entities)
             })
         } else {
-            self.face_cache.context_bounds(model, entities)
+            self.scene_cache.context_bounds(model, &self.face_cache, entities, model_revision)
         } {
             let padding = ((hi - lo).max_element() * 0.04).max(0.05);
             let lo = lo - DVec3::splat(padding);

@@ -22,7 +22,7 @@ Model shelves, tables, cabinets, workbenches, and other furniture with precisely
 
 ### Wood joinery
 
-Create mortise-and-tenon, half-lap, tongue-and-groove, rabbet, dovetail, and finger joints between boards, including angled connections. Adjust joint dimensions and clearance with live previews. Dynamic joints update automatically when either board moves. Inspect machining diagnostics and cut guides, and trim excess material past a joint while keeping the original boards editable.
+Create mortise-and-tenon, half-lap, tongue-and-groove, rabbet, dovetail, finger, Lamello/biscuit, Domino/loose-tenon, groove, and groove-and-loose-tongue joints between boards, including angled connections. Adjust joint dimensions and clearance with live previews. Dynamic joints update automatically when either board moves. Inspect machining diagnostics and cut guides, and trim excess material past a joint while keeping the original boards editable. Biscuit and Domino pockets have adjustable width, thickness, insertion depth, and count; continuous grooves have adjustable thickness and depth. Position boards with a shared volume: the new pocket joints meet halfway through it. Loose inserts are separate parts and are not generated.
 
 ![Dovetail joint between two selected boards, with joint types, tail width, pin width, angle, and clearance controls](assets/screenshots/wood-joinery-dovetail.png)
 

@@ -2,7 +2,7 @@ use benchup_core::tr;
 use super::*;
 use crate::inspector_table::inspector_field;
 use benchup_core::connections::{Connection, ConnectionOperation};
-use benchup_core::joinery::{GeometryEvaluation, JoineryOverlap, JointKind, JointSettings, KeepEnd, TrimBoard};
+use benchup_core::joinery::{GeometryEvaluation, JointKind, JointSettings, KeepEnd, TrimBoard};
 use std::collections::BTreeMap;
 
 #[path = "joinery_cards.rs"]
@@ -44,12 +44,20 @@ impl Dialog {
 struct EditorDiagnostics {
     source: crate::renderer::ModelSnapshot,
     revision: u64,
+    source_stamp: Option<(u64, Option<u64>)>,
     errors: Vec<(u64, String)>,
     #[cfg(test)]
     evaluations: usize,
 }
 impl EditorDiagnostics {
+    fn update_for_revision(&mut self, source: &Model, geometry: Option<&mut GeometryCache>, revision: u64) {
+        let stamp = (revision, source.edit_context);
+        if self.source_stamp == Some(stamp) { return; }
+        self.update(source, geometry);
+        self.source_stamp = Some(stamp);
+    }
     fn update(&mut self, source: &Model, geometry: Option<&mut GeometryCache>) {
+        self.source_stamp = None;
         let revision = self.source.update(source);
         if revision == self.revision { return; }
         self.revision = revision;
@@ -62,27 +70,48 @@ impl EditorDiagnostics {
     }
 }
 
-/// Board validation includes solid-volume checks. Reuse orientation choices
-/// across redraws, invalidating on source edits and every relevant setting.
+/// Stock intersection is independent of profile settings. Retain it across
+/// dimension edits, and only re-import boards when their geometry changes.
 #[derive(Default)]
 struct OrientationCache {
     revision: Option<u64>,
-    entries: std::collections::BTreeMap<[u64; 2], (JointSettings, Vec<(usize, usize)>, Option<JoineryOverlap>)>,
+    entries: std::collections::BTreeMap<[u64; 2], OrientationEntry>,
     #[cfg(test)]
     builds: usize,
+}
+struct OrientationEntry {
+    source: benchup_core::joinery::BoardSnapshot,
+    stock: Option<benchup_core::joinery::JoineryOptions>,
+    settings: JointSettings,
+    supported: Vec<(usize, usize)>,
 }
 impl OrientationCache {
     fn supported(&mut self, model: &Model, revision: u64, members: [u64; 2], settings: &JointSettings) -> &[(usize, usize)] {
         if self.revision != Some(revision) {
+            self.entries.retain(|members, entry| entry.source.same_geometry(
+                &benchup_core::joinery::BoardSnapshot::new(model, *members)));
             self.revision = Some(revision);
+        }
+        // Retaining stock across relation edits must not accumulate board
+        // snapshots indefinitely as the user browses different assemblies.
+        if self.entries.len() >= 8 && !self.entries.contains_key(&members) {
             self.entries.clear();
         }
-        if !self.entries.get(&members).is_some_and(|(saved, _, _)| saved == settings) {
-            let (overlap, supported) = model.joinery_options(members, settings);
-            self.entries.insert(members, (settings.clone(), supported, overlap));
+        let entry = self.entries.entry(members).or_insert_with(|| {
+            let stock = model.prepare_joinery(members).ok();
             #[cfg(test)] { self.builds += 1; }
+            OrientationEntry {
+                source: benchup_core::joinery::BoardSnapshot::new(model, members),
+                stock,
+                settings: settings.clone(),
+                supported: stock.map_or_else(Vec::new, |stock| stock.supported_axes(settings)),
+            }
+        });
+        if entry.settings != *settings {
+            entry.supported = entry.stock.map_or_else(Vec::new, |stock| stock.supported_axes(settings));
+            entry.settings = settings.clone();
         }
-        &self.entries[&members].1
+        &entry.supported
     }
 }
 
@@ -332,6 +361,14 @@ fn fraction(ui: &mut egui::Ui, id: &str, label: &str, value: &mut f64) {
         *value = percentage / 100.;
     }
 }
+fn pocket_dimension(ui: &mut egui::Ui, id: &str, label: &str, value: &mut f64) {
+    let mut mm = *value * 1000.;
+    if inspector_field(ui, id, label, |ui| {
+        ui.add(egui::DragValue::new(&mut mm).range(0.1..=10000.).speed(0.1).suffix(tr!("joinery.mm")))
+    }).changed() {
+        *value = mm / 1000.;
+    }
+}
 fn fields(ui: &mut egui::Ui, settings: &mut JointSettings, model: &Model, members: [u64; 2],
     orientations: &mut OrientationCache, revision: u64, new_joint: bool) {
     #[cfg(not(target_arch = "wasm32"))]
@@ -375,13 +412,24 @@ fn fields(ui: &mut egui::Ui, settings: &mut JointSettings, model: &Model, member
             &mut settings.height_ratio,
         );
     }
+    if settings.kind.uses_pockets() {
+        ui.text_weak(tr!("joinery.pocket_layout_note"));
+        if matches!(settings.kind, JointKind::Biscuit | JointKind::Domino) {
+            inspector_field(ui, "joint_pocket_count", tr!("joinery.insert_count"), |ui| {
+                ui.add(egui::DragValue::new(&mut settings.pocket_count).range(1..=16))
+            });
+            pocket_dimension(ui, "joint_pocket_width", tr!("joinery.insert_width"), &mut settings.pocket_width);
+        }
+        pocket_dimension(ui, "joint_pocket_thickness", tr!("joinery.slot_thickness"), &mut settings.pocket_thickness);
+        pocket_dimension(ui, "joint_pocket_depth", tr!("joinery.depth_per_board"), &mut settings.pocket_depth);
+    }
     if settings.kind == JointKind::Finger {
         inspector_field(ui, "joint_fingers", tr!("joinery.fingers_on_first_part"), |ui| {
             ui.add(egui::DragValue::new(&mut settings.fingers).range(2..=16))
         });
     }
     if settings.kind == JointKind::Dovetail {
-        let span = orientations.entries.get(&members).and_then(|entry| entry.2)
+        let span = orientations.entries.get(&members).and_then(|entry| entry.stock.map(|stock| stock.overlap()))
             .map_or(0., |overlap| (overlap.bounds.1 - overlap.bounds.0)[settings.width_axis]);
         let mut width_mm = settings.dovetail_width.unwrap_or_else(||
             settings.dovetail_layout(span).map_or(0.025, |(_, width)| width)) * 1000.;
@@ -693,8 +741,9 @@ impl BenchUpApp {
     fn joint_connections(&mut self, ui: &mut egui::Ui, members: [u64; 2]) {
         let shared_view = self.history_preview.is_none()
             && self.modeling.as_ref().and_then(|edit| edit.preview.as_ref()).is_none();
-        self.joinery_dialog.diagnostics.update(&self.doc.model,
-            shared_view.then_some(&mut self.joinery_geometry));
+        let source_revision = self.document_revision(ui.ctx());
+        self.joinery_dialog.diagnostics.update_for_revision(&self.doc.model,
+            shared_view.then_some(&mut self.joinery_geometry), source_revision);
         let errors = self.joinery_dialog.diagnostics.errors.clone();
         let revision = self.joinery_dialog.diagnostics.revision;
         let connections: Vec<_> = self
@@ -936,6 +985,30 @@ mod tests {
         app.project.modified = false;
         app.selected = BTreeSet::from(members);
         (app, egui::Context::default(), members)
+    }
+
+    #[test]
+    fn pocket_joint_previews_apply_the_same_machining_and_reuse_unchanged_geometry() {
+        for kind in [JointKind::Biscuit, JointKind::Domino, JointKind::Groove, JointKind::LooseTongue] {
+            let (mut app, ctx, members) = fixture();
+            let stock = app.doc.model.clone();
+            app.joinery.settings.kind = kind;
+            app.open_joinery(&ctx);
+            assert!(app.refresh_joint_preview());
+            let preview = app.joinery_dialog.preview.as_ref().unwrap().result.as_ref()
+                .unwrap_or_else(|error| panic!("{kind:?}: {error}"));
+            let volumes = members.map(|id| preview.1.result.as_ref().unwrap().model.solid_volume(id).unwrap());
+            assert!(!app.refresh_joint_preview(), "unchanged camera frames reuse the pocket geometry");
+            assert_eq!(app.doc.model, stock, "preview must preserve source boards");
+            assert!(app.apply_joint_preview(&ctx));
+            assert_eq!(app.doc.model.vertices, stock.vertices);
+            assert_eq!(app.doc.model.objects, stock.objects);
+            let result = app.doc.model.evaluate_joinery();
+            assert!(result.errors.is_empty());
+            for (id, volume) in members.into_iter().zip(volumes) {
+                assert!((result.model.solid_volume(id).unwrap() - volume).abs() < 1e-10);
+            }
+        }
     }
 
     fn trim_preview_fixture() -> (BenchUpApp, egui::Context, [u64; 2]) {
@@ -1215,13 +1288,64 @@ mod tests {
         let reversed = [members[1], members[0]];
         assert_eq!(cache.supported(&app.doc.model, 1, reversed, &settings),
             app.doc.model.supported_joinery_axes(reversed, &settings));
-        assert_eq!(cache.builds, 3);
+        assert_eq!(cache.builds, 2, "profile changes reuse the stock intersection");
         for id in app.doc.model.selection_vertices(&BTreeSet::from([members[1]])) {
             app.doc.model.vertices.get_mut(&id).unwrap().position.x += 1.;
         }
         assert!(cache.supported(&app.doc.model, 2, members, &settings).is_empty());
-        assert_eq!(cache.builds, 4);
+        assert_eq!(cache.builds, 3);
         assert_eq!(cache.entries.len(), 1, "drop choices belonging to older geometry");
+    }
+
+    #[test]
+    fn pocket_dimension_and_saved_relation_edits_reuse_stock_orientation_measurements() {
+        let (mut app, _, members) = fixture();
+        let mut cache = OrientationCache::default();
+        let mut revision = 1;
+        let id = app.doc.model.add_connection(Connection { members, entry_face: None,
+            operation: ConnectionOperation::Joinery(JointSettings::default()) }).unwrap();
+        for kind in [JointKind::Biscuit, JointKind::Domino, JointKind::Groove, JointKind::LooseTongue] {
+            let settings = JointSettings { kind, ..Default::default() };
+            for edited in [
+                settings.clone(),
+                JointSettings { pocket_width: 0.025, ..settings.clone() },
+                JointSettings { pocket_thickness: 0.006, ..settings.clone() },
+                JointSettings { pocket_depth: 0.012, ..settings.clone() },
+                JointSettings { pocket_count: 4, ..settings.clone() },
+            ] {
+                app.doc.model.connections.get_mut(&id).unwrap().operation = ConnectionOperation::Joinery(edited.clone());
+                assert_eq!(cache.supported(&app.doc.model, revision, members, &edited),
+                    app.doc.model.supported_joinery_axes(members, &edited));
+                assert_eq!(cache.builds, 1, "settings changes must not repeat the stock boolean");
+                revision += 1;
+            }
+        }
+        app.doc.model.move_selection(&BTreeSet::from([members[1]]), DVec3::X).unwrap();
+        assert!(cache.supported(&app.doc.model, revision, members, &JointSettings::default()).is_empty());
+        assert_eq!(cache.builds, 2);
+    }
+
+    #[test]
+    fn stamped_diagnostics_reuse_orbit_frames_and_invalidate_edits_and_scope() {
+        let (mut app, _, members) = fixture();
+        let id = app.doc.model.add_connection(Connection { members, entry_face: None,
+            operation: ConnectionOperation::Joinery(JointSettings { kind: JointKind::Domino, ..Default::default() }) }).unwrap();
+        let mut diagnostics = EditorDiagnostics::default();
+        diagnostics.update_for_revision(&app.doc.model, None, 1);
+        assert!(diagnostics.errors.is_empty());
+        for _ in 0..60 { diagnostics.update_for_revision(&app.doc.model, None, 1); }
+        assert_eq!(diagnostics.evaluations, 1);
+        if let ConnectionOperation::Joinery(settings) = &mut app.doc.model.connections.get_mut(&id).unwrap().operation {
+            settings.pocket_thickness = 1.;
+        }
+        diagnostics.update_for_revision(&app.doc.model, None, 2);
+        assert_eq!(diagnostics.evaluations, 2);
+        assert_eq!(diagnostics.errors.len(), 1);
+        // Editing scope is deliberately excluded from the shared scene revision.
+        assert!(app.doc.model.enter_object(members[0]));
+        diagnostics.update_for_revision(&app.doc.model, None, 2);
+        assert_eq!(diagnostics.evaluations, 3);
+        assert_eq!(diagnostics.errors.len(), 1, "stock editing must keep saved-joint diagnostics");
     }
 
     #[test]
