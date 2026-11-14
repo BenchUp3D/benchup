@@ -1,15 +1,15 @@
-{"tool": "rename", "arguments": {"id": 238, "name": "Balda"}}
-{"tool": "rename", "arguments": {"id": 291, "name": "Balda"}}
-{"tool": "rename", "arguments": {"id": 344, "name": "Balda"}}
-{"tool": "rename", "arguments": {"id": 397, "name": "Balda"}}
-{"tool": "rename", "arguments": {"id": 450, "name": "Balda"}}
-{"tool": "rename", "arguments": {"id": 503, "name": "Balda"}}
-{"tool": "rename", "arguments": {"id": 556, "name": "Balda"}}
-{"tool": "rename", "arguments": {"id": 609, "name": "Balda"}}
-{"tool": "rename", "arguments": {"id": 662, "name": "Balda"}}
-{"tool": "rename", "arguments": {"id": 715, "name": "Balda"}}
-{"tool": "tag", "arguments": {"ids": [238, 291, 344, 397, 450, 503, 556, 609, 662, 715], "tag": "Baldas"}}
-{"tool": "tag", "arguments": {"ids": [79, 132, 185], "tag": "Estructura"}}
-{"tool": "group", "arguments": {"ids": [79, 238, 291, 344, 397, 450], "name": "Módulo izquierdo", "component": false}}
-{"tool": "group", "arguments": {"ids": [132, 503, 556, 609, 662, 715], "name": "Módulo derecho", "component": false}}
+{"tool": "rename", "arguments": {"id": 238, "name": "Shelf"}}
+{"tool": "rename", "arguments": {"id": 291, "name": "Shelf"}}
+{"tool": "rename", "arguments": {"id": 344, "name": "Shelf"}}
+{"tool": "rename", "arguments": {"id": 397, "name": "Shelf"}}
+{"tool": "rename", "arguments": {"id": 450, "name": "Shelf"}}
+{"tool": "rename", "arguments": {"id": 503, "name": "Shelf"}}
+{"tool": "rename", "arguments": {"id": 556, "name": "Shelf"}}
+{"tool": "rename", "arguments": {"id": 609, "name": "Shelf"}}
+{"tool": "rename", "arguments": {"id": 662, "name": "Shelf"}}
+{"tool": "rename", "arguments": {"id": 715, "name": "Shelf"}}
+{"tool": "tag", "arguments": {"ids": [238, 291, 344, 397, 450, 503, 556, 609, 662, 715], "tag": "Shelves"}}
+{"tool": "tag", "arguments": {"ids": [79, 132, 185], "tag": "Carcass"}}
+{"tool": "group", "arguments": {"ids": [79, 238, 291, 344, 397, 450], "name": "Left module", "component": false}}
+{"tool": "group", "arguments": {"ids": [132, 503, 556, 609, 662, 715], "name": "Right module", "component": false}}
 {"tool": "check_model", "arguments": {}}

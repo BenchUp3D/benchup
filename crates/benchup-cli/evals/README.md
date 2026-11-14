@@ -1,6 +1,6 @@
 # Agent evaluation of the `benchup` tools
 
-The CLI and MCP tools are meant to be used by coding agents that have never seen them. These cases check that: realistic requests from a woodworker (in Spanish, as users write them), each solved by an agent that knows only what the tool tells it (`benchup --help`, `benchup guide`, the tool schemas and its errors).
+The CLI and MCP tools are meant to be used by coding agents that have never seen them. These cases check that: realistic requests from a woodworker, worded as a user would, each solved by an agent that knows only what the tool tells it (`benchup --help`, `benchup guide`, the tool schemas and its errors).
 
 There are two layers:
 
@@ -19,7 +19,7 @@ There are two layers:
 - `prompt.md` — the rules every agent gets, and the report it must return.
 - `setup.py` — prepares a round in `/tmp/benchup-eval<round>/` (binary, one folder per case with its seed, prompts). It never builds.
 - `mcp_call.py` — a minimal MCP client over stdio, for the MCP cases.
-- `fixtures/` — seed projects. `estanteria.bup` is a 1000 × 1800 mm bookcase with two columns of five housed shelves whose ten joints are reversed on purpose (agents should notice and offer `flip_joint`).
+- `fixtures/` — seed projects. `bookcase.bup` is a 1000 × 1800 mm bookcase with two columns of five housed shelves whose ten joints are reversed on purpose (agents should notice and offer `flip_joint`).
 - `reference/` — reference batches, per case.
 - `results/` — one file per round: the table of commands (errors) per case compared with earlier rounds, and the findings, sorted into tool bugs, guide gaps, core limits and missing features.
 

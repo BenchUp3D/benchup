@@ -1,4 +1,4 @@
-{"tool": "create_stock_material", "arguments": {"name": "Tablero 18 mm 2440x1220", "thickness_mm": 18, "width_mm": 1220, "length_mm": 2440}}
-{"tool": "set_material", "arguments": {"ids": [79,132,185,238,291,344,397,450,503,556,609,662,715], "material_id": "$1.material_id"}}
+{"tool": "create_stock_material", "arguments": {"name": "Panel 18 mm 2440x1220", "thickness_mm": 18, "width_mm": 1220, "length_mm": 2440}}
+{"tool": "set_material", "arguments": {"ids": [79, 132, 185, 238, 291, 344, 397, 450, 503, 556, 609, 662, 715], "material_id": "$1.material_id"}}
 {"tool": "get_cut_list", "arguments": {}}
 {"tool": "check_model", "arguments": {}}

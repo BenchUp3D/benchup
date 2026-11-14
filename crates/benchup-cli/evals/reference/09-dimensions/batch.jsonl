@@ -13,5 +13,5 @@
 {"tool": "add_dimension", "arguments": {"start_mm": [982, 0, 909], "end_mm": [982, 0, 1194], "axis": "z", "offset_mm": [100, 0, 0]}}
 {"tool": "add_dimension", "arguments": {"start_mm": [982, 0, 1212], "end_mm": [982, 0, 1497], "axis": "z", "offset_mm": [100, 0, 0]}}
 {"tool": "add_dimension", "arguments": {"start_mm": [982, 0, 1515], "end_mm": [982, 0, 1800], "axis": "z", "offset_mm": [100, 0, 0]}}
-{"tool": "add_text", "arguments": {"point_mm": [500.0, 0, 1800], "offset_mm": [0, 0, 500], "text": "Estantería"}}
+{"tool": "add_text", "arguments": {"point_mm": [500.0, 0, 1800], "offset_mm": [0, 0, 500], "text": "Bookcase"}}
 {"tool": "check_model", "arguments": {}}

@@ -9,11 +9,11 @@
 {"tool": "resize_board", "arguments": {"id": 662, "size_mm": [482, 292, 18], "anchor": "min"}}
 {"tool": "resize_board", "arguments": {"id": 715, "size_mm": [482, 292, 18], "anchor": "min"}}
 {"tool": "resize_board", "arguments": {"id": 185, "size_mm": [18, 294, 1800], "anchor": "min"}}
-{"tool": "create_board", "arguments": {"name": "Trasera", "origin_mm": [9, 294, 0], "size_mm": [982, 6, 1800], "grain_axis": "z"}}
+{"tool": "create_board", "arguments": {"name": "Back", "origin_mm": [9, 294, 0], "size_mm": [982, 6, 1800], "grain_axis": "z"}}
 {"tool": "add_joint", "arguments": {"a": "$12.created[0]", "b": 79, "kind": "rabbet"}}
 {"tool": "add_joint", "arguments": {"a": "$12.created[0]", "b": 132, "kind": "rabbet"}}
-{"tool": "create_board", "arguments": {"name": "Zócalo izquierdo", "origin_mm": [9, 20, 0], "size_mm": [482, 18, 80], "grain_axis": "x"}}
-{"tool": "create_board", "arguments": {"name": "Zócalo derecho", "origin_mm": [509, 20, 0], "size_mm": [482, 18, 80], "grain_axis": "x"}}
+{"tool": "create_board", "arguments": {"name": "Left plinth", "origin_mm": [9, 20, 0], "size_mm": [482, 18, 80], "grain_axis": "x"}}
+{"tool": "create_board", "arguments": {"name": "Right plinth", "origin_mm": [509, 20, 0], "size_mm": [482, 18, 80], "grain_axis": "x"}}
 {"tool": "add_joint", "arguments": {"a": "$15.created[0]", "b": 79, "kind": "tongue_groove"}}
 {"tool": "add_joint", "arguments": {"a": "$16.created[0]", "b": 132, "kind": "tongue_groove"}}
 {"tool": "check_model", "arguments": {}}

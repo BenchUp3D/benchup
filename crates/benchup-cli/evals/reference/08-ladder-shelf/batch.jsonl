@@ -1,18 +1,18 @@
-{"tool": "create_stock_material", "arguments": {"name": "Madera maciza 30 mm (largueros)", "thickness_mm": 30, "width_mm": 400, "length_mm": 2200}}
-{"tool": "create_stock_material", "arguments": {"name": "Tablero 18 mm (baldas)", "thickness_mm": 18, "width_mm": 400, "length_mm": 2400}}
+{"tool": "create_stock_material", "arguments": {"name": "Solid wood 30 mm (uprights)", "thickness_mm": 30, "width_mm": 400, "length_mm": 2200}}
+{"tool": "create_stock_material", "arguments": {"name": "Panel 18 mm (shelves)", "thickness_mm": 18, "width_mm": 400, "length_mm": 2400}}
 {"tool": "draw_polyline", "arguments": {"points_mm": [[0.0, -367.0518, -98.3512], [0.0, 0.0, 0.0], [0.0, 0.0, 1863.4971], [0.0, -149.7185, 1823.3802]], "close": true}}
 {"tool": "push_pull", "arguments": {"face_id": "$3.face_id", "distance_mm": 30.0}}
-{"tool": "group", "arguments": {"ids": ["$3.created", "$4.created"], "name": "Larguero izquierdo", "component": false}}
+{"tool": "group", "arguments": {"ids": ["$3.created", "$4.created"], "name": "Left upright", "component": false}}
 {"tool": "set_grain", "arguments": {"id": "$5.created[0]", "axis": "z"}}
 {"tool": "set_material", "arguments": {"ids": ["$5.created[0]"], "material_id": "$1.material_id"}}
 {"tool": "rotate", "arguments": {"ids": ["$5.created[0]"], "pivot_mm": [0, 0, 0], "axis": "x", "degrees": -15}}
 {"tool": "create_copy", "arguments": {"id": "$5.created[0]", "offset_mm": [600.0, 0, 0]}}
-{"tool": "rename", "arguments": {"id": "$9.created[0]", "name": "Larguero derecho"}}
-{"tool": "tag", "arguments": {"ids": ["$5.created[0]", "$9.created[0]"], "tag": "Largueros"}}
-{"tool": "create_board", "arguments": {"name": "Balda 1", "origin_mm": [15.0, -305.81, 150], "size_mm": [600.0, 340, 18.0], "grain_axis": "x", "material_id": "$2.material_id", "tag": "Baldas"}}
-{"tool": "create_board", "arguments": {"name": "Balda 2", "origin_mm": [15.0, -117.19, 630], "size_mm": [600.0, 280, 18.0], "grain_axis": "x", "material_id": "$2.material_id", "tag": "Baldas"}}
-{"tool": "create_board", "arguments": {"name": "Balda 3", "origin_mm": [15.0, 71.42, 1110], "size_mm": [600.0, 220, 18.0], "grain_axis": "x", "material_id": "$2.material_id", "tag": "Baldas"}}
-{"tool": "create_board", "arguments": {"name": "Balda 4", "origin_mm": [15.0, 260.04, 1590], "size_mm": [600.0, 160, 18.0], "grain_axis": "x", "material_id": "$2.material_id", "tag": "Baldas"}}
+{"tool": "rename", "arguments": {"id": "$9.created[0]", "name": "Right upright"}}
+{"tool": "tag", "arguments": {"ids": ["$5.created[0]", "$9.created[0]"], "tag": "Uprights"}}
+{"tool": "create_board", "arguments": {"name": "Shelf 1", "origin_mm": [15.0, -305.81, 150], "size_mm": [600.0, 340, 18.0], "grain_axis": "x", "material_id": "$2.material_id", "tag": "Shelves"}}
+{"tool": "create_board", "arguments": {"name": "Shelf 2", "origin_mm": [15.0, -117.19, 630], "size_mm": [600.0, 280, 18.0], "grain_axis": "x", "material_id": "$2.material_id", "tag": "Shelves"}}
+{"tool": "create_board", "arguments": {"name": "Shelf 3", "origin_mm": [15.0, 71.42, 1110], "size_mm": [600.0, 220, 18.0], "grain_axis": "x", "material_id": "$2.material_id", "tag": "Shelves"}}
+{"tool": "create_board", "arguments": {"name": "Shelf 4", "origin_mm": [15.0, 260.04, 1590], "size_mm": [600.0, 160, 18.0], "grain_axis": "x", "material_id": "$2.material_id", "tag": "Shelves"}}
 {"tool": "add_joint", "arguments": {"a": "$12.created[0]", "b": "$5.created[0]", "kind": "tongue_groove"}}
 {"tool": "add_joint", "arguments": {"a": "$12.created[0]", "b": "$9.created[0]", "kind": "tongue_groove"}}
 {"tool": "add_joint", "arguments": {"a": "$13.created[0]", "b": "$5.created[0]", "kind": "tongue_groove"}}

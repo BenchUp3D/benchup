@@ -1,6 +1,6 @@
 {
   "seeds": {
-    "estanteria": "crates/benchup-cli/evals/fixtures/estanteria.bup",
+    "bookcase": "crates/benchup-cli/evals/fixtures/bookcase.bup",
     "example": "assets/examples/Example.bup",
     "new": null
   },
@@ -11,7 +11,7 @@
       "mode": "cli",
       "seed": "example",
       "file": "Example.bup",
-      "request": "En Example.bup, haz el escritorio (Desk) 200 mm más largo.",
+      "request": "In Example.bup, make the desk 200 mm longer.",
       "focus": [
         "get_scene filters",
         "split_face",
@@ -37,9 +37,9 @@
       "id": "02-four-shelves",
       "title": "Five shelves to four",
       "mode": "cli",
-      "seed": "estanteria",
-      "file": "estanteria.bup",
-      "request": "En estanteria.bup, ahora quiero que tenga 4 baldas en cada columna en vez de 5, repartidas por igual, manteniendo los ensambles.",
+      "seed": "bookcase",
+      "file": "bookcase.bup",
+      "request": "In bookcase.bup, I now want 4 shelves in each column instead of 5, evenly spaced, keeping the joints.",
       "focus": [
         "distribute",
         "flip_joint"
@@ -59,15 +59,15 @@
       "title": "Dining table",
       "mode": "cli",
       "seed": "new",
-      "file": "mesa.bup",
-      "request": "Créame mesa.bup: una mesa de comedor de 1400×800 mm y 750 mm de alto, con 4 patas de 70×70 mm, faldones unidos a las patas con caja y espiga, y un tablero de 30 mm encima.",
+      "file": "table.bup",
+      "request": "Create table.bup: a 1400×800 mm dining table, 750 mm high, with 4 legs of 70×70 mm, aprons joined to the legs with mortise and tenon, and a 30 mm top.",
       "focus": [
         "create_board",
         "add_joint"
       ],
       "reference": {
         "batches": [
-          "mesa.jsonl"
+          "table.jsonl"
         ],
         "expect": {
           "passed": true
@@ -79,8 +79,8 @@
       "title": "Chest of drawers",
       "mode": "cli",
       "seed": "new",
-      "file": "cajonera.bup",
-      "request": "Créame cajonera.bup: una cajonera de 500 mm de ancho, 450 de fondo y 700 de alto, con 3 cajones iguales. Los frentes de cajón unidos a los laterales del cajón con colas de milano. Los tres cajones deben ser el mismo componente.",
+      "file": "drawers.bup",
+      "request": "Create drawers.bup: a chest of drawers 500 mm wide, 450 deep and 700 high, with 3 equal drawers. The drawer fronts are joined to the drawer sides with dovetails. The three drawers must be the same component.",
       "focus": [
         "group",
         "create_copy",
@@ -99,9 +99,9 @@
       "id": "05-back-rabbet",
       "title": "Back in a rabbet and plinth",
       "mode": "cli",
-      "seed": "estanteria",
-      "file": "estanteria.bup",
-      "request": "En estanteria.bup, añade una trasera de 6 mm metida en un galce en los laterales, y un zócalo de 80 mm de alto retranqueado 20 mm por delante.",
+      "seed": "bookcase",
+      "file": "bookcase.bup",
+      "request": "In bookcase.bup, add a 6 mm back set in a rabbet in the sides, and an 80 mm high plinth set back 20 mm from the front.",
       "focus": [
         "add_joint",
         "check_model only_new"
@@ -120,9 +120,9 @@
       "id": "06-oak",
       "title": "Solid oak 19 mm",
       "mode": "cli",
-      "seed": "estanteria",
-      "file": "estanteria.bup",
-      "request": "En estanteria.bup, hazla en roble macizo de 19 mm en vez de tablero de 18.",
+      "seed": "bookcase",
+      "file": "bookcase.bup",
+      "request": "In bookcase.bup, make it in 19 mm solid oak instead of 18 mm board.",
       "focus": [
         "change_thickness",
         "create_stock_material"
@@ -142,8 +142,8 @@
       "title": "Bedside table with curved sides",
       "mode": "cli",
       "seed": "new",
-      "file": "mesilla.bup",
-      "request": "Créame mesilla.bup: una mesilla de noche de 450 mm de ancho, 350 de fondo y 550 de alto. Los laterales tienen el borde delantero curvo (un arco que entra 40 mm en el centro) y la tapa tiene un chaflán de 10 mm en las esquinas delanteras.",
+      "file": "nightstand.bup",
+      "request": "Create nightstand.bup: a nightstand 450 mm wide, 350 deep and 550 high. The sides have a curved front edge (an arc that goes in 40 mm at the middle) and the top has a 10 mm chamfer on its front corners.",
       "focus": [
         "create_profile_board",
         "add_profile"
@@ -162,8 +162,8 @@
       "title": "Leaning ladder shelf",
       "mode": "cli",
       "seed": "new",
-      "file": "escalera.bup",
-      "request": "Créame escalera.bup: una estantería tipo escalera apoyada en la pared, de 1800 mm de alto, con dos largueros inclinados 15° respecto a la vertical y 4 baldas horizontales de 600 mm de ancho, cada una menos profunda que la de abajo, encajadas en los largueros.",
+      "file": "ladder.bup",
+      "request": "Create ladder.bup: a ladder shelf leaning against the wall, 1800 mm high, with two uprights leaning 15° from vertical and 4 horizontal shelves 600 mm wide, each shallower than the one below, housed in the uprights.",
       "focus": [
         "create_profile_board",
         "rotate"
@@ -181,9 +181,9 @@
       "id": "09-dimensions",
       "title": "Workshop dimensions",
       "mode": "cli",
-      "seed": "estanteria",
-      "file": "estanteria.bup",
-      "request": "En estanteria.bup, acota el alto, el ancho y el fondo totales, y la distancia entre baldas, y pon un texto con el nombre del mueble, para llevarlo al taller.",
+      "seed": "bookcase",
+      "file": "bookcase.bup",
+      "request": "In bookcase.bup, dimension the overall height, width and depth, and the spacing between shelves, and add a text with the name of the piece, to take it to the workshop.",
       "focus": [
         "add_dimension",
         "render_view"
@@ -207,9 +207,9 @@
       "id": "10-organize",
       "title": "Modules, components and tags",
       "mode": "cli",
-      "seed": "estanteria",
-      "file": "estanteria.bup",
-      "request": "Organiza estanteria.bup: agrupa cada columna como un módulo (Módulo izquierdo, Módulo derecho), haz que todas las baldas sean el mismo componente, y pon la etiqueta «Baldas» a las baldas y «Estructura» a laterales y separador.",
+      "seed": "bookcase",
+      "file": "bookcase.bup",
+      "request": "Organize bookcase.bup: group each column as a module (Left module, Right module), make all the shelves the same component, and tag the shelves \"Shelves\" and the sides and divider \"Carcass\".",
       "focus": [
         "group",
         "tag"
@@ -231,9 +231,9 @@
       "id": "11-cut-material",
       "title": "Cut list and sheets",
       "mode": "cli",
-      "seed": "estanteria",
-      "file": "estanteria.bup",
-      "request": "Para estanteria.bup, ¿cuánto tablero necesito? Dame la lista de despiece (pieza, medidas, cantidad) y cuántos tableros de 2440×1220 mm de 18 mm tengo que comprar.",
+      "seed": "bookcase",
+      "file": "bookcase.bup",
+      "request": "For bookcase.bup, how much board do I need? Give me the cut list (part, sizes, quantity) and how many 2440×1220 mm sheets of 18 mm I have to buy.",
       "focus": [
         "get_cut_list",
         "get_estimate"
@@ -255,9 +255,9 @@
       "id": "12-impossible",
       "title": "A shelf that does not fit",
       "mode": "cli",
-      "seed": "estanteria",
-      "file": "estanteria.bup",
-      "request": "En estanteria.bup, añade una balda de 1200 mm de largo en la columna izquierda, a 1000 mm del suelo, encajada en los laterales.",
+      "seed": "bookcase",
+      "file": "bookcase.bup",
+      "request": "In bookcase.bup, add a 1200 mm long shelf in the left column, 1000 mm from the floor, housed in the sides.",
       "focus": [
         "check_model",
         "measure_space"
@@ -277,9 +277,9 @@
       "id": "13-router",
       "title": "Edge profiles",
       "mode": "cli",
-      "seed": "estanteria",
-      "file": "estanteria.bup",
-      "request": "En estanteria.bup, achaflana 2 mm el canto delantero superior de todas las baldas y redondea con radio 3 mm los dos cantos delanteros del separador central.",
+      "seed": "bookcase",
+      "file": "bookcase.bup",
+      "request": "In bookcase.bup, chamfer the top front edge of every shelf by 2 mm and round over the two front edges of the center divider with a 3 mm radius.",
       "focus": [
         "add_profile"
       ],
@@ -297,8 +297,8 @@
       "title": "Bench with trimmed through tenons",
       "mode": "cli",
       "seed": "new",
-      "file": "banco.bup",
-      "request": "Créame banco.bup: un banco de 1200×350 mm y 450 mm de alto, con 4 patas de 50×50 mm y un asiento de 25 mm. Los travesaños (70×22 mm) atraviesan las patas con caja y espiga pasante y deben quedar enrasados por fuera de las patas.",
+      "file": "bench.bup",
+      "request": "Create bench.bup: a bench 1200×350 mm and 450 mm high, with 4 legs of 50×50 mm and a 25 mm seat. The rails (70×22 mm) go through the legs with through mortise and tenon joints and must end flush with the outside of the legs.",
       "focus": [
         "add_joint trim",
         "set_joint"
@@ -316,9 +316,9 @@
       "id": "15-finish",
       "title": "Finish and time",
       "mode": "cli",
-      "seed": "estanteria",
-      "file": "estanteria.bup",
-      "request": "En estanteria.bup, quiero lijarla a grano 120 y 180 y darle dos manos de barniz satinado. ¿Cuánto tiempo me llevará terminarla, contando el secado?",
+      "seed": "bookcase",
+      "file": "bookcase.bup",
+      "request": "In bookcase.bup, I want to sand it at 120 and 180 grit and give it two coats of satin varnish. How long will it take me to finish it, including drying?",
       "focus": [
         "set_finish",
         "get_estimate"
@@ -342,7 +342,7 @@
       "mode": "cli",
       "seed": "example",
       "file": "Example.bup",
-      "request": "En Example.bup, pon una balda de 18 mm y 250 mm de fondo encima del escritorio, a 400 mm por encima del tablero y del mismo largo, sin chocar con nada. Comprueba el resultado con una imagen.",
+      "request": "In Example.bup, put an 18 mm shelf, 250 mm deep, above the desk, 400 mm above the desktop and as long as it, without hitting anything. Check the result with an image.",
       "focus": [
         "get_scene filters",
         "measure_space",
@@ -353,9 +353,9 @@
       "id": "17-mcp-shelves",
       "title": "Five shelves to four, over MCP",
       "mode": "mcp",
-      "seed": "estanteria",
-      "file": "estanteria.bup",
-      "request": "En estanteria.bup, ahora quiero que tenga 4 baldas en cada columna en vez de 5, repartidas por igual, manteniendo los ensambles.",
+      "seed": "bookcase",
+      "file": "bookcase.bup",
+      "request": "In bookcase.bup, I now want 4 shelves in each column instead of 5, evenly spaced, keeping the joints.",
       "focus": [
         "MCP",
         "distribute",

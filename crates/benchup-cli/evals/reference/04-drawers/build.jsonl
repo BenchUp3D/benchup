@@ -1,29 +1,29 @@
-{"tool": "create_stock_material", "arguments": {"name": "Tablero 18 mm", "thickness_mm": 18, "width_mm": 1220, "length_mm": 2440}}
-{"tool": "create_stock_material", "arguments": {"name": "Tablero 12 mm", "thickness_mm": 12, "width_mm": 1220, "length_mm": 2440}}
-{"tool": "create_stock_material", "arguments": {"name": "Contrachapado 6 mm", "thickness_mm": 6, "width_mm": 1220, "length_mm": 2440}}
-{"tool": "create_board", "arguments": {"name": "Lateral izquierdo", "origin_mm": [0, 0, 0], "size_mm": [18, 450, 700], "grain_axis": "z", "material_id": "$1.material_id"}}
-{"tool": "create_board", "arguments": {"name": "Lateral derecho", "origin_mm": [482, 0, 0], "size_mm": [18, 450, 700], "grain_axis": "z", "material_id": "$1.material_id"}}
-{"tool": "create_board", "arguments": {"name": "Tapa", "origin_mm": [9, 0, 682], "size_mm": [482, 434, 18], "grain_axis": "x", "material_id": "$1.material_id"}}
+{"tool": "create_stock_material", "arguments": {"name": "Panel 18 mm", "thickness_mm": 18, "width_mm": 1220, "length_mm": 2440}}
+{"tool": "create_stock_material", "arguments": {"name": "Panel 12 mm", "thickness_mm": 12, "width_mm": 1220, "length_mm": 2440}}
+{"tool": "create_stock_material", "arguments": {"name": "Plywood 6 mm", "thickness_mm": 6, "width_mm": 1220, "length_mm": 2440}}
+{"tool": "create_board", "arguments": {"name": "Left side", "origin_mm": [0, 0, 0], "size_mm": [18, 450, 700], "grain_axis": "z", "material_id": "$1.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Right side", "origin_mm": [482, 0, 0], "size_mm": [18, 450, 700], "grain_axis": "z", "material_id": "$1.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Top", "origin_mm": [9, 0, 682], "size_mm": [482, 434, 18], "grain_axis": "x", "material_id": "$1.material_id"}}
 {"tool": "create_board", "arguments": {"name": "Base", "origin_mm": [9, 0, 0], "size_mm": [482, 434, 18], "grain_axis": "x", "material_id": "$1.material_id"}}
-{"tool": "create_board", "arguments": {"name": "Trasera", "origin_mm": [9, 436, 0], "size_mm": [482, 6, 700], "grain_axis": "z", "material_id": "$3.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Back", "origin_mm": [9, 436, 0], "size_mm": [482, 6, 700], "grain_axis": "z", "material_id": "$3.material_id"}}
 {"tool": "add_joint", "arguments": {"a": "$6.created[0]", "b": "$4.created[0]", "kind": "tongue_groove"}}
 {"tool": "add_joint", "arguments": {"a": "$6.created[0]", "b": "$5.created[0]", "kind": "tongue_groove"}}
 {"tool": "add_joint", "arguments": {"a": "$7.created[0]", "b": "$4.created[0]", "kind": "tongue_groove"}}
 {"tool": "add_joint", "arguments": {"a": "$7.created[0]", "b": "$5.created[0]", "kind": "tongue_groove"}}
 {"tool": "add_joint", "arguments": {"a": "$8.created[0]", "b": "$4.created[0]", "kind": "tongue_groove"}}
 {"tool": "add_joint", "arguments": {"a": "$8.created[0]", "b": "$5.created[0]", "kind": "tongue_groove"}}
-{"tool": "create_board", "arguments": {"name": "Frente de cajón", "origin_mm": [20, 0, 20], "size_mm": [460, 18, 218], "grain_axis": "x", "material_id": "$1.material_id"}}
-{"tool": "create_board", "arguments": {"name": "Lateral de cajón izquierdo", "origin_mm": [20, 5, 30], "size_mm": [12, 415, 178], "grain_axis": "y", "material_id": "$2.material_id"}}
-{"tool": "create_board", "arguments": {"name": "Lateral de cajón derecho", "origin_mm": [468, 5, 30], "size_mm": [12, 415, 178], "grain_axis": "y", "material_id": "$2.material_id"}}
-{"tool": "create_board", "arguments": {"name": "Trasera de cajón", "origin_mm": [26, 400, 46], "size_mm": [448, 12, 162], "grain_axis": "x", "material_id": "$2.material_id"}}
-{"tool": "create_board", "arguments": {"name": "Fondo de cajón", "origin_mm": [26, 20, 40], "size_mm": [448, 392, 6], "grain_axis": "x", "material_id": "$3.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Drawer front", "origin_mm": [20, 0, 20], "size_mm": [460, 18, 218], "grain_axis": "x", "material_id": "$1.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Drawer left side", "origin_mm": [20, 5, 30], "size_mm": [12, 415, 178], "grain_axis": "y", "material_id": "$2.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Drawer right side", "origin_mm": [468, 5, 30], "size_mm": [12, 415, 178], "grain_axis": "y", "material_id": "$2.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Drawer back", "origin_mm": [26, 400, 46], "size_mm": [448, 12, 162], "grain_axis": "x", "material_id": "$2.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Drawer bottom", "origin_mm": [26, 20, 40], "size_mm": [448, 392, 6], "grain_axis": "x", "material_id": "$3.material_id"}}
 {"tool": "add_joint", "arguments": {"a": "$16.created[0]", "b": "$15.created[0]", "kind": "dovetail", "params": {"dovetails": 4}}}
 {"tool": "add_joint", "arguments": {"a": "$17.created[0]", "b": "$15.created[0]", "kind": "dovetail", "params": {"dovetails": 4}}}
 {"tool": "add_joint", "arguments": {"a": "$18.created[0]", "b": "$16.created[0]", "kind": "tongue_groove"}}
 {"tool": "add_joint", "arguments": {"a": "$18.created[0]", "b": "$17.created[0]", "kind": "tongue_groove"}}
 {"tool": "add_joint", "arguments": {"a": "$19.created[0]", "b": "$16.created[0]", "kind": "tongue_groove"}}
 {"tool": "add_joint", "arguments": {"a": "$19.created[0]", "b": "$17.created[0]", "kind": "tongue_groove"}}
-{"tool": "group", "arguments": {"ids": ["$15.created[0]", "$16.created[0]", "$17.created[0]", "$18.created[0]", "$19.created[0]"], "name": "Cajón", "component": true}}
+{"tool": "group", "arguments": {"ids": ["$15.created[0]", "$16.created[0]", "$17.created[0]", "$18.created[0]", "$19.created[0]"], "name": "Drawer", "component": true}}
 {"tool": "create_copy", "arguments": {"id": "$26.created[0]", "offset_mm": [0, 0, 221]}}
 {"tool": "create_copy", "arguments": {"id": "$26.created[0]", "offset_mm": [0, 0, 442]}}
 {"tool": "check_model", "arguments": {}}

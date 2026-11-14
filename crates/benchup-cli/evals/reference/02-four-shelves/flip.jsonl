@@ -1,2 +1,2 @@
-{"tool":"flip_joint","arguments":{"ids":[716,717,718,719,720,721,722,723]}}
-{"tool":"check_model","arguments":{}}
+{"tool": "flip_joint", "arguments": {"ids": [716, 717, 718, 719, 720, 721, 722, 723]}}
+{"tool": "check_model", "arguments": {}}

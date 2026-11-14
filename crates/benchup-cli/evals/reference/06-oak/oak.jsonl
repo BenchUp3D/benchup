@@ -1,4 +1,4 @@
-{"tool": "create_stock_material", "arguments": {"name": "Roble macizo 19 mm", "thickness_mm": 19, "width_mm": 300, "length_mm": 2500}}
+{"tool": "create_stock_material", "arguments": {"name": "Solid oak 19 mm", "thickness_mm": 19, "width_mm": 300, "length_mm": 2500}}
 {"tool": "resize_board", "arguments": {"id": 79, "size_mm": [19, 300, 1800], "anchor": "min"}}
 {"tool": "resize_board", "arguments": {"id": 132, "size_mm": [19, 300, 1800], "anchor": ["max", "min", "min"]}}
 {"tool": "resize_board", "arguments": {"id": 185, "size_mm": [19, 300, 1800], "anchor": ["center", "min", "min"]}}
