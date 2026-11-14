@@ -2,15 +2,47 @@
 use benchup_core::{DVec2, Document, Model, tr};
 use std::{
     collections::VecDeque,
-    path::PathBuf,
-    sync::{Mutex, OnceLock},
+    path::{Path, PathBuf},
+    sync::{Mutex, MutexGuard, OnceLock, PoisonError},
 };
 static OPEN: OnceLock<Mutex<VecDeque<PathBuf>>> = OnceLock::new();
-fn queue() -> &'static Mutex<VecDeque<PathBuf>> {
+/// The queue only holds paths, so a panic elsewhere cannot leave it
+/// inconsistent; recover instead of panicking inside AppKit callbacks.
+fn queue() -> MutexGuard<'static, VecDeque<PathBuf>> {
     OPEN.get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
 }
 pub fn next_open() -> Option<PathBuf> {
-    queue().lock().ok()?.pop_front()
+    queue().pop_front()
+}
+/// Queues a project requested by the operating system or a launch argument.
+fn enqueue(path: PathBuf) {
+    if let Some(path) = project_path(path) {
+        push_latest(&mut queue(), path);
+    }
+}
+/// Accepts only BenchUp projects, so unrelated launch arguments such as share
+/// links are not opened as files. Relative paths become absolute so repeated
+/// requests for one file match.
+fn project_path(path: PathBuf) -> Option<PathBuf> {
+    is_project(&path).then(|| std::path::absolute(&path).unwrap_or(path))
+}
+fn is_project(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("bup"))
+}
+/// A path requested again moves behind the others: it opens once, and the
+/// document left open is the one requested last.
+fn push_latest(queue: &mut VecDeque<PathBuf>, path: PathBuf) {
+    queue.retain(|queued| *queued != path);
+    queue.push_back(path);
+}
+/// Prepares document-open handling that must exist before the desktop event
+/// loop starts. Call on the main thread before `eframe::run_native`.
+pub fn prepare_launch() {
+    #[cfg(target_os = "macos")]
+    macos::observe_launch();
 }
 pub fn thumbnail_command() -> Option<Result<(), String>> {
     let mut args = std::env::args_os().skip(1);
@@ -71,18 +103,21 @@ fn convert_skp(input: &std::path::Path, output: &std::path::Path) -> Result<(), 
 #[path = "desktop_file_tests.rs"]
 mod tests;
 pub fn initialize() {
-    for arg in std::env::args_os().skip(1) {
-        let path = PathBuf::from(arg);
-        if path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("bup"))
-        {
-            queue().lock().unwrap().push_back(path);
-        }
-    }
+    // Once the macOS launch handler is installed, AppKit delivers launch
+    // arguments through `application:openFiles:`; reading them again here
+    // would queue them twice.
     #[cfg(target_os = "macos")]
-    unsafe {
-        macos::install();
+    let read_arguments = !macos::installed();
+    #[cfg(not(target_os = "macos"))]
+    let read_arguments = true;
+    if read_arguments {
+        for arg in std::env::args_os().skip(1) {
+            enqueue(PathBuf::from(arg));
+        }
+        // Launch documents have already been dispatched at this point, but
+        // documents opened while BenchUp runs still reach the delegate.
+        #[cfg(target_os = "macos")]
+        macos::install_on_main_thread();
     }
     // Register the installed path on launch, including after an updater move.
     #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -223,58 +258,113 @@ fn register() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(target_os = "macos")]
 mod macos {
     use super::*;
-    use std::ffi::{CStr, c_char, c_void};
-    type Id = *mut c_void;
-    #[link(name = "objc")]
-    unsafe extern "C" {
-        fn objc_getClass(name: *const c_char) -> Id;
-        fn sel_registerName(name: *const c_char) -> Id;
-        fn object_getClass(object: Id) -> Id;
-        fn class_addMethod(
-            class: Id,
-            selector: Id,
-            method: unsafe extern "C" fn(Id, Id, Id, Id),
-            types: *const c_char,
-        ) -> bool;
-        fn objc_msgSend();
+    use objc2::{
+        MainThreadMarker, MainThreadOnly, define_class, ffi, msg_send,
+        rc::Retained,
+        runtime::{AnyObject, Imp, NSObject, Sel},
+        sel,
+    };
+    use objc2_app_kit::{
+        NSApplication, NSApplicationDelegateReply, NSApplicationWillFinishLaunchingNotification,
+    };
+    use objc2_foundation::{NSArray, NSNotification, NSNotificationCenter, NSString};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static INSTALLED: AtomicBool = AtomicBool::new(false);
+    /// Whether `application:openFiles:` was added to the app delegate.
+    pub fn installed() -> bool {
+        INSTALLED.load(Ordering::Relaxed)
     }
-    unsafe fn send(object: Id, name: &CStr) -> Id {
-        let f: unsafe extern "C" fn(Id, Id) -> Id =
-            unsafe { std::mem::transmute(objc_msgSend as unsafe extern "C" fn()) };
-        unsafe { f(object, sel_registerName(name.as_ptr())) }
-    }
-    unsafe extern "C" fn open_files(_: Id, _: Id, app: Id, files: Id) {
-        unsafe {
-            let count = send(files, c"count") as usize;
-            let at: unsafe extern "C" fn(Id, Id, usize) -> Id =
-                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-            for index in 0..count {
-                let file = at(files, sel_registerName(c"objectAtIndex:".as_ptr()), index);
-                let bytes = send(file, c"UTF8String") as *const c_char;
-                if !bytes.is_null() {
-                    queue().lock().unwrap().push_back(PathBuf::from(
-                        CStr::from_ptr(bytes).to_string_lossy().as_ref(),
-                    ));
-                }
+
+    type OpenFiles = unsafe extern "C-unwind" fn(
+        *mut AnyObject,
+        Sel,
+        *mut NSApplication,
+        *mut NSArray<NSString>,
+    );
+    unsafe extern "C-unwind" fn open_files(
+        _: *mut AnyObject,
+        _: Sel,
+        app: *mut NSApplication,
+        files: *mut NSArray<NSString>,
+    ) {
+        // SAFETY: AppKit passes the application and an array of path strings.
+        if let Some(files) = unsafe { files.as_ref() } {
+            for file in files.to_vec() {
+                enqueue(PathBuf::from(file.to_string()));
             }
-            let reply: unsafe extern "C" fn(Id, Id, usize) =
-                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
-            reply(app, sel_registerName(c"replyToOpenOrPrint:".as_ptr()), 0);
+        }
+        if let Some(app) = unsafe { app.as_ref() } {
+            app.replyToOpenOrPrint(NSApplicationDelegateReply::Success);
         }
     }
-    pub unsafe fn install() {
-        unsafe {
-            let app = send(
-                objc_getClass(c"NSApplication".as_ptr()),
-                c"sharedApplication",
-            );
-            let delegate = send(app, c"delegate");
-            class_addMethod(
-                object_getClass(delegate),
-                sel_registerName(c"application:openFiles:".as_ptr()),
-                open_files,
+
+    /// Adds `application:openFiles:` to winit's application delegate class.
+    fn install(mtm: MainThreadMarker) {
+        let Some(delegate) = NSApplication::sharedApplication(mtm).delegate() else {
+            return;
+        };
+        let object: &AnyObject = delegate.as_ref();
+        let class = object.class();
+        // SAFETY: the implementation matches the `v@:@@` encoding of
+        // `application:openFiles:`; the runtime requires an untyped `Imp`.
+        let added = unsafe {
+            ffi::class_addMethod(
+                class as *const _ as *mut _,
+                sel!(application:openFiles:),
+                std::mem::transmute::<OpenFiles, Imp>(open_files),
                 c"v@:@@".as_ptr(),
+            )
+        };
+        // Fails when the delegate already implements the method, in which case
+        // launch arguments are read directly instead.
+        if added.as_bool() {
+            INSTALLED.store(true, Ordering::Relaxed);
+        }
+    }
+    pub fn install_on_main_thread() {
+        if let Some(mtm) = MainThreadMarker::new()
+            && !installed()
+        {
+            install(mtm);
+        }
+    }
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[thread_kind = MainThreadOnly]
+        #[name = "BenchUpLaunchObserver"]
+        struct LaunchObserver;
+
+        impl LaunchObserver {
+            #[unsafe(method(benchUpWillFinishLaunching:))]
+            fn will_finish_launching(&self, _notification: &NSNotification) {
+                install(self.mtm());
+            }
+        }
+    );
+
+    /// When macOS launches BenchUp to open a document, AppKit delivers the
+    /// open-documents event during `finishLaunching`, before eframe creates the
+    /// app. winit only sets its delegate when the event loop is built, so add the
+    /// handler from the will-finish-launching notification: it fires after the
+    /// delegate exists and before AppKit dispatches the launch documents.
+    pub fn observe_launch() {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let observer: Retained<LaunchObserver> =
+            unsafe { msg_send![LaunchObserver::alloc(mtm), init] };
+        // SAFETY: the observer implements the selector with a notification argument.
+        unsafe {
+            NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
+                &observer,
+                sel!(benchUpWillFinishLaunching:),
+                Some(NSApplicationWillFinishLaunchingNotification),
+                None,
             );
         }
+        // The notification center does not retain observers.
+        std::mem::forget(observer);
     }
 }

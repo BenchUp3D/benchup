@@ -11,6 +11,8 @@ fn main() -> eframe::Result {
     }
     // Installer hooks must run before opening windows or loading user data.
     benchup_app::initialize_updater();
+    // Documents that launch the app arrive before the egui app is created.
+    benchup_app::desktop_files::prepare_launch();
 
     let viewport = eframe::egui::ViewportBuilder::default()
         .with_decorations(false)
