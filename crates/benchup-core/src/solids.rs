@@ -775,15 +775,72 @@ impl Model {
         let frame = Frame::new(&[&copy])?;
         Ok(csg::volume(&import(&copy, frame)?).abs() * frame.scale.powi(3))
     }
+    /// Combines two solids. Connections of a replaced board move to the body
+    /// that takes its place (the trimmed board, the union, or its split piece);
+    /// connections of boards without a single replacement are removed.
     pub fn boolean_solids(
         &mut self,
         first: u64,
         second: u64,
         operation: SolidOperation,
     ) -> Result<BTreeSet<u64>, &'static str> {
+        let (connections, boards) = (self.connections.clone(), self.connected_boards());
         if self.edit_context.is_some() {
-            return self.edit_in_context(|model| model.boolean_solids(first, second, operation));
+            return self.edit_in_context_before_sync(
+                |model| model.boolean_solids_in_scope(first, second, operation),
+                |model, (_, replacements)| {
+                    // Scoped copies do not replace the document's connections.
+                    // Restore them before peers copy the edited definition.
+                    model.drop_connections_of_removed_boards(&boards);
+                    model.transfer_connections(&connections, replacements);
+                },
+            ).map(|(result, _)| result);
         }
+        let (result, replacements) = self.boolean_solids_in_scope(first, second, operation)?;
+        if !connections.is_empty() {
+            self.drop_connections_of_removed_boards(&boards);
+            self.transfer_connections(&connections, &replacements);
+        }
+        Ok(result)
+    }
+    /// Restores `before` connections that this edit removed onto the boards in
+    /// `replacements` (old board -> new board).
+    fn transfer_connections(
+        &mut self,
+        before: &BTreeMap<u64, crate::connections::Connection>,
+        replacements: &BTreeMap<u64, u64>,
+    ) {
+        for (&id, connection) in before {
+            if self.connections.contains_key(&id)
+                || !connection.members.iter().any(|m| replacements.contains_key(m))
+            {
+                continue;
+            }
+            let members = connection.members.map(|m| replacements.get(&m).copied().unwrap_or(m));
+            if members[0] == members[1]
+                || !members.iter().all(|m| self.objects.contains_key(m))
+                || (matches!(connection.operation, crate::connections::ConnectionOperation::Joinery(_))
+                    && self.has_joinery_between(members))
+            {
+                continue;
+            }
+            let mut connection = connection.clone();
+            // The entry face belongs to the first board; a replaced board has
+            // new faces. An untouched first board keeps it, even when it is a
+            // face of the joint-cut geometry that the source model lacks.
+            if members[0] != connection.members[0] {
+                connection.entry_face = None;
+            }
+            connection.members = members;
+            self.connections.insert(id, connection);
+        }
+    }
+    fn boolean_solids_in_scope(
+        &mut self,
+        first: u64,
+        second: u64,
+        operation: SolidOperation,
+    ) -> Result<(BTreeSet<u64>, BTreeMap<u64, u64>), &'static str> {
         let (a_ids, b_ids) = (self.solid_entities(first)?, self.solid_entities(second)?);
         if !a_ids.is_disjoint(&b_ids) {
             return Err(tr!("core.solids.choose_two_different_solids"));
@@ -839,7 +896,7 @@ impl Model {
             next.validate()
                 .map_err(|_| tr!("core.solids.the_result_cannot_be_represented_as_valid_planar"))?;
             *self = next;
-            return Ok(result);
+            return Ok((result, BTreeMap::new()));
         }
         let (a, b) = (a_solid?, b_solid?);
         let mut pieces = vec![];
@@ -847,13 +904,14 @@ impl Model {
             SolidOperation::OuterShell | SolidOperation::Union => pieces.push((
                 csg::apply(a, b, Boolean::Union, frame.epsilon)?,
                 operation.label(),
+                [true, true],
             )),
             SolidOperation::Intersect => {
                 let overlap = csg::apply(a, b, Boolean::Intersect, frame.epsilon)?;
                 if overlap.is_empty() || csg::volume(&overlap).abs() < 1e-15 {
                     return Err(tr!("core.solids.the_solids_have_no_shared_volume"));
                 }
-                pieces.push((overlap, tr!("core.solids.intersection")));
+                pieces.push((overlap, tr!("core.solids.intersection"), [false, false]));
             }
             SolidOperation::Trim | SolidOperation::Split => {
                 let overlap = csg::apply(a.clone(), b.clone(), Boolean::Intersect, frame.epsilon)?;
@@ -866,8 +924,9 @@ impl Model {
                     pieces.push((
                         csg::apply(a, b, Boolean::Difference, frame.epsilon)?,
                         tr!("core.solids.split_a"),
+                        [true, false],
                     ));
-                    pieces.push((overlap, tr!("core.solids.split_overlap")));
+                    pieces.push((overlap, tr!("core.solids.split_overlap"), [false, false]));
                 }
                 pieces.push((
                     remainder_b,
@@ -876,9 +935,14 @@ impl Model {
                     } else {
                         tr!("core.solids.split_b")
                     },
+                    [false, true],
                 ));
             }
         }
+        let boards = |ids: &BTreeSet<u64>| -> Vec<u64> {
+            ids.iter().copied().filter(|id| self.objects.contains_key(id)).collect()
+        };
+        let sources = [boards(&a_ids), boards(&b_ids)];
         let mut next = self.clone();
         let mut removed = b_ids;
         if operation != SolidOperation::Trim {
@@ -886,7 +950,8 @@ impl Model {
         }
         next.erase(&removed);
         let mut result = BTreeSet::new();
-        for (polygons, name) in pieces {
+        let mut replacements = BTreeMap::new();
+        for (polygons, name, inherits) in pieces {
             if let Some(id) = output(
                 &mut next,
                 polygons,
@@ -896,6 +961,9 @@ impl Model {
                 true,
             )? {
                 result.insert(id);
+                for (source, _) in sources.iter().zip(inherits).filter(|(_, inherits)| *inherits) {
+                    replacements.extend(source.iter().map(|board| (*board, id)));
+                }
             }
         }
         if !self.wood_glue.is_empty() {
@@ -908,6 +976,6 @@ impl Model {
                 .map_err(|_| tr!("core.solids.the_result_cannot_form_a_valid_closed_solid"))?;
         }
         *self = next;
-        Ok(result)
+        Ok((result, replacements))
     }
 }

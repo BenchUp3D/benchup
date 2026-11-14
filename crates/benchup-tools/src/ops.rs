@@ -1047,29 +1047,15 @@ fn erase(model: &mut Model, a: IdsArg) -> Res {
         ));
     }
     let set = entities(model, &a.ids, true)?;
-    let intact: Vec<u64> = model
-        .connections
-        .iter()
-        .filter(|(_, c)| c.members.iter().all(|m| model.contains_entity(m)))
-        .map(|(id, _)| *id)
-        .collect();
-    model.erase(&set);
+    // The core removes the joints of the boards it erases (BenchUp3D/editor#36).
+    let removed = model.erase(&set);
     let erased: Vec<u64> = set.iter().copied().filter(|id| !model.contains_entity(id)).collect();
     if erased.is_empty() {
         return Err("nothing was erased".into());
     }
-    // The core keeps joints whose boards are gone (BenchUp3D/editor#36);
-    // remove the ones this call left without a board.
-    let orphaned: Vec<u64> = intact
-        .into_iter()
-        .filter(|id| model.connections[id].members.iter().any(|m| !model.contains_entity(m)))
-        .collect();
-    for id in &orphaned {
-        model.connections.remove(id);
-    }
     let mut done = Done { erased, ..Default::default() };
-    if !orphaned.is_empty() {
-        done.extra.insert("removed_joints".into(), json!(orphaned));
+    if !removed.is_empty() {
+        done.extra.insert("removed_joints".into(), json!(removed));
     }
     Ok(done)
 }

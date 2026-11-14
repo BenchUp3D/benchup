@@ -243,6 +243,15 @@ impl Model {
         &mut self,
         operation: impl FnOnce(&mut Self) -> Result<T, &'static str>,
     ) -> Result<T, &'static str> {
+        self.edit_in_context_before_sync(operation, |_, _| {})
+    }
+    /// Repair document-level relations after replacing scoped geometry, before
+    /// component peers copy it. Both steps stay inside the same transaction.
+    pub(crate) fn edit_in_context_before_sync<T>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> Result<T, &'static str>,
+        before_sync: impl FnOnce(&mut Self, &T),
+    ) -> Result<T, &'static str> {
         let context = self.edit_context.ok_or(tr!("core.edit_context.no_object_is_open_for_editing"))?;
         if self.is_locked(context) {
             return Err(tr!("core.edit_context.unlock_the_object_before_editing_it"));
@@ -255,6 +264,7 @@ impl Model {
         if contents != before {
             let mut next = self.clone();
             next.replace_contents(context, &contents)?;
+            before_sync(&mut next, &result);
             next.synchronize_edit_context()?;
             *self = next;
         }
@@ -506,8 +516,12 @@ impl Model {
                     Some((*source, coverage))
                 }).collect();
                 contents.clean_wood_glue();
+                let links = self.peer_connection_links(&instance, &peer_instance, &contents);
                 self.remove_contents(peer)?;
                 let (entities, remap) = self.paste_mapped(&contents, DVec3::ZERO, false);
+                if let Some((old, links)) = links {
+                    self.relink_peer_connections(&old, &links, &remap);
+                }
                 let vertex_remap: BTreeMap<_, _> = stable_vertices
                     .iter()
                     .map(|(source, old)| (remap[source], *old))
@@ -566,6 +580,74 @@ impl Model {
         self.clean_unused_vertices();
         self.clean_entity_state();
         self.validate()
+    }
+    /// Pasting a peer's new contents gives its boards new ids. Returns the
+    /// peer's old entities and, for each old board or face a connection uses,
+    /// the matching id in the source `contents`, found through the definition
+    /// keys both instances share.
+    fn peer_connection_links(
+        &self,
+        source: &crate::objects::Object,
+        peer: &crate::objects::Object,
+        contents: &Self,
+    ) -> Option<(BTreeSet<u64>, BTreeMap<u64, u64>)> {
+        if self.connections.is_empty() {
+            return None;
+        }
+        let old = self.expand_entities(&peer.entities);
+        let used: BTreeSet<u64> = self
+            .connections
+            .values()
+            .flat_map(|c| c.members.into_iter().chain(c.entry_face))
+            .filter(|id| old.contains(id))
+            .collect();
+        if used.is_empty() {
+            return None;
+        }
+        let keys: BTreeMap<u64, u64> = peer.definition_entities.iter().map(|(key, id)| (*id, *key)).collect();
+        let to_source = |id: &u64| source.definition_entities.get(keys.get(id)?).copied();
+        let links = used
+            .into_iter()
+            .filter_map(|id| {
+                let Some(board) = self.objects.get(&id) else {
+                    return Some((id, to_source(&id)?));
+                };
+                // A board's own faces identify the same board in the source.
+                let face = board.entities.iter().find_map(|child| {
+                    to_source(child).filter(|face| contents.faces.contains_key(face))
+                })?;
+                Some((id, contents.parent(face)?))
+            })
+            .collect();
+        Some((old, links))
+    }
+    /// Connections inside the peer are pasted again from the source contents,
+    /// so drop the old copies. Point connections from outside at the pasted
+    /// boards, and drop the ones whose board the definition no longer has.
+    fn relink_peer_connections(
+        &mut self,
+        old: &BTreeSet<u64>,
+        links: &BTreeMap<u64, u64>,
+        remap: &BTreeMap<u64, u64>,
+    ) {
+        let new = |id: &u64| remap.get(links.get(id)?).copied();
+        self.connections.retain(|_, connection| {
+            if connection.members.iter().all(|m| old.contains(m)) {
+                return false;
+            }
+            for member in &mut connection.members {
+                if old.contains(member) {
+                    let Some(id) = new(member) else {
+                        return false;
+                    };
+                    *member = id;
+                }
+            }
+            if let Some(face) = connection.entry_face.filter(|face| old.contains(face)) {
+                connection.entry_face = new(&face);
+            }
+            true
+        });
     }
     /// A clipboard snapshot may predate a definition edit. Reuse the current
     /// definition while preserving the copied instance's placement.

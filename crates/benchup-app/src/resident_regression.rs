@@ -60,8 +60,12 @@ impl SceneCache {
                         .find(|id| !before.faces.contains_key(id))
                         .copied();
                 }
-                2 => doc.model.erase(&added_face.into_iter().collect()),
-                3 => doc.model.erase(&BTreeSet::from([edge])),
+                2 => {
+                    doc.model.erase(&added_face.into_iter().collect());
+                }
+                3 => {
+                    doc.model.erase(&BTreeSet::from([edge]));
+                }
                 4 => {
                     doc.model.edit_context = doc.model.parent(context);
                     doc.model.erase(&BTreeSet::from([context]));
@@ -82,7 +86,9 @@ impl SceneCache {
                     let ids = doc.model.paste_entities(&drawing, DVec3::ZERO);
                     added_group = doc.model.make_object(&ids, false, "New drawing");
                 }
-                6 => doc.model.erase(&added_group.into_iter().collect()),
+                6 => {
+                    doc.model.erase(&added_group.into_iter().collect());
+                }
                 7 => {
                     doc.model
                         .add_guide(corner + DVec3::splat(10.), None)

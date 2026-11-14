@@ -605,6 +605,24 @@ fn erasing_a_board_removes_its_joints() {
 }
 
 #[test]
+fn erasing_a_component_board_reports_removed_peer_joints() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let (side, shelf, _) = joined_pair(&mut model, &mut env);
+    let first = model.make_object(&BTreeSet::from([side, shelf]), true, "Assembly").unwrap();
+    let copy = model.copy_entities(&BTreeSet::from([first]));
+    model.paste_entities(&copy, DVec3::Z * 2.);
+    assert!(model.enter_object(first));
+    let shelf = model.objects[&first].entities.iter().copied()
+        .find(|id| model.objects.get(id).is_some_and(|object| object.name == "Shelf"))
+        .unwrap();
+    let expected: Vec<_> = model.connections.keys().copied().collect();
+    assert_eq!(expected.len(), 2);
+    let outcome = ok(&mut model, &mut env, "erase", json!({"ids": [shelf]}));
+    assert_eq!(outcome.result["removed_joints"], json!(expected));
+    assert!(model.connections.is_empty());
+}
+
+#[test]
 fn joints_are_removed_with_remove_joint_not_erase() {
     let (mut model, mut env) = (Model::default(), ToolEnv::default());
     let (side, shelf, joint) = joined_pair(&mut model, &mut env);
@@ -624,8 +642,12 @@ fn joints_are_removed_with_remove_joint_not_erase() {
 fn the_scene_flags_joints_whose_board_is_gone() {
     let (mut model, mut env) = (Model::default(), ToolEnv::default());
     let (_, shelf, joint) = joined_pair(&mut model, &mut env);
-    // What the app leaves behind today (BenchUp3D/editor#36).
-    model.erase(&BTreeSet::from([shelf]));
+    // Projects saved before the core removed joints with their boards
+    // (BenchUp3D/editor#36) can still contain such a joint.
+    let saved = model.connections[&joint].clone();
+    assert_eq!(model.erase(&BTreeSet::from([shelf])), vec![joint], "the core removes the joint with its board");
+    assert!(model.connections.is_empty());
+    model.connections.insert(joint, saved);
     let scene = ok(&mut model, &mut env, "get_scene", json!({})).result;
     assert_eq!(scene["joints"][0]["missing_boards"], json!([shelf]));
     // Such a joint can still be removed.

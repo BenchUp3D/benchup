@@ -851,6 +851,221 @@ mod tests {
         assert!(cache.cuts.is_empty());
     }
 
+    fn joint(model: &mut Model, members: [u64; 2]) -> u64 {
+        model.add_connection(Connection { members, entry_face: None,
+            operation: ConnectionOperation::Joinery(JointSettings::default()) }).unwrap()
+    }
+
+    #[test]
+    fn erasing_a_board_removes_its_joints_and_undo_restores_them() {
+        let (mut model, members) = pair();
+        let removed = joint(&mut model, members);
+        let others = [
+            board_at(&mut model, DVec3::Y, DVec3::new(0.3, 1.1, 0.04), false),
+            board_at(&mut model, DVec3::new(0.25, 1., 0.), DVec3::new(0.55, 1.1, 0.04), false),
+        ];
+        let kept = joint(&mut model, others);
+        let unrelated = board_at(&mut model, DVec3::splat(2.), DVec3::splat(2.2), false);
+        model.erase(&BTreeSet::from([unrelated]));
+        assert_eq!(model.connections.len(), 2, "erasing an unjoined board keeps every joint");
+        // Boards moved apart keep their relation so it can reactivate.
+        for vertex in model.selection_vertices(&BTreeSet::from([members[1]])) {
+            model.vertices.get_mut(&vertex).unwrap().position.x += 1.;
+        }
+        assert!(model.connections.contains_key(&removed));
+        let before = model.clone();
+        let mut history = History::default();
+        model.erase(&BTreeSet::from([members[1]]));
+        history.record("Erase", before.clone(), &model);
+        assert!(!model.connections.contains_key(&removed));
+        assert!(model.connections.contains_key(&kept), "joints of other boards stay");
+        assert!(model.objects.contains_key(&members[0]));
+        assert!(history.undo(&mut model));
+        assert_eq!(model, before);
+        assert!(history.redo(&mut model));
+        assert!(!model.connections.contains_key(&removed));
+    }
+
+    #[test]
+    fn erasing_another_board_keeps_an_entry_face_on_joint_cut_geometry() {
+        let (mut model, members) = pair();
+        joint(&mut model, members);
+        let unrelated = board_at(&mut model, DVec3::splat(2.), DVec3::splat(2.2), false);
+        // Fasteners are evaluated on the joint-cut geometry, whose cut faces
+        // only exist in the evaluated model.
+        let geometry = model.evaluate_joinery();
+        let cut_face = geometry.model.expand_entities(&BTreeSet::from([members[0]])).into_iter()
+            .find(|id| geometry.model.faces.contains_key(id) && !model.faces.contains_key(id))
+            .unwrap();
+        let fasteners = model.id();
+        model.connections.insert(fasteners, Connection { members, entry_face: Some(cut_face),
+            operation: ConnectionOperation::Fasteners(Default::default()) });
+        assert!(model.erase(&BTreeSet::from([unrelated])).is_empty());
+        assert_eq!(model.connections[&fasteners].entry_face, Some(cut_face));
+    }
+
+    #[test]
+    fn erasing_a_group_removes_the_joints_of_its_boards() {
+        let (mut model, members) = pair();
+        joint(&mut model, members);
+        let outside = board_at(&mut model, DVec3::new(0.5, 0., 0.), DVec3::new(0.8, 0.1, 0.04), false);
+        let group = model.make_object(&BTreeSet::from(members), false, "Pair").unwrap();
+        let grouped = model.connections.values().next().unwrap().members;
+        assert!(grouped.iter().all(|id| model.parent(*id) == Some(group)));
+        model.erase(&BTreeSet::from([group]));
+        assert!(model.connections.is_empty());
+        assert!(model.objects.contains_key(&outside));
+    }
+
+    #[test]
+    fn erasing_a_board_inside_an_open_group_or_component_removes_its_joints() {
+        for component in [false, true] {
+            let (mut model, members) = pair();
+            let parent = model.make_object(&BTreeSet::from(members), component, "Pair").unwrap();
+            assert!(model.enter_object(parent));
+            let inner: Vec<u64> = model.objects[&parent].entities.iter().copied()
+                .filter(|id| model.objects.contains_key(id)).collect();
+            let removed = joint(&mut model, [inner[0], inner[1]]);
+            model.erase(&BTreeSet::from([inner[1]]));
+            assert!(!model.objects.contains_key(&inner[1]), "component={component}");
+            assert!(!model.connections.contains_key(&removed), "component={component}");
+            assert!(model.objects.contains_key(&inner[0]), "component={component}");
+        }
+    }
+
+    fn assert_connections_resolve(model: &Model) {
+        for connection in model.connections.values() {
+            assert!(connection.members.iter().all(|id| model.objects.contains_key(id)), "{connection:?}");
+            assert!(connection.entry_face.is_none_or(|face| model.faces.contains_key(&face)));
+        }
+    }
+
+    #[test]
+    fn editing_one_component_instance_keeps_the_joints_of_its_peers() {
+        // Board x is jointed to an outside board z, and to its neighbour y
+        // inside the same component.
+        let (mut model, [x, y]) = pair();
+        let z = board_at(&mut model, DVec3::new(-0.25, 0., 0.), DVec3::new(0.05, 0.1, 0.04), false);
+        joint(&mut model, [x, y]);
+        let outside = joint(&mut model, [x, z]);
+        let first = model.make_object(&BTreeSet::from([x, y]), true, "Pair").unwrap();
+        let copy = model.copy_entities(&BTreeSet::from([first]));
+        let second = *model.paste_entities(&copy, DVec3::Z * 2.).first().unwrap();
+        assert_eq!(model.connections.len(), 3, "the copy brings its own inner joint");
+        // Draw and erase a stray edge in the second instance: each edit pastes
+        // the first instance's boards again under new ids.
+        assert!(model.enter_object(second));
+        let stray = model.add_edge(DVec3::splat(5.), DVec3::new(5.1, 5., 5.)).unwrap();
+        let before: BTreeSet<_> = model.connections.keys().copied().collect();
+        let removed: BTreeSet<_> = model.erase(&BTreeSet::from([stray])).into_iter().collect();
+        let after: BTreeSet<_> = model.connections.keys().copied().collect();
+        assert_eq!(removed, before.difference(&after).copied().collect::<BTreeSet<_>>());
+        assert_eq!(removed.len(), 1, "report the peer joint replaced during propagation");
+        assert!(!model.objects.contains_key(&x), "the peer's boards were pasted again");
+        assert_eq!(model.connections.len(), 3, "inner joints are not duplicated");
+        assert_connections_resolve(&model);
+        let relinked = model.connections[&outside].members;
+        assert_eq!(relinked[1], z);
+        assert_eq!(model.parent(relinked[0]), Some(first));
+        for instance in [first, second] {
+            let inner = model.connections.values()
+                .filter(|c| c.members.iter().all(|id| model.parent(*id) == Some(instance)))
+                .count();
+            assert_eq!(inner, 1, "each instance keeps one inner joint");
+        }
+        // Erasing a board from the definition removes its joints in every
+        // instance, including the one to the outside board.
+        let board = model.objects[&second].entities.iter().copied()
+            .find(|id| model.objects.contains_key(id)).unwrap();
+        let expected: Vec<_> = model.connections.keys().copied().collect();
+        assert_eq!(model.erase(&BTreeSet::from([board])), expected);
+        assert!(model.connections.is_empty());
+    }
+
+    #[test]
+    fn exploding_a_board_removes_its_joints() {
+        let (mut model, members) = pair();
+        let removed = joint(&mut model, members);
+        model.dissolve_objects(&BTreeSet::from([members[1]]), false);
+        assert!(!model.connections.contains_key(&removed));
+        // Exploding the group around jointed boards keeps their joint.
+        let (mut model, members) = pair();
+        let kept = joint(&mut model, members);
+        let group = model.make_object(&BTreeSet::from(members), false, "Pair").unwrap();
+        model.dissolve_objects(&BTreeSet::from([group]), false);
+        assert!(model.connections.contains_key(&kept));
+    }
+
+    #[test]
+    fn solid_operations_move_joints_to_the_resulting_body() {
+        use crate::SolidOperation;
+        for (operation, open) in [SolidOperation::Trim, SolidOperation::Union, SolidOperation::Split]
+            .into_iter().flat_map(|operation| [(operation, false), (operation, true)])
+        {
+            let (mut model, [a, b]) = pair();
+            let c = board_at(&mut model, DVec3::new(0.5, 0., 0.), DVec3::new(0.8, 0.1, 0.04), false);
+            let between = joint(&mut model, [a, b]);
+            let outside = joint(&mut model, [b, c]);
+            if open {
+                let group = model.make_object(&BTreeSet::from([a, b, c]), false, "Boards").unwrap();
+                assert!(model.enter_object(group));
+            }
+            // Grouping gives the boards new ids.
+            let [a, b] = model.connections[&between].members;
+            let c = model.connections[&outside].members[1];
+            let result = model.boolean_solids(a, b, operation).unwrap();
+            assert_connections_resolve(&model);
+            let moved = model.connections[&outside].members;
+            assert!(result.contains(&moved[0]) && moved[1] == c, "{operation:?}");
+            assert_eq!(model.connections.contains_key(&between), operation != SolidOperation::Union,
+                "{operation:?}: a joint survives only while its two boards stay distinct");
+        }
+    }
+
+    #[test]
+    fn solid_operations_preserve_joints_in_component_copies() {
+        for operation in [SolidOperation::Trim, SolidOperation::Union, SolidOperation::Split] {
+            for nested in [false, true] {
+                let (mut model, [a, b]) = pair();
+                let c = board_at(&mut model, DVec3::new(0.5, 0., 0.), DVec3::new(0.8, 0.1, 0.04), false);
+                let between = joint(&mut model, [a, b]);
+                let neighbour = joint(&mut model, [b, c]);
+                let mut roots = BTreeSet::from([a, b, c]);
+                if nested {
+                    roots = BTreeSet::from([model.make_object(&roots, false, "Boards").unwrap()]);
+                }
+                let first = model.make_object(&roots, true, "Assembly").unwrap();
+                let copy = model.copy_entities(&BTreeSet::from([first]));
+                let second = *model.paste_entities(&copy, DVec3::Z * 2.).first().unwrap();
+                assert!(model.enter_object(first));
+                if nested {
+                    let group = *model.objects[&first].entities.first().unwrap();
+                    assert!(model.enter_object(group));
+                }
+                let [a, b] = model.connections[&between].members;
+                let c = model.connections[&neighbour].members[1];
+                let before = model.clone();
+                assert!(model.boolean_solids(a, a, operation).is_err());
+                assert_eq!(model, before, "a failed operation must preserve every joint");
+
+                let result = model.boolean_solids(a, b, operation).unwrap();
+                let expected = if operation == SolidOperation::Union { 1 } else { 2 };
+                assert_eq!(model.connections.len(), expected * 2, "{operation:?}, nested={nested}");
+                assert_connections_resolve(&model);
+                model.validate().unwrap();
+                let moved = model.connections[&neighbour].members;
+                assert!(result.contains(&moved[0]) && moved[1] == c);
+                for instance in [first, second] {
+                    let contents = model.expand_entities(&model.objects[&instance].entities);
+                    let joints = model.connections.values()
+                        .filter(|joint| joint.members.iter().all(|id| contents.contains(id)))
+                        .count();
+                    assert_eq!(joints, expected, "{operation:?}, nested={nested}, instance={instance}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn changed_cut_allocation_does_not_invalidate_independent_joints() {
         let (mut source, first) = pair();
