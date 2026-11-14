@@ -539,7 +539,7 @@ mod tests {
         let ctx = egui::Context::default();
         let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
             for kind in JointKind::ALL {
-                let id = ui.id().with(("cached_joint_card", kind));
+                let id = ui.scope_id().with(("cached_joint_card", kind));
                 let key = PreviewKey {
                     rect: Rect::from_min_size(egui::pos2(10., 20.), egui::vec2(145., 75.)),
                     kind, outline: Color32::BLACK, enabled: true,

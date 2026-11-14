@@ -1250,6 +1250,7 @@ mod tests {
             ("pt_BR", "Português (Brasil)"),
             ("vi_VN", "Tiếng Việt"),
             ("es_419", "Español"),
+            ("it_IT", "Italiano"),
         ];
         for (language, _) in &native[1..] {
             benchup_core::i18n::set_language(language);
