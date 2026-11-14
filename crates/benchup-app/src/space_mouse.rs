@@ -863,7 +863,8 @@ mod tests {
         for (language, connected, denied) in [
             ("zh_CN", "已连接：My SpaceMouse", "未获准访问 3D 鼠标"),
             ("pt_BR", "Conectado: My SpaceMouse", "O acesso ao mouse 3D não foi permitido"),
-            ("en", "Connected: My SpaceMouse", "3D Mouse access was not allowed"),
+            ("es_419", "Conectado: My SpaceMouse", "No se permitió el acceso al Mouse 3D"),
+            ("en_US", "Connected: My SpaceMouse", "3D Mouse access was not allowed"),
         ] {
             benchup_core::i18n::set_language(language);
             assert_eq!(browser_status_label("connected", Some("My SpaceMouse")), connected);

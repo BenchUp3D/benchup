@@ -245,7 +245,7 @@ mod guide_preference_tests {
         assert_eq!(restored.drawing_tool, Tool::Line);
         assert_eq!(restored.images.preferences, app.images.preferences);
         for key in ["reference_image_defaults", "reference_image_appearance"] {
-            let id = egui::Id::new(("test/image-section", key));
+            let id = egui::Id::unique(("test/image-section", key));
             restore_section(&restored_ctx, id, key, true);
             assert!(!egui::collapsing_header::CollapsingState::load_with_default_open(&restored_ctx, id, true).is_open());
         }
@@ -2214,6 +2214,27 @@ mod preference_tests {
     }
 
     #[test]
+    fn dimension_input_overlay_restores_without_model_edits_and_defaults_on() {
+        let old: DisplaySettings = serde_json::from_str("{}").unwrap();
+        assert!(old.dimension_input_overlay);
+        let ctx = egui::Context::default();
+        let mut storage = SavedPreferences::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        for enabled in [false, true] {
+            app.doc.display.dimension_input_overlay = enabled;
+            storage.flushed = false;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&ctx, Some(&storage));
+            assert_eq!(restored.doc.display.dimension_input_overlay, enabled);
+            restored.new_model(&ctx);
+            assert_eq!(restored.doc.display.dimension_input_overlay, enabled);
+        }
+    }
+
+    #[test]
     fn grain_direction_visibility_and_tool_restore_without_model_edits() {
         let old: DisplaySettings = serde_json::from_str("{}").unwrap();
         assert!(old.grain_direction);
@@ -3053,7 +3074,7 @@ mod preference_tests {
 
     #[test]
     fn first_launch_language_is_saved_without_a_model_edit_and_not_redetected() {
-        for language in ["en", "zh_CN", "pt_BR"] {
+        for language in ["en_US", "zh_CN", "pt_BR", "vi_VN", "es_419"] {
             let ctx = egui::Context::default();
             let mut storage = SavedPreferences::default();
             let mut app = BenchUpApp::with_document(Document::default(), None, true);
@@ -3091,7 +3112,7 @@ mod preference_tests {
                 Some(&storage),
                 || panic!("Existing preferences must not trigger language detection"),
             );
-            assert_eq!(app.general_settings.language, "en");
+            assert_eq!(app.general_settings.language, "en_US");
             assert_eq!(app.general_settings.orbit_speed, 2.0);
         }
     }
@@ -3100,7 +3121,7 @@ mod preference_tests {
     fn language_defaults_and_saves_without_a_model_edit() {
         let mut saved: InspectorPreferences =
             serde_json::from_str(r#"{"general":{"orbit_speed":2.0}}"#).unwrap();
-        assert_eq!(saved.general.language, "en");
+        assert_eq!(saved.general.language, "en_US");
         saved.general.language = "unsupported".into();
 
         let mut storage = SavedPreferences::default();
@@ -3108,7 +3129,7 @@ mod preference_tests {
         let ctx = egui::Context::default();
         let mut app = BenchUpApp::with_document(Document::default(), None, true);
         app.restore_inspector_preferences(&ctx, Some(&storage));
-        assert_eq!(app.general_settings.language, "en");
+        assert_eq!(app.general_settings.language, "en_US");
         assert_eq!(app.general_settings.orbit_speed, 2.);
 
         app.general_settings.language = "zh_CN".into();
@@ -5527,6 +5548,7 @@ impl BenchUpApp {
             (&mut d.group_names, tr!("sidebar.group_names")),
             (&mut d.dimensions, tr!("sidebar.dimensions")),
             (&mut d.face_side_lengths, tr!("sidebar.selected_edge_lengths")),
+            (&mut d.dimension_input_overlay, tr!("sidebar.floating_dimension_input")),
             (&mut d.grain_direction, tr!("grain_direction.show")),
             (&mut d.wood_joinery, tr!("sidebar.wood_joinery")),
         ] {
@@ -5545,6 +5567,7 @@ impl BenchUpApp {
 
         // These application preferences do not modify the project.
         before.face_side_lengths = d.face_side_lengths;
+        before.dimension_input_overlay = d.dimension_input_overlay;
         before.grain_direction = d.grain_direction;
         before.group_emphasis = d.group_emphasis;
         if before != self.doc.display {

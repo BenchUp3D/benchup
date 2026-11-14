@@ -421,6 +421,7 @@ version = "0.7.1"
 dependencies = [
  "benchup-core",
  "benchup-io",
+ "benchup-tools",
  "bytemuck",
  "directories",
  "eframe",
@@ -447,6 +448,16 @@ dependencies = [
  "web-sys",
  "wgpu",
  "zip",
+]
+
+[[package]]
+name = "benchup-cli"
+version = "0.7.1"
+dependencies = [
+ "benchup-core",
+ "benchup-tools",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -478,6 +489,17 @@ name = "benchup-skp"
 version = "0.7.1"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "benchup-tools"
+version = "0.7.1"
+dependencies = [
+ "benchup-core",
+ "flate2",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

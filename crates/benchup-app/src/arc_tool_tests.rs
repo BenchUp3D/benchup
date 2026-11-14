@@ -98,3 +98,38 @@ fn collinear_arc_stays_pending_and_escape_discards_it() {
     assert!(h.app.drawing.is_none());
     assert!(h.app.doc.model.edges.is_empty());
 }
+
+#[test]
+fn arc_height_box_measures_the_sagitta_on_the_pointer_side() {
+    let mut h = Harness::new();
+    h.app.doc.snap_to_geometry = false;
+    h.app.set_tool(Tool::Arc);
+    h.click(h.at(DVec3::ZERO));
+    h.click(h.at(DVec3::new(2., 0., 0.)));
+    let drawing = h.app.drawing.as_ref().unwrap();
+    let (start, end) = (drawing.origin, drawing.arc_end.unwrap());
+    let midpoint = (start + end) * 0.5;
+    let across = drawing.normal.cross((end - start).normalize());
+    let mut snap = h.app.snap.unwrap();
+    // A pointer at the apex gives its own distance from the chord.
+    snap.point = midpoint + across * 0.5;
+    h.app.snap = Some(snap);
+    let (mid, apex, height) = h.app.arc_height_segment().unwrap();
+    assert!(mid.distance(midpoint) < 1e-9);
+    assert!((height - 0.5).abs() < 1e-9, "{height}");
+    assert!(apex.distance(snap.point) < 1e-9);
+    // Off-center pointers report the apex of the arc through them.
+    snap.point = start + (end - start) * 0.25 + across * 0.3;
+    h.app.snap = Some(snap);
+    let (_, _, height) = h.app.arc_height_segment().unwrap();
+    let sagitta = h.app.arc_points(false).unwrap().iter()
+        .map(|p| (*p - start).dot(across))
+        .fold(0., f64::max);
+    assert!((height - sagitta).abs() < 1e-2, "{height} vs {sagitta}");
+    assert!(height > 0.3);
+    // A typed height is shown as-is, on the pointer's side.
+    h.app.length_input = "10cm".into();
+    let (_, apex, height) = h.app.arc_height_segment().unwrap();
+    assert!((height - 0.1).abs() < 1e-9);
+    assert!((apex - midpoint).dot(across) > 0.);
+}

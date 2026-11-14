@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 benchup-core = { path = "../benchup-core" }
+benchup-tools = { path = "../benchup-tools" }
 benchup-io = { path = "../benchup-io" }
 serde.workspace = true
 serde_json.workspace = true
