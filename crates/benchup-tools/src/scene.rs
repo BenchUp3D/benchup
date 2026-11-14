@@ -119,7 +119,192 @@ pub fn object_entry(model: &Model, id: u64) -> Option<Value> {
     if model.is_locked(id) {
         map.insert("locked".into(), json!(true));
     }
+    let profiles = object.entities.iter().filter(|e| model.routes.contains_key(e)).count();
+    if profiles > 0 {
+        map.insert("profiles".into(), json!(profiles));
+    }
     Some(entry)
+}
+
+/// Fields of an object entry that `get_scene{fields}` may pick.
+pub const OBJECT_FIELDS: &[&str] = &[
+    "name", "kind", "parent", "tag", "bounds_mm", "size_mm", "definition", "material", "grain", "hidden", "locked", "profiles",
+];
+/// Parts of the scene summary that `get_scene{sections}` may pick.
+pub const SECTIONS: &[&str] = &["objects", "joints", "dimensions", "texts", "tags", "stock", "loose_geometry", "selection"];
+
+/// What `get_scene` lists. The default lists everything.
+#[derive(Default)]
+pub struct Filter {
+    /// Objects to list, in order; `None` lists every object.
+    pub objects: Option<Vec<u64>>,
+    /// Object fields to keep besides `id`; `None` keeps all.
+    pub fields: Option<BTreeSet<String>>,
+    /// Sections to include; `None` includes all.
+    pub sections: Option<BTreeSet<String>>,
+}
+impl Filter {
+    fn wants(&self, section: &str) -> bool {
+        self.sections.as_ref().is_none_or(|s| s.contains(section))
+    }
+    fn trim(&self, mut entry: Value) -> Value {
+        if let (Some(fields), Some(map)) = (&self.fields, entry.as_object_mut()) {
+            map.retain(|key, _| key == "id" || fields.contains(key));
+        }
+        entry
+    }
+}
+
+/// Router profiles on a board's edges: the edge, the profile and its sizes,
+/// and the directions of the two faces the edge lies between.
+pub fn profiles_json(model: &Model, board: u64) -> Vec<Value> {
+    use benchup_core::router::Profile;
+    let Some(object) = model.objects.get(&board) else { return Vec::new() };
+    if !object.entities.iter().any(|e| model.routes.contains_key(e)) {
+        return Vec::new();
+    }
+    let mut adjacency = edge_faces(model, board);
+    object
+        .entities
+        .iter()
+        .filter_map(|edge| Some((*edge, model.routes.get(edge)?, model.edges.get(edge)?)))
+        .map(|(id, settings, edge)| {
+            let mut entry = json!({"edge": id, "profile": profile_name(settings.profile)});
+            match settings.profile {
+                Profile::Chamfer => entry["width_mm"] = json!(mm(settings.width)),
+                Profile::Roundover | Profile::Cove | Profile::Ogee => entry["radius_mm"] = json!(mm(settings.width)),
+                Profile::Bevel => {
+                    entry["width_mm"] = json!(mm(settings.width));
+                    entry["angle_degrees"] = json!(settings.angle_degrees);
+                }
+                Profile::Rabbet => {
+                    entry["width_mm"] = json!(mm(settings.width));
+                    entry["depth_mm"] = json!(mm(settings.depth));
+                }
+                Profile::Groove => {
+                    entry["width_mm"] = json!(mm(settings.width));
+                    entry["depth_mm"] = json!(mm(settings.depth));
+                    entry["offset_mm"] = json!(mm(settings.offset));
+                }
+                Profile::Bead => {
+                    entry["radius_mm"] = json!(mm(settings.width));
+                    entry["offset_mm"] = json!(mm(settings.offset));
+                }
+                Profile::None => {}
+            }
+            if settings.reverse {
+                entry["reverse"] = json!(true);
+            }
+            let (a, b) = model.points(edge);
+            entry["from_mm"] = point_mm(a);
+            entry["to_mm"] = point_mm(b);
+            let between: Vec<Value> = adjacency
+                .remove(&id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|face| facing(model, face).map_or(json!(face), Value::from))
+                .collect();
+            entry["between"] = json!(between);
+            entry
+        })
+        .collect()
+}
+
+/// The name add_profile uses for a router profile.
+pub fn profile_name(profile: benchup_core::router::Profile) -> &'static str {
+    use benchup_core::router::Profile;
+    match profile {
+        Profile::Chamfer => "chamfer",
+        Profile::Bevel => "bevel",
+        Profile::Roundover => "roundover",
+        Profile::Cove => "cove",
+        Profile::Rabbet => "rabbet",
+        Profile::Groove => "groove",
+        Profile::Ogee => "ogee",
+        Profile::Bead => "bead",
+        Profile::None => "none",
+    }
+}
+
+/// Each edge of a board with the faces of the board that use it.
+pub fn edge_faces(model: &Model, board: u64) -> BTreeMap<u64, Vec<u64>> {
+    let Some(object) = model.objects.get(&board) else { return BTreeMap::new() };
+    let mut by_ends: BTreeMap<(u64, u64), u64> = BTreeMap::new();
+    for id in &object.entities {
+        if let Some(edge) = model.edges.get(id) {
+            by_ends.insert((edge.a.min(edge.b), edge.a.max(edge.b)), *id);
+        }
+    }
+    let mut out: BTreeMap<u64, Vec<u64>> = by_ends.values().map(|id| (*id, Vec::new())).collect();
+    for id in &object.entities {
+        let Some(face) = model.faces.get(id) else { continue };
+        for ring in std::iter::once(&face.vertices).chain(&face.holes) {
+            for (i, a) in ring.iter().enumerate() {
+                let b = ring[(i + 1) % ring.len()];
+                if let Some(edge) = by_ends.get(&((*a).min(b), (*a).max(b))) {
+                    let faces = out.entry(*edge).or_default();
+                    if !faces.contains(id) {
+                        faces.push(*id);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The outward normal of a face of a part.
+pub fn outward_normal(model: &Model, face: u64) -> Option<DVec3> {
+    let f = model.faces.get(&face)?;
+    Some(faces::plane(model, &f.vertices)?.normal * outward_sign(model, face))
+}
+
+/// "+x", "-z"... for a face square to an axis.
+pub fn facing(model: &Model, face: u64) -> Option<String> {
+    facing_name(outward_normal(model, face)?)
+}
+pub fn facing_name(n: DVec3) -> Option<String> {
+    [(DVec3::X, "x"), (DVec3::Y, "y"), (DVec3::Z, "z")]
+        .into_iter()
+        .find(|(axis, _)| n.dot(*axis).abs() > 0.999)
+        .map(|(axis, name)| format!("{}{name}", if n.dot(axis) > 0. { '+' } else { '-' }))
+}
+
+/// A board's finishing settings, when it has its own.
+pub fn finish_json(model: &Model, id: u64) -> Option<Value> {
+    let settings = model.objects.get(&id)?.surface_treatment_override()?;
+    let grits: Vec<u32> = settings
+        .sanding_grits
+        .iter()
+        .zip(&settings.sanding)
+        .filter(|(_, step)| step.enabled)
+        .map(|(grit, _)| *grit)
+        .collect();
+    let step = |s: &benchup_core::surface_treatment::Step| -> Value {
+        if !s.enabled {
+            return json!(false);
+        }
+        let mut out = json!({"coats": s.coats, "minutes_per_m2": s.minutes_per_m2, "drying_hours": s.drying_hours});
+        if let Some(hours) = s.final_drying_hours {
+            out["final_drying_hours"] = json!(hours);
+        }
+        if let Some(tint) = s.appearance.tint {
+            out["tint_rgb"] = json!(tint);
+        }
+        if let Some(strength) = s.appearance.strength {
+            out["strength"] = json!(strength);
+        }
+        if let Some(sheen) = s.appearance.sheen {
+            out["sheen"] = json!(format!("{sheen:?}").to_lowercase());
+        }
+        out
+    };
+    Some(json!({
+        "sanding_grits": grits,
+        "pre_stain": step(&settings.pre_stain),
+        "stain": step(&settings.stain),
+        "varnish": step(&settings.varnish),
+    }))
 }
 
 pub fn stock_list(
@@ -137,8 +322,9 @@ pub fn stock_list(
 }
 
 /// Joints the core cannot cut, keyed by joint id, with its reason.
+/// Router profiles that cannot be cut are keyed by their edge id.
 pub fn joint_errors(model: &Model) -> BTreeMap<u64, String> {
-    if !model.connections.values().any(|c| matches!(c.operation, ConnectionOperation::Joinery(_))) {
+    if !model.has_machining() {
         return BTreeMap::new();
     }
     model.evaluate_joinery().errors.into_iter().collect()
@@ -173,6 +359,14 @@ pub fn joint_detail(model: &Model, id: u64) -> Option<Value> {
                 params["taper_degrees"] = json!(s.taper_degrees);
             }
             JointKind::Finger => params["fingers"] = json!(s.fingers),
+            JointKind::Biscuit | JointKind::Domino | JointKind::Groove | JointKind::LooseTongue => {
+                params["pocket_thickness_mm"] = json!(mm(s.pocket_thickness));
+                params["pocket_depth_mm"] = json!(mm(s.pocket_depth));
+                if matches!(s.kind, JointKind::Biscuit | JointKind::Domino) {
+                    params["pocket_width_mm"] = json!(mm(s.pocket_width));
+                    params["pocket_count"] = json!(s.pocket_count);
+                }
+            }
             JointKind::HalfLap => {}
         }
         joint["params"] = params;
@@ -184,6 +378,17 @@ pub fn joint_detail(model: &Model, id: u64) -> Option<Value> {
         joint["supported_orientations"] = json!(supported);
         if let Some(overlap) = model.joinery_options(connection.members, s).0 {
             joint["overlap_mm"] = point_mm(overlap.bounds.1 - overlap.bounds.0);
+            if let Some(geometry) = joint_geometry(model, connection.members, s, &overlap) {
+                joint["geometry"] = geometry;
+            }
+        }
+        if let Some(index) = s.trim.member() {
+            joint["trim"] = json!({
+                "board": if index == 0 { "a" } else { "b" },
+                "board_id": connection.members[index],
+                "keep_end": match s.keep_end { benchup_core::joinery::KeepEnd::Lower => "lower", benchup_core::joinery::KeepEnd::Upper => "upper" },
+                "trim_axis": s.trim_axis,
+            });
         }
     }
     match joint_errors(model).get(&id) {
@@ -193,7 +398,99 @@ pub fn joint_detail(model: &Model, id: u64) -> Option<Value> {
     Some(joint)
 }
 
-/// The joint kind as add_joint names it (mortise_tenon, tongue_groove, ...).
+/// Where a joint is, in world millimetres: the shared region (`region_mm`),
+/// the tenon, tongue or lap actually cut in it (`cut_mm`), how deep a goes
+/// into b and which way, and whether the cut in b runs through it, stops at
+/// one face or is closed inside it.
+fn joint_geometry(
+    model: &Model,
+    members: [u64; 2],
+    s: &benchup_core::joinery::JointSettings,
+    overlap: &benchup_core::joinery::JoineryOverlap,
+) -> Option<Value> {
+    use benchup_core::joinery::JointKind;
+    let frame = model.joinery_frame(members[0]).ok()?;
+    let (lo, hi) = overlap.bounds;
+    let corners: Vec<DVec3> = (0..8)
+        .map(|i| frame.world(DVec3::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z })))
+        .collect();
+    let (wlo, whi) = corners.iter().fold((corners[0], corners[0]), |(a, b), p| (a.min(*p), b.max(*p)));
+    let size = hi - lo;
+    let axis_vector = |i: usize| -> DVec3 {
+        let mut v = DVec3::ZERO;
+        v[i] = 1.;
+        (frame.world(v) - frame.world(DVec3::ZERO)).normalize_or_zero()
+    };
+    let depth = s.depth_axis.min(2);
+    let width = s.width_axis.min(2);
+    let height = 3 - depth - width;
+    // a goes into b towards b's centre along the depth axis.
+    let (a_box, b_box) = (frame.bounds(model, members[0])?, frame.bounds(model, members[1])?);
+    let towards = if (b_box.0[depth] + b_box.1[depth]) >= (a_box.0[depth] + a_box.1[depth]) { 1. } else { -1. };
+    let direction = axis_vector(depth) * towards;
+    let mut out = json!({
+        "region_mm": {"min": point_mm(wlo), "max": point_mm(whi)},
+        "depth_mm": mm(size[depth]),
+        "depth_direction": facing_name(direction).map_or_else(|| unit(direction), Value::from),
+    });
+    match s.kind {
+        JointKind::TongueGroove | JointKind::Rabbet => out["tongue_thickness_mm"] = json!(mm(size[width] * s.width_ratio)),
+        JointKind::MortiseTenon => {
+            out["tenon_thickness_mm"] = json!(mm(size[width] * s.width_ratio));
+            out["tenon_height_mm"] = json!(mm(size[height] * s.height_ratio));
+        }
+        _ => {}
+    }
+    // The part of the overlap that is cut, as the core lays it out: a tongue
+    // or tenon centred across the width (and height for a tenon), a rabbet's
+    // tongue at the low end of the width, half the height for a lap. Fingers
+    // and dovetails use the whole overlap.
+    let (mut cl, mut ch) = (lo, hi);
+    match s.kind {
+        JointKind::TongueGroove | JointKind::MortiseTenon => {
+            let margin = size[width] * (1. - s.width_ratio) * 0.5;
+            cl[width] += margin;
+            ch[width] -= margin;
+            if s.kind == JointKind::MortiseTenon {
+                let margin = size[height] * (1. - s.height_ratio) * 0.5;
+                cl[height] += margin;
+                ch[height] -= margin;
+            }
+        }
+        JointKind::Rabbet => ch[width] = lo[width] + size[width] * s.width_ratio,
+        JointKind::HalfLap => ch[height] = lo[height] + size[height] * 0.5,
+        JointKind::Dovetail | JointKind::Finger => {}
+        // Pocket cuts use their own dimensions and can extend beyond the
+        // overlap; the traditional profile bounds would misrepresent them.
+        JointKind::Biscuit | JointKind::Domino | JointKind::Groove | JointKind::LooseTongue => return None,
+    }
+    let cut: Vec<DVec3> = (0..8)
+        .map(|i| frame.world(DVec3::new(if i & 1 == 0 { cl.x } else { ch.x }, if i & 2 == 0 { cl.y } else { ch.y }, if i & 4 == 0 { cl.z } else { ch.z })))
+        .collect();
+    let (clo, chi) = cut.iter().fold((cut[0], cut[0]), |(a, b), p| (a.min(*p), b.max(*p)));
+    out["cut_mm"] = json!({"min": point_mm(clo), "max": point_mm(chi)});
+    // The mortise, groove or socket in b along the axes across the depth:
+    // open at both of b's faces (through), at one (stopped) or at none (closed).
+    let eps = 1.0e-5;
+    let mut ends = serde_json::Map::new();
+    for axis in [width, height] {
+        let open_low = cl[axis] <= b_box.0[axis] + eps;
+        let open_high = ch[axis] >= b_box.1[axis] - eps;
+        let kind = match (open_low, open_high) {
+            (true, true) => "through",
+            (false, false) => "closed",
+            _ => "stopped",
+        };
+        let name = ["x", "y", "z"][axis];
+        let key = if frame.is_project_aligned() { name.to_owned() } else { format!("{name} (a's axes)") };
+        ends.insert(key, json!(kind));
+    }
+    out["cut_in_b"] = Value::Object(ends);
+    out["through_b"] = json!(lo[depth] <= b_box.0[depth] + eps && hi[depth] >= b_box.1[depth] - eps);
+    Some(out)
+}
+
+/// Stable scene names for all joint kinds (mortise_tenon, tongue_groove, ...).
 pub fn joint_kind(connection: &benchup_core::connections::Connection) -> &'static str {
     use benchup_core::joinery::JointKind;
     match &connection.operation {
@@ -204,6 +501,10 @@ pub fn joint_kind(connection: &benchup_core::connections::Connection) -> &'stati
             JointKind::Rabbet => "rabbet",
             JointKind::Dovetail => "dovetail",
             JointKind::Finger => "finger",
+            JointKind::Biscuit => "biscuit",
+            JointKind::Domino => "domino",
+            JointKind::Groove => "groove",
+            JointKind::LooseTongue => "loose_tongue",
         },
         ConnectionOperation::Fasteners(_) => "fasteners",
     }
@@ -228,6 +529,17 @@ pub fn summary(
     selection: &BTreeSet<u64>,
     catalog: &BTreeMap<MaterialId, StockMaterial>,
     budget: usize,
+) -> Value {
+    summary_with(model, selection, catalog, budget, &Filter::default())
+}
+
+/// The summary, keeping only what `filter` asks for.
+pub fn summary_with(
+    model: &Model,
+    selection: &BTreeSet<u64>,
+    catalog: &BTreeMap<MaterialId, StockMaterial>,
+    budget: usize,
+    filter: &Filter,
 ) -> Value {
     let stock = stock_list(model, catalog);
     let errors = joint_errors(model);
@@ -265,15 +577,48 @@ pub fn summary(
         "texts": model.texts.keys().take(MAX_LISTED_ANNOTATIONS).filter_map(|id| annotation_json(model, *id)).collect::<Vec<_>>(),
         "object_count": model.objects.len(),
     });
-    let in_scope: BTreeSet<u64> = model.selectable_entities();
-    let mut order: Vec<u64> = Vec::with_capacity(model.objects.len());
-    order.extend(selection.iter().filter(|id| model.objects.contains_key(id)));
-    order.extend(model.objects.keys().filter(|id| in_scope.contains(id) && !selection.contains(id)));
-    order.extend(model.objects.keys().filter(|id| !in_scope.contains(id) && !selection.contains(id)));
+    let profiles = model.routes.len();
+    if profiles > 0 {
+        out["profile_count"] = json!(profiles);
+    }
+    if let Some(map) = out.as_object_mut() {
+        for (section, keys) in [
+            ("joints", &["joints"][..]),
+            ("dimensions", &["dimensions"]),
+            ("texts", &["texts"]),
+            ("tags", &["tags"]),
+            ("stock", &["stock_catalog"]),
+            ("loose_geometry", &["loose_geometry"]),
+            ("selection", &["selection"]),
+        ] {
+            if !filter.wants(section) {
+                for key in keys {
+                    map.remove(*key);
+                }
+            }
+        }
+    }
+    if !filter.wants("objects") {
+        return out;
+    }
+    let order: Vec<u64> = match &filter.objects {
+        Some(list) => list.clone(),
+        None => {
+            let in_scope: BTreeSet<u64> = model.selectable_entities();
+            let mut order: Vec<u64> = Vec::with_capacity(model.objects.len());
+            order.extend(selection.iter().filter(|id| model.objects.contains_key(id)));
+            order.extend(model.objects.keys().filter(|id| in_scope.contains(id) && !selection.contains(id)));
+            order.extend(model.objects.keys().filter(|id| !in_scope.contains(id) && !selection.contains(id)));
+            order
+        }
+    };
+    if filter.objects.is_some() {
+        out["listed_count"] = json!(order.len());
+    }
     let mut used = out.to_string().len() + 160;
     let mut objects = Vec::new();
     for id in &order {
-        let Some(entry) = object_entry(model, *id) else { continue };
+        let Some(entry) = object_entry(model, *id).map(|e| filter.trim(e)) else { continue };
         let cost = entry.to_string().len() + 1;
         if used + cost > budget {
             break;
@@ -396,6 +741,13 @@ pub fn describe(model: &Model, id: u64) -> Option<Value> {
         entry["faces"] = Value::Array(all.iter().filter_map(|f| face_json(model, *f)).collect());
         if total > MAX_FACES {
             entry["faces_omitted"] = json!(total - MAX_FACES);
+        }
+        let profiles = profiles_json(model, id);
+        if !profiles.is_empty() {
+            entry["profiles"] = json!(profiles);
+        }
+        if let Some(finish) = finish_json(model, id) {
+            entry["finish"] = finish;
         }
         return Some(entry);
     }

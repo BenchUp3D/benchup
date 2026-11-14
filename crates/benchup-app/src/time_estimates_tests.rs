@@ -48,6 +48,26 @@ fn wood_area(model: &Model, selected: &BTreeSet<u64>) -> f64 {
 }
 
 #[test]
+fn pocket_joints_are_counted_and_use_their_saved_workshop_allowances() {
+    use benchup_core::{connections::Connection, joinery::JointSettings};
+    let mut app = BenchUpApp::with_document(Document::default(), None, true);
+    let kinds = [JointKind::Biscuit, JointKind::Domino, JointKind::Groove, JointKind::LooseTongue];
+    // Reporting counts saved relations without requiring valid machining stock.
+    for (i, kind) in kinds.into_iter().enumerate() {
+        app.doc.model.connections.insert(1000 + i as u64, Connection {
+            members: [10 + i as u64, 20 + i as u64], entry_face: None,
+            operation: ConnectionOperation::Joinery(JointSettings { kind, pocket_count: 3, ..Default::default() }),
+        });
+        app.joinery_rates.set_minutes(kind, 7.);
+    }
+    let report = app.time_estimate_report();
+    assert_eq!(report.joinery.len(), kinds.len());
+    for (row, kind) in report.joinery.iter().zip(kinds) {
+        assert_eq!(row, &[kind.label().to_owned(), "1".to_owned(), "7".to_owned(), "0 h 7 min".to_owned()]);
+    }
+}
+
+#[test]
 fn whole_project_joinery_counts_records_and_adds_only_active_work_to_the_report() {
     use benchup_core::{connections::Connection, joinery::JointSettings};
 

@@ -7,7 +7,7 @@ mod mcp;
 mod project;
 
 use benchup_tools::{definitions, is_mutating, mcp_tools};
-use project::{Applied, Project};
+use project::Project;
 use serde_json::{Value, json};
 use std::io::{Read, stdin, stdout};
 use std::path::Path;
@@ -20,9 +20,15 @@ New here? Run `benchup guide` first: conventions, workflow and woodworking recip
 usage:
   benchup new <file.bup> [--name NAME] [--force]   create an empty project
   benchup guide                                    how to model furniture with these tools
-  benchup tools [NAME] [--json]                    list tools, or show one tool's JSON schema
-  benchup scene <file.bup>                         scene summary (objects, stock, joints)
+  benchup tools [NAME] [--json] [--names]          list tools (--names: names only), or show one
+                                                   tool's JSON schema
+  benchup scene <file.bup> [FILTER]                scene summary (objects, stock, joints); FILTER
+                                                   is get_scene's JSON, e.g. '{\"depth\":0}'
   benchup get <file.bup> <id>                      one entity in detail, with its faces
+  benchup render <file.bup> [-o OUT.png] [--view VIEW] [--size WxH]
+                                                   a PNG of the model (iso, front, back, left,
+                                                   right, top, bottom; default iso, 1000x750;
+                                                   64 to 2400 pixels a side)
   benchup call <file.bup> <tool> [ARGS|-]          run a tool; ARGS is a JSON object (- reads stdin)
   benchup call <file.bup> --batch <FILE|->         run JSON lines {\"tool\": .., \"arguments\": {..}}
                                                    as one all-or-nothing undo step; \"$N.created[0]\"
@@ -140,49 +146,30 @@ fn parse_batch(text: &str) -> Result<Vec<(String, Value)>, String> {
 }
 
 fn apply(project: &mut Project, calls: &[(String, Value)]) -> Result<Output, String> {
-    run_calls(project, calls, true)
+    run_calls(project, calls, true, false)
 }
 
-fn run_calls(project: &mut Project, calls: &[(String, Value)], save: bool) -> Result<Output, String> {
-    let batch = calls.len() > 1;
-    Ok(match project.run(calls, save)? {
-        Applied::Ok(mut results) if !batch => ok(results.pop().unwrap_or(Value::Null)),
-        Applied::Ok(results) => ok(json!({"ok": true, "results": results})),
-        Applied::Failed { result, .. } if !batch => Output { value: result, ok: false },
-        Applied::Failed { index, result, earlier } => Output {
-            value: json!({
-                "ok": false,
-                "failed_call": index + 1,
-                "tool": calls[index].0,
-                "result": result,
-                "earlier_results": earlier,
-                "note": "nothing was changed: earlier_results shows what the calls before it returned, then everything was rolled back; fix this call and run the whole batch again",
-            }),
-            ok: false,
-        },
-    })
+fn run_calls(project: &mut Project, calls: &[(String, Value)], save: bool, batch: bool) -> Result<Output, String> {
+    let (value, ok) = project::report(calls, project.run(calls, save)?, batch);
+    Ok(Output { value, ok })
 }
 
-/// Drops the object summaries that changing tools attach to their results,
-/// keeping ids, bounds, errors and the answers of reading tools.
-fn brief(value: &mut Value) {
-    if let Some(map) = value.as_object_mut() {
-        if map.contains_key("created") {
-            map.remove("objects");
-        }
-        for key in ["results", "result"] {
-            match map.get_mut(key) {
-                Some(Value::Array(items)) => items.iter_mut().for_each(brief),
-                Some(item @ Value::Object(_)) => brief(item),
-                _ => {}
-            }
-        }
-    }
+/// Pretty JSON with the answer first: `ok`, then the error and hint of a
+/// failure, then the rest in name order.
+fn pretty(value: &Value) -> String {
+    const FIRST: [&str; 6] = ["ok", "error", "hint", "failed_call", "tool", "dry_run"];
+    let Value::Object(map) = value else { return serde_json::to_string_pretty(value).unwrap_or_default() };
+    let keys = FIRST.iter().copied().filter(|k| map.contains_key(*k)).chain(map.keys().map(String::as_str).filter(|k| !FIRST.contains(k)));
+    let fields: Vec<String> = keys
+        .map(|key| format!("  {}: {}", json!(key), serde_json::to_string_pretty(&map[key]).unwrap_or_default().replace('\n', "\n  ")))
+        .collect();
+    if fields.is_empty() { "{}".into() } else { format!("{{\n{}\n}}", fields.join(",\n")) }
 }
 
 fn tools(args: Args) -> Result<Output, String> {
     match args.positional.as_slice() {
         [] if args.flag("--json") => Ok(ok(Value::Array(mcp_tools()))),
+        [] if args.flag("--names") => Ok(ok(json!(definitions().into_iter().map(|d| d.name).collect::<Vec<_>>()))),
         [] => {
             let list: Vec<Value> = definitions()
                 .into_iter()
@@ -213,11 +200,38 @@ fn run(mut argv: Vec<String>) -> Result<Output, String> {
             let doc = Project::create(path, args.value("--name"), args.flag("--force"))?;
             Ok(ok(json!({"ok": true, "created": path.display().to_string(), "name": doc.name})))
         }
-        "tools" => tools(parse_args(argv, &["--json"], &[])?),
+        "tools" => tools(parse_args(argv, &["--json", "--names"], &[])?),
         "scene" => {
             let args = parse_args(argv, &["--allow-shared"], &[])?;
-            args.expect(1)?;
-            apply(&mut open(&args)?, &[("get_scene".into(), json!({}))])
+            let filter = match args.positional.len() {
+                1 => json!({}),
+                2 => parse_object(&args.positional[1], "FILTER")?,
+                _ => return Err(USAGE.into()),
+            };
+            apply(&mut open(&args)?, &[("get_scene".into(), filter)])
+        }
+        "render" => {
+            let args = parse_args(argv, &["--allow-shared"], &["-o", "--output", "--view", "--size"])?;
+            let path = &args.expect(1)?[0];
+            let view = args.value("--view").unwrap_or("iso");
+            let (width, height) = match args.value("--size") {
+                None => (1000, 750),
+                Some(size) => size
+                    .split_once('x')
+                    .and_then(|(w, h)| Some((w.trim().parse().ok()?, h.trim().parse().ok()?)))
+                    .ok_or("--size is WIDTHxHEIGHT in pixels, e.g. 1200x900")?,
+            };
+            let project = open(&args)?;
+            let rendered = benchup_tools::render::render(&project.doc.model, view, width, height)?;
+            let output = match args.value("-o").or(args.value("--output")) {
+                Some(output) => std::path::PathBuf::from(output),
+                None => Path::new(path).with_extension(format!("{view}.png")),
+            };
+            std::fs::write(&output, &rendered.png).map_err(|e| format!("cannot write {}: {e}", output.display()))?;
+            let mut value = rendered.info;
+            value["ok"] = json!(true);
+            value["file"] = json!(output.display().to_string());
+            Ok(ok(value))
         }
         "get" => {
             let args = parse_args(argv, &["--allow-shared"], &[])?;
@@ -239,12 +253,13 @@ fn run(mut argv: Vec<String>) -> Result<Output, String> {
                 }
                 _ => return Err(USAGE.into()),
             };
-            let mut output = run_calls(&mut open(&args)?, &calls, !args.flag("--dry-run"))?;
+            let batch = args.value("--batch").is_some();
+            let mut output = run_calls(&mut open(&args)?, &calls, !args.flag("--dry-run"), batch)?;
             if args.flag("--dry-run") {
                 output.value["dry_run"] = json!(true);
             }
             if args.flag("--brief") {
-                brief(&mut output.value);
+                project::brief(&mut output.value);
             }
             Ok(output)
         }
@@ -278,7 +293,7 @@ fn run(mut argv: Vec<String>) -> Result<Output, String> {
 fn main() -> ExitCode {
     match run(std::env::args().skip(1).collect()) {
         Ok(output) => {
-            println!("{}", serde_json::to_string_pretty(&output.value).unwrap_or_default());
+            println!("{}", pretty(&output.value));
             if output.ok { ExitCode::SUCCESS } else { ExitCode::from(1) }
         }
         Err(message) => {

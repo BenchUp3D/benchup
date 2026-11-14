@@ -744,7 +744,7 @@ impl SceneCache {
 /// A conservative camera-space bounds test increases depth precision without
 /// clipping any model geometry. Close/inside views retain the original near
 /// plane; parallel views use finite scene bounds instead of a 100,000 km slab.
-fn clip_planes(camera: &Camera, bounds: (DVec3, DVec3)) -> (f64, f64) {
+pub(super) fn clip_planes(camera: &Camera, bounds: (DVec3, DVec3)) -> (f64, f64) {
     let center = (bounds.0 + bounds.1) * 0.5;
     let half = (bounds.1 - bounds.0) * 0.5;
     let forward = (camera.target - camera.eye()).normalize();
