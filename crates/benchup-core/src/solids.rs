@@ -785,13 +785,19 @@ impl Model {
         operation: SolidOperation,
     ) -> Result<BTreeSet<u64>, &'static str> {
         let (connections, boards) = (self.connections.clone(), self.connected_boards());
-        let (result, replacements) = if self.edit_context.is_some() {
-            self.edit_in_context(|model| model.boolean_solids_in_scope(first, second, operation))?
-        } else {
-            self.boolean_solids_in_scope(first, second, operation)?
-        };
+        if self.edit_context.is_some() {
+            return self.edit_in_context_before_sync(
+                |model| model.boolean_solids_in_scope(first, second, operation),
+                |model, (_, replacements)| {
+                    // Scoped copies do not replace the document's connections.
+                    // Restore them before peers copy the edited definition.
+                    model.drop_connections_of_removed_boards(&boards);
+                    model.transfer_connections(&connections, replacements);
+                },
+            ).map(|(result, _)| result);
+        }
+        let (result, replacements) = self.boolean_solids_in_scope(first, second, operation)?;
         if !connections.is_empty() {
-            // Edits in an open object run on a copy whose connections are discarded.
             self.drop_connections_of_removed_boards(&boards);
             self.transfer_connections(&connections, &replacements);
         }

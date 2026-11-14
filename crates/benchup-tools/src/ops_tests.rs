@@ -605,6 +605,24 @@ fn erasing_a_board_removes_its_joints() {
 }
 
 #[test]
+fn erasing_a_component_board_reports_removed_peer_joints() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let (side, shelf, _) = joined_pair(&mut model, &mut env);
+    let first = model.make_object(&BTreeSet::from([side, shelf]), true, "Assembly").unwrap();
+    let copy = model.copy_entities(&BTreeSet::from([first]));
+    model.paste_entities(&copy, DVec3::Z * 2.);
+    assert!(model.enter_object(first));
+    let shelf = model.objects[&first].entities.iter().copied()
+        .find(|id| model.objects.get(id).is_some_and(|object| object.name == "Shelf"))
+        .unwrap();
+    let expected: Vec<_> = model.connections.keys().copied().collect();
+    assert_eq!(expected.len(), 2);
+    let outcome = ok(&mut model, &mut env, "erase", json!({"ids": [shelf]}));
+    assert_eq!(outcome.result["removed_joints"], json!(expected));
+    assert!(model.connections.is_empty());
+}
+
+#[test]
 fn joints_are_removed_with_remove_joint_not_erase() {
     let (mut model, mut env) = (Model::default(), ToolEnv::default());
     let (side, shelf, joint) = joined_pair(&mut model, &mut env);

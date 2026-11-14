@@ -315,9 +315,14 @@ impl Model {
     /// Boards that are only moved apart keep their relations so they can
     /// reactivate; undo restores erased ones from history.
     pub fn erase(&mut self, ids: &BTreeSet<u64>) -> Vec<u64> {
+        let connections: Vec<_> = self.connections.keys().copied().collect();
         let boards = self.connected_boards();
         self.erase_entities(ids);
-        self.drop_connections_of_removed_boards(&boards)
+        self.drop_connections_of_removed_boards(&boards);
+        // Component propagation can remove peer connections before the final
+        // prune. Report every old id absent after the complete edit, including
+        // ids replaced when a surviving peer joint is pasted again.
+        connections.into_iter().filter(|id| !self.connections.contains_key(id)).collect()
     }
     /// Boards that currently exist and belong to at least one connection.
     pub(crate) fn connected_boards(&self) -> BTreeSet<u64> {

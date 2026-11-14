@@ -243,6 +243,15 @@ impl Model {
         &mut self,
         operation: impl FnOnce(&mut Self) -> Result<T, &'static str>,
     ) -> Result<T, &'static str> {
+        self.edit_in_context_before_sync(operation, |_, _| {})
+    }
+    /// Repair document-level relations after replacing scoped geometry, before
+    /// component peers copy it. Both steps stay inside the same transaction.
+    pub(crate) fn edit_in_context_before_sync<T>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> Result<T, &'static str>,
+        before_sync: impl FnOnce(&mut Self, &T),
+    ) -> Result<T, &'static str> {
         let context = self.edit_context.ok_or(tr!("core.edit_context.no_object_is_open_for_editing"))?;
         if self.is_locked(context) {
             return Err(tr!("core.edit_context.unlock_the_object_before_editing_it"));
@@ -255,6 +264,7 @@ impl Model {
         if contents != before {
             let mut next = self.clone();
             next.replace_contents(context, &contents)?;
+            before_sync(&mut next, &result);
             next.synchronize_edit_context()?;
             *self = next;
         }

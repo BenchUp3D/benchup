@@ -956,7 +956,11 @@ mod tests {
         // the first instance's boards again under new ids.
         assert!(model.enter_object(second));
         let stray = model.add_edge(DVec3::splat(5.), DVec3::new(5.1, 5., 5.)).unwrap();
-        assert!(model.erase(&BTreeSet::from([stray])).is_empty());
+        let before: BTreeSet<_> = model.connections.keys().copied().collect();
+        let removed: BTreeSet<_> = model.erase(&BTreeSet::from([stray])).into_iter().collect();
+        let after: BTreeSet<_> = model.connections.keys().copied().collect();
+        assert_eq!(removed, before.difference(&after).copied().collect::<BTreeSet<_>>());
+        assert_eq!(removed.len(), 1, "report the peer joint replaced during propagation");
         assert!(!model.objects.contains_key(&x), "the peer's boards were pasted again");
         assert_eq!(model.connections.len(), 3, "inner joints are not duplicated");
         assert_connections_resolve(&model);
@@ -973,7 +977,8 @@ mod tests {
         // instance, including the one to the outside board.
         let board = model.objects[&second].entities.iter().copied()
             .find(|id| model.objects.contains_key(id)).unwrap();
-        assert_eq!(model.erase(&BTreeSet::from([board])).len(), 1);
+        let expected: Vec<_> = model.connections.keys().copied().collect();
+        assert_eq!(model.erase(&BTreeSet::from([board])), expected);
         assert!(model.connections.is_empty());
     }
 
@@ -1014,6 +1019,50 @@ mod tests {
             assert!(result.contains(&moved[0]) && moved[1] == c, "{operation:?}");
             assert_eq!(model.connections.contains_key(&between), operation != SolidOperation::Union,
                 "{operation:?}: a joint survives only while its two boards stay distinct");
+        }
+    }
+
+    #[test]
+    fn solid_operations_preserve_joints_in_component_copies() {
+        for operation in [SolidOperation::Trim, SolidOperation::Union, SolidOperation::Split] {
+            for nested in [false, true] {
+                let (mut model, [a, b]) = pair();
+                let c = board_at(&mut model, DVec3::new(0.5, 0., 0.), DVec3::new(0.8, 0.1, 0.04), false);
+                let between = joint(&mut model, [a, b]);
+                let neighbour = joint(&mut model, [b, c]);
+                let mut roots = BTreeSet::from([a, b, c]);
+                if nested {
+                    roots = BTreeSet::from([model.make_object(&roots, false, "Boards").unwrap()]);
+                }
+                let first = model.make_object(&roots, true, "Assembly").unwrap();
+                let copy = model.copy_entities(&BTreeSet::from([first]));
+                let second = *model.paste_entities(&copy, DVec3::Z * 2.).first().unwrap();
+                assert!(model.enter_object(first));
+                if nested {
+                    let group = *model.objects[&first].entities.first().unwrap();
+                    assert!(model.enter_object(group));
+                }
+                let [a, b] = model.connections[&between].members;
+                let c = model.connections[&neighbour].members[1];
+                let before = model.clone();
+                assert!(model.boolean_solids(a, a, operation).is_err());
+                assert_eq!(model, before, "a failed operation must preserve every joint");
+
+                let result = model.boolean_solids(a, b, operation).unwrap();
+                let expected = if operation == SolidOperation::Union { 1 } else { 2 };
+                assert_eq!(model.connections.len(), expected * 2, "{operation:?}, nested={nested}");
+                assert_connections_resolve(&model);
+                model.validate().unwrap();
+                let moved = model.connections[&neighbour].members;
+                assert!(result.contains(&moved[0]) && moved[1] == c);
+                for instance in [first, second] {
+                    let contents = model.expand_entities(&model.objects[&instance].entities);
+                    let joints = model.connections.values()
+                        .filter(|joint| joint.members.iter().all(|id| contents.contains(id)))
+                        .count();
+                    assert_eq!(joints, expected, "{operation:?}, nested={nested}, instance={instance}");
+                }
+            }
         }
     }
 

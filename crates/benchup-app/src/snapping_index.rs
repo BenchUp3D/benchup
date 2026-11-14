@@ -526,7 +526,9 @@ impl super::PickingCache {
         let mut checks = 0;
         for step in 0..4 {
             match step {
-                1 => model.erase(&BTreeSet::from([edge])),
+                1 => {
+                    model.erase(&BTreeSet::from([edge]));
+                }
                 2 => {
                     model.edit_context = model
                         .root_entities()
