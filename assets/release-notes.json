@@ -1,5 +1,47 @@
 [
   {
+    "version": "0.7.2",
+    "date": "2026-11-14",
+    "title": "Pocket joinery, cutting previews, and tools for AI agents",
+    "sections": [
+      {
+        "title": "Woodworking and cutting plans",
+        "changes": [
+          "Create biscuit, Domino, groove, and loose-tongue joints with adjustable dimensions, live previews, and machining time estimates. Separate loose inserts are not generated.",
+          "Preview cutting tables, sheet layouts, grain, joinery, oversized parts, and sheet costs before exporting a Cutting Plan PDF.",
+          "Choose a sheet layout strategy and edge trim margin, with improved packing to reduce the number of sheets.",
+          "Work more smoothly with dense joinery and wood grain thanks to cached geometry and GPU-rendered grain patterns.",
+          "Remove joints when their boards are deleted and preserve joint assignments when working with linked components."
+        ]
+      },
+      {
+        "title": "Modeling and desktop workflow",
+        "changes": [
+          "Enter precise dimensions in floating inputs near the modeling operation. Press Space to cancel an empty precision input.",
+          "Create an offset guide parallel to an edge by starting Tape Measure on that edge; guides started from points follow the tape direction.",
+          "Automatically reload desktop projects changed on disk while keeping the camera. Projects with unsaved edits ask whether to keep them or reload.",
+          "Open .bup projects that launch BenchUp on macOS, including files opened from Finder."
+        ]
+      },
+      {
+        "title": "Languages",
+        "changes": [
+          "Choose Italian, Latin American Spanish, or Vietnamese as the application language.",
+          "Use improved Simplified Chinese translations and broader font coverage for Vietnamese text and estimate PDFs."
+        ]
+      },
+      {
+        "title": "Command line and AI agents",
+        "changes": [
+          "Read and edit .bup projects with the new benchup command line and MCP server, including atomic saves, undo and redo, and batches that apply as one history step.",
+          "Create boards and curved outlines, edit faces, add joints and router profiles, apply finishes, and inspect cut lists and time estimates through the agent tools.",
+          "Render standard model views to PNG without opening the app, check models for geometry and joinery problems, and follow the included agent guide.",
+          "Use more reliable face splitting, locked-face merge checks, and time estimates limited to selected parts or groups."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.7.1",
     "date": "2026-11-12",
     "title": "More languages, flexible navigation, and SketchUp conversion",

@@ -1,6 +1,6 @@
 # BenchUp
 
-![BenchUp editor screenshot](assets/screenshots/benchup.jpg)
+![BenchUp editor screenshot](assets/screenshots/benchup.jpg?v=0.7.2)
 
 [![Try BenchUp in your browser](https://img.shields.io/badge/Try_BenchUp_in_your_browser-d63b32?style=for-the-badge)](https://benchup3d.github.io/editor/play/)
 

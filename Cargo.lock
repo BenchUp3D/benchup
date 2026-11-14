@@ -417,7 +417,7 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "benchup-app"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "benchup-core",
  "benchup-io",
@@ -455,7 +455,7 @@ dependencies = [
 
 [[package]]
 name = "benchup-cli"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "benchup-core",
  "benchup-tools",
@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "benchup-core"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "earcutr",
  "glam",
@@ -476,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "benchup-io"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "benchup-core",
  "benchup-skp",
@@ -489,14 +489,14 @@ dependencies = [
 
 [[package]]
 name = "benchup-skp"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "cc",
 ]
 
 [[package]]
 name = "benchup-tools"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "benchup-core",
  "flate2",
