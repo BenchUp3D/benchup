@@ -875,12 +875,12 @@ fn same_named_materials_are_told_apart_by_assignment() {
 }
 
 #[test]
-fn existing_pocket_joints_can_be_inspected_and_flipped() {
-    for (kind, name, discrete) in [
-        (JointKind::Biscuit, "biscuit", true),
-        (JointKind::Domino, "domino", true),
-        (JointKind::Groove, "groove", false),
-        (JointKind::LooseTongue, "loose_tongue", false),
+fn existing_pocket_joints_can_be_inspected_estimated_and_flipped() {
+    for (kind, name, discrete, minutes) in [
+        (JointKind::Biscuit, "biscuit", true, 5.),
+        (JointKind::Domino, "domino", true, 5.),
+        (JointKind::Groove, "groove", false, 5.),
+        (JointKind::LooseTongue, "loose_tongue", false, 8.),
     ] {
         let (mut model, mut env) = (Model::default(), ToolEnv::default());
         let a = board(&mut model, &mut env, "A", [0., 0., 0.], [300., 100., 40.]);
@@ -904,6 +904,7 @@ fn existing_pocket_joints_can_be_inspected_and_flipped() {
             let detail = ok(&mut model, &mut env, "get_object", json!({"id": joint})).result;
             assert_eq!(detail["kind"], name);
             assert_eq!(detail["status"], "ok", "{detail}");
+            assert!(detail.get("geometry").is_none(), "pocket cuts must not report traditional profile bounds: {detail}");
             assert_eq!(detail["params"]["width_axis_name"], "y");
             assert_eq!(detail["params"]["pocket_thickness_mm"], 6.0);
             assert_eq!(detail["params"]["pocket_depth_mm"], 12.0);
@@ -915,6 +916,15 @@ fn existing_pocket_joints_can_be_inspected_and_flipped() {
                 assert!(detail["params"].get("pocket_count").is_none());
             }
             assert!(detail["params"].get("width_ratio").is_none());
+            let estimate = ok(&mut model, &mut env, "get_estimate", json!({})).result;
+            assert_eq!(estimate["joinery"], json!([{"kind": name, "count": 1, "work_minutes": minutes}]));
+            assert_eq!(estimate["total"]["by_category"]["joinery_work_minutes"], minutes);
+            assert_eq!(estimate["total"]["work_minutes"], minutes);
+            let scoped = ok(&mut model, &mut env, "get_estimate", json!({"ids": [a, b]})).result;
+            assert_eq!(scoped["joinery"], estimate["joinery"]);
+            let one = ok(&mut model, &mut env, "get_estimate", json!({"ids": [a]})).result;
+            assert_eq!(one["joinery"], json!([]));
+            assert_eq!(one["total"]["by_category"]["joinery_work_minutes"], 0.);
         }
     }
 }

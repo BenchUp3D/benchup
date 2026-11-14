@@ -460,10 +460,9 @@ fn joint_geometry(
         JointKind::Rabbet => ch[width] = lo[width] + size[width] * s.width_ratio,
         JointKind::HalfLap => ch[height] = lo[height] + size[height] * 0.5,
         JointKind::Dovetail | JointKind::Finger => {}
-        // Pocket joints cut paired pockets in both boards for a separate
-        // insert; their sizes are in params, and a tenon-style cut does not
-        // describe them.
-        JointKind::Biscuit | JointKind::Domino | JointKind::Groove | JointKind::LooseTongue => return Some(out),
+        // Pocket cuts use their own dimensions and can extend beyond the
+        // overlap; the traditional profile bounds would misrepresent them.
+        JointKind::Biscuit | JointKind::Domino | JointKind::Groove | JointKind::LooseTongue => return None,
     }
     let cut: Vec<DVec3> = (0..8)
         .map(|i| frame.world(DVec3::new(if i & 1 == 0 { cl.x } else { ch.x }, if i & 2 == 0 { cl.y } else { ch.y }, if i & 4 == 0 { cl.z } else { ch.z })))
