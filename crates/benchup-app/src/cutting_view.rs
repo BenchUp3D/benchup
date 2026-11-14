@@ -389,7 +389,14 @@ fn draw_sheet(ui: &mut egui::Ui, stock: &cutting_layout::Stock, rows: &[CutRow])
         Sense::hover(),
     );
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0., Color32::from_gray(235));
+    let colors = crate::theme::Palette::for_ui(ui);
+    let dark_mode = ui.visuals().dark_mode;
+    let background = if dark_mode {
+        colors.canvas
+    } else {
+        Color32::from_gray(235)
+    };
+    painter.rect_filled(rect, 0., background);
     for placement in &stock.placements {
         let r = placement.rect;
         let piece = Rect::from_min_size(
@@ -424,6 +431,14 @@ fn draw_sheet(ui: &mut egui::Ui, stock: &cutting_layout::Stock, rows: &[CutRow])
                 Color32::from_gray(20),
             );
         }
+    }
+    if dark_mode {
+        painter.rect_stroke(
+            rect,
+            0.,
+            Stroke::new(1., colors.border),
+            egui::StrokeKind::Inside,
+        );
     }
 }
 

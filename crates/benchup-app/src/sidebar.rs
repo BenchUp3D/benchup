@@ -1533,6 +1533,7 @@ mod preference_tests {
         app.persist_inspector_changes(&ctx, Some(&mut storage), false);
         remember_modal_size(&ctx, "general_settings", egui::vec2(820., 560.));
         remember_modal_size(&ctx, "another_dialog", egui::vec2(480., 320.));
+        remember_modal_size(&ctx, "woodworking_cutting_plan", egui::vec2(1280., 820.));
         storage.flushed = false;
         app.persist_inspector_changes(&ctx, Some(&mut storage), false);
         assert!(storage.flushed);
@@ -1548,6 +1549,10 @@ mod preference_tests {
         assert_eq!(
             modal_size(&restored_ctx, "another_dialog"),
             Some(egui::vec2(480., 320.))
+        );
+        assert_eq!(
+            modal_size(&restored_ctx, "woodworking_cutting_plan"),
+            Some(egui::vec2(1280., 820.))
         );
         assert_eq!(modal_size(&restored_ctx, "unknown"), None);
         let old: InspectorPreferences = serde_json::from_str("{}").unwrap();
