@@ -173,6 +173,14 @@ pub fn joint_detail(model: &Model, id: u64) -> Option<Value> {
                 params["taper_degrees"] = json!(s.taper_degrees);
             }
             JointKind::Finger => params["fingers"] = json!(s.fingers),
+            JointKind::Biscuit | JointKind::Domino | JointKind::Groove | JointKind::LooseTongue => {
+                params["pocket_thickness_mm"] = json!(mm(s.pocket_thickness));
+                params["pocket_depth_mm"] = json!(mm(s.pocket_depth));
+                if matches!(s.kind, JointKind::Biscuit | JointKind::Domino) {
+                    params["pocket_width_mm"] = json!(mm(s.pocket_width));
+                    params["pocket_count"] = json!(s.pocket_count);
+                }
+            }
             JointKind::HalfLap => {}
         }
         joint["params"] = params;
@@ -193,7 +201,7 @@ pub fn joint_detail(model: &Model, id: u64) -> Option<Value> {
     Some(joint)
 }
 
-/// The joint kind as add_joint names it (mortise_tenon, tongue_groove, ...).
+/// Stable scene names for all joint kinds (mortise_tenon, tongue_groove, ...).
 pub fn joint_kind(connection: &benchup_core::connections::Connection) -> &'static str {
     use benchup_core::joinery::JointKind;
     match &connection.operation {
@@ -204,6 +212,10 @@ pub fn joint_kind(connection: &benchup_core::connections::Connection) -> &'stati
             JointKind::Rabbet => "rabbet",
             JointKind::Dovetail => "dovetail",
             JointKind::Finger => "finger",
+            JointKind::Biscuit => "biscuit",
+            JointKind::Domino => "domino",
+            JointKind::Groove => "groove",
+            JointKind::LooseTongue => "loose_tongue",
         },
         ConnectionOperation::Fasteners(_) => "fasteners",
     }

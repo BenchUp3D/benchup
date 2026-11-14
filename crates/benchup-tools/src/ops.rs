@@ -1099,7 +1099,7 @@ fn remove_joint(model: &mut Model, env: &ToolEnv, a: IdsArg) -> Res {
 /// The orientation a woodworker would pick, in the first board's axes. Depth
 /// is the axis along which `a` goes into `b` (where the overlap is shortest
 /// compared with `a`). Tongues, tenons and rabbets are spread across `a`'s
-/// thickness; dovetails, fingers and laps across its broad side.
+/// thickness; dovetails, fingers, laps and pockets across its broad side.
 fn preferred_axes(model: &Model, members: [u64; 2], settings: &JointSettings) -> Option<(usize, usize)> {
     let overlap = model.joinery_options(members, settings).0?;
     let (lo, hi) = model.joinery_frame(members[0]).ok()?.bounds(model, members[0])?;
@@ -1109,7 +1109,8 @@ fn preferred_axes(model: &Model, members: [u64; 2], settings: &JointSettings) ->
     let (thin, broad) = if board[p] <= board[q] { (p, q) } else { (q, p) };
     let width = match settings.kind {
         JointKind::TongueGroove | JointKind::MortiseTenon | JointKind::Rabbet => thin,
-        JointKind::Dovetail | JointKind::Finger | JointKind::HalfLap => broad,
+        JointKind::Dovetail | JointKind::Finger | JointKind::HalfLap
+        | JointKind::Biscuit | JointKind::Domino | JointKind::Groove | JointKind::LooseTongue => broad,
     };
     Some((depth, width))
 }
