@@ -134,6 +134,11 @@ fn main() {
             catalog: read_catalog("../../assets/i18n/es_419.json", "Spanish"),
             singular: true,
         },
+        Translation {
+            variant: "Italian",
+            catalog: read_catalog("../../assets/i18n/it_IT.json", "Italian"),
+            singular: true,
+        },
     ];
 
     // Generate every format string so Rust continues checking named arguments.

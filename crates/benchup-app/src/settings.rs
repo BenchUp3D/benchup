@@ -159,13 +159,14 @@ pub(super) fn detected_language() -> &'static str {
     language::detected_language()
 }
 
-fn languages() -> [(&'static str, &'static str); 5] {
+fn languages() -> [(&'static str, &'static str); 6] {
     [
         (DEFAULT_LANGUAGE, tr!("settings.language.english")),
         ("zh_CN", tr!("settings.language.simplified_chinese")),
         ("pt_BR", tr!("settings.language.brazilian_portuguese")),
         ("vi_VN", tr!("settings.language.vietnamese")),
         ("es_419", tr!("settings.language.spanish")),
+        ("it_IT", tr!("settings.language.italian")),
     ]
 }
 
@@ -297,6 +298,7 @@ impl GeneralSettings {
             "en" => self.language = "en_US".into(),
             "vi" => self.language = "vi_VN".into(),
             "es" => self.language = "es_419".into(),
+            "it" => self.language = "it_IT".into(),
             _ => {}
         }
         if !languages().iter().any(|&(code, _)| code == self.language.as_str()) {
