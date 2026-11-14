@@ -125,6 +125,18 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Unit price of the catalog stock behind a cut material, when its size still matches.
+    pub(super) fn wood_price(
+        &self,
+        material_id: Option<benchup_core::MaterialId>,
+        material: &benchup_core::StockMaterial,
+    ) -> Option<f64> {
+        material_id
+            .and_then(|id| self.wood.iter().find(|stock| stock.id == id))
+            .filter(|stock| stock.definition().dimensions == material.dimensions)
+            .map(|stock| stock.price)
+    }
+
     pub(super) fn normalize(&mut self) {
         currency::normalize(&mut self.currency);
         let mut used = BTreeSet::new();

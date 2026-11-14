@@ -1257,13 +1257,7 @@ impl BenchUpApp {
                     rows: Vec::new(),
                 };
                 for required in &plan.requirements {
-                    let price = required
-                        .material_id
-                        .and_then(|id| catalog.wood.iter().find(|stock| stock.id == id))
-                        .filter(|stock| {
-                            stock.definition().dimensions == required.material.dimensions
-                        })
-                        .map(|stock| stock.price);
+                    let price = catalog.wood_price(required.material_id, &required.material);
                     total += required.quantity as f64 * price.unwrap_or(0.);
                     partial |= price.is_none() || required.excluded > 0;
                     let mut item = required.material.name.clone();
@@ -1461,11 +1455,7 @@ impl BenchUpApp {
             .requirements
             .iter()
             .map(|required| {
-                let price = required
-                    .material_id
-                    .and_then(|id| catalog.wood.iter().find(|stock| stock.id == id))
-                    .filter(|stock| stock.definition().dimensions == required.material.dimensions)
-                    .map(|stock| stock.price);
+                let price = catalog.wood_price(required.material_id, &required.material);
                 (required, price)
             })
             .collect();
@@ -1739,13 +1729,7 @@ impl BenchUpApp {
                 let mut total = finish_total;
                 let mut partial = plan.skipped > 0 || finish_partial;
                 for required in &plan.requirements {
-                    let price = required
-                        .material_id
-                        .and_then(|id| catalog.wood.iter().find(|stock| stock.id == id))
-                        .filter(|stock| {
-                            stock.definition().dimensions == required.material.dimensions
-                        })
-                        .map(|stock| stock.price);
+                    let price = catalog.wood_price(required.material_id, &required.material);
                     total += required.quantity as f64 * price.unwrap_or(0.);
                     partial |= price.is_none() || required.excluded > 0;
                 }
