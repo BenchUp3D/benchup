@@ -310,7 +310,45 @@ impl Model {
         self.create_faces_with_edges(a, b, &drawing_edges);
         Ok(id)
     }
-    pub fn erase(&mut self, ids: &BTreeSet<u64>) {
+    /// Erases entities together with every connection (wood joint or fasteners)
+    /// whose board this erase removes, and returns the removed connection ids.
+    /// Boards that are only moved apart keep their relations so they can
+    /// reactivate; undo restores erased ones from history.
+    pub fn erase(&mut self, ids: &BTreeSet<u64>) -> Vec<u64> {
+        let boards = self.connected_boards();
+        self.erase_entities(ids);
+        self.drop_connections_of_removed_boards(&boards)
+    }
+    /// Boards that currently exist and belong to at least one connection.
+    pub(crate) fn connected_boards(&self) -> BTreeSet<u64> {
+        self.connections
+            .values()
+            .flat_map(|connection| connection.members)
+            .filter(|id| self.objects.contains_key(id))
+            .collect()
+    }
+    /// Removes connections to any of `boards` that no longer exist. Edits
+    /// inside a component replace its contents without touching the document's
+    /// connections, so this compares the boards after every edit path. Entry
+    /// faces are left alone: a fastener's entry face can be a face of the
+    /// joint-cut geometry, which never exists in the source model, and
+    /// `Connection::evaluate` already falls back to automatic when it is gone.
+    pub(crate) fn drop_connections_of_removed_boards(&mut self, boards: &BTreeSet<u64>) -> Vec<u64> {
+        let mut removed = Vec::new();
+        if self.connections.is_empty() {
+            return removed;
+        }
+        let objects = &self.objects;
+        self.connections.retain(|id, connection| {
+            if connection.members.iter().any(|m| boards.contains(m) && !objects.contains_key(m)) {
+                removed.push(*id);
+                return false;
+            }
+            true
+        });
+        removed
+    }
+    fn erase_entities(&mut self, ids: &BTreeSet<u64>) {
         if let Some(context) = self.edit_context {
             // Removing geometry from ordinary groups cannot change a component
             // definition. Keep this local edit off the full-model transactional
@@ -326,8 +364,9 @@ impl Model {
                 self.erase_in_scope(ids);
                 return;
             }
+            // The copy's connections are discarded; `erase` prunes this model.
             let _ = self.edit_in_context(|model| {
-                model.erase(ids);
+                model.erase_in_scope(ids);
                 Ok(())
             });
             return;

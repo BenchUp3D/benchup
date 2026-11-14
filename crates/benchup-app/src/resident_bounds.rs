@@ -236,8 +236,12 @@ mod tests {
                 0 => {
                     model.add_edge(DVec3::splat(-8.), DVec3::splat(9.)).unwrap();
                 }
-                1 => model.erase(&BTreeSet::from([a])),
-                2 => model.erase(&model.objects[&inner].entities.clone()),
+                1 => {
+                    model.erase(&BTreeSet::from([a]));
+                }
+                2 => {
+                    model.erase(&model.objects[&inner].entities.clone());
+                }
                 _ => model = original.clone(),
             }
             entities.update(&model);

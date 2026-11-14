@@ -974,7 +974,9 @@ fn combined_line_guides_release_when_snapping_is_disabled_or_a_reference_is_remo
             2 => {
                 h.app.doc.model.hidden.insert(edge);
             }
-            _ => h.app.doc.model.erase(&BTreeSet::from([edge])),
+            _ => {
+                h.app.doc.model.erase(&BTreeSet::from([edge]));
+            }
         }
         h.app.update_pointer(cursor);
         assert!(h.app.drawing_axis_guides.is_empty());

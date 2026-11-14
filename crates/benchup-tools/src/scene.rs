@@ -215,7 +215,10 @@ fn joint_json(model: &Model, id: u64) -> Option<Value> {
     let mut joint = json!({"id": id, "a": connection.members[0], "b": connection.members[1], "kind": kind});
     let missing: Vec<u64> = connection.members.iter().copied().filter(|m| !model.contains_entity(m)).collect();
     if !missing.is_empty() {
-        // Left behind when a board was erased (BenchUp3D/editor#36).
+        // Erase, explode, solid operations and component edits remove or
+        // relink the joints of boards they replace, but projects saved before
+        // that (BenchUp3D/editor#36) and edits that cannot match a board to a
+        // replacement can still leave one. Keep reporting it.
         joint["missing_boards"] = json!(missing);
     }
     Some(joint)

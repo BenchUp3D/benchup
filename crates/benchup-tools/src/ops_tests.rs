@@ -624,8 +624,12 @@ fn joints_are_removed_with_remove_joint_not_erase() {
 fn the_scene_flags_joints_whose_board_is_gone() {
     let (mut model, mut env) = (Model::default(), ToolEnv::default());
     let (_, shelf, joint) = joined_pair(&mut model, &mut env);
-    // What the app leaves behind today (BenchUp3D/editor#36).
-    model.erase(&BTreeSet::from([shelf]));
+    // Projects saved before the core removed joints with their boards
+    // (BenchUp3D/editor#36) can still contain such a joint.
+    let saved = model.connections[&joint].clone();
+    assert_eq!(model.erase(&BTreeSet::from([shelf])), vec![joint], "the core removes the joint with its board");
+    assert!(model.connections.is_empty());
+    model.connections.insert(joint, saved);
     let scene = ok(&mut model, &mut env, "get_scene", json!({})).result;
     assert_eq!(scene["joints"][0]["missing_boards"], json!([shelf]));
     // Such a joint can still be removed.

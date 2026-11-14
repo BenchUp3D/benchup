@@ -767,16 +767,24 @@ impl Model {
         Some(id)
     }
     /// Release one level, preserving nested groups and component instances.
+    /// Explodes objects into their contents. An exploded board is no longer a
+    /// board, so its connections are removed with it.
     pub fn dissolve_objects(
         &mut self,
         selected: &BTreeSet<u64>,
         groups_only: bool,
     ) -> BTreeSet<u64> {
-        if self.edit_context.is_some() {
-            return self
-                .edit_in_context(|model| Ok(model.dissolve_objects(selected, groups_only)))
-                .unwrap_or_else(|_| selected.clone());
-        }
+        let boards = self.connected_boards();
+        let result = if self.edit_context.is_some() {
+            self.edit_in_context(|model| Ok(model.dissolve_in_scope(selected, groups_only)))
+                .unwrap_or_else(|_| selected.clone())
+        } else {
+            self.dissolve_in_scope(selected, groups_only)
+        };
+        self.drop_connections_of_removed_boards(&boards);
+        result
+    }
+    fn dissolve_in_scope(&mut self, selected: &BTreeSet<u64>, groups_only: bool) -> BTreeSet<u64> {
         let mut result = BTreeSet::new();
         for id in selected {
             if self.is_locked(*id) {
