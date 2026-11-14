@@ -21,7 +21,7 @@ This guide is written for AI agents that edit BenchUp projects through the [`ben
    - `get_object` on a joint shows its settings and status.
    - `get_cut_list` lists the boards to cut; `get_estimate` gives the time to build them.
    - `benchup render file.bup --view front` (over MCP, `render_view`) draws the model as a PNG, joints and profiles cut, with dimensions and text notes (in capitals, without accents). Its output lists dimensions whose labels overlap and the notes with their position. It shows the whole model; details of a few millimetres need `--size 2400x1800`.
-5. With the CLI, `benchup open file.bup` shows the result in the desktop app. The CLI edits the file, not an open window: run `open` again to reload, and save or discard changes in the app before editing the file.
+5. With the CLI, `benchup open file.bup` shows the result in the desktop app. The CLI edits the file, not the open window, but BenchUp versions after 0.7.1 reload the file by themselves about a second after each change (with older versions, run `open` again). If the project has unsaved changes in the app, BenchUp asks the user first: tell them to choose "Reload from disk" to see your edit, because keeping their changes and saving overwrites it.
 
 ### Batches, results and dry runs
 
