@@ -119,4 +119,5 @@ Avoid cutting through a finished board with a negative `push_pull` of its full t
 
 - Joints are cut from the overlap when BenchUp evaluates the model. The tools show the boards before cutting; use the joint's `status` to confirm.
 - There is no fixing hardware (screws, dowels, metal runners). Leave a top resting on its frame, and note the fixing with `add_text` if it matters.
+- The tools cannot read, set or render views and cameras, so you cannot look at the model. Check it with `get_scene`, `get_object` and `check_model`, and ask the user to look in BenchUp when the result must be seen. Saved views are left as they were.
 - Some BenchUp features are not available through the tools yet: the Router's edge profiles, the Cutting Plan (stock layouts with saw kerf and grain), Workshop Labels and the Time & Cost Estimates PDFs, trimming excess material at joints, and wood finishes. `get_cut_list` gives an area lower bound; for a real layout, the user can export the Cutting Plan from BenchUp's Tools menu.
