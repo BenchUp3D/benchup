@@ -454,13 +454,30 @@ fn plane_segments(model: &Model, face: u64, origin: DVec3, normal: DVec3) -> Vec
 
 pub(super) fn split_face(model: &mut Model, a: SplitArgs) -> Res {
     let owner = editable_face(model, a.face_id)?;
+    let original = model.faces[&a.face_id].clone();
+    let original_plane = faces::plane(model, &original.vertices)
+        .ok_or_else(|| Fail::from(benchup_core::tr!("agent_tools.split_face.invalid_line")))?;
     let face_normal = scene::outward_normal(model, a.face_id).unwrap_or(DVec3::Z);
     let order_axis;
     let segments = match (a.line_mm, a.plane) {
         (Some([p, q]), None) => {
             let (p, q) = (point(p)?, point(q)?);
+            if p.distance(q) < 1.0e-6 || !model.face_contains(&original, p, true) || !model.face_contains(&original, q, true) {
+                return Err(fail(
+                    benchup_core::tr!("agent_tools.split_face.invalid_line"),
+                    benchup_core::tr!("agent_tools.split_face.line_hint"),
+                ));
+            }
             order_axis = face_normal.cross(q - p).normalize_or_zero();
-            vec![(p, q)]
+            // Clip to the selected face, including concavities and holes, so
+            // drawing cannot split another face or add geometry outside it.
+            let direction = (q - p).normalize();
+            let length = p.distance(q);
+            plane_segments(model, a.face_id, p, order_axis).into_iter().filter_map(|(a, b)| {
+                let (ta, tb) = ((a - p).dot(direction), (b - p).dot(direction));
+                let (lo, hi) = (ta.min(tb).max(0.), ta.max(tb).min(length));
+                (hi - lo > 1.0e-6).then_some((p + direction * lo, p + direction * hi))
+            }).collect()
         }
         (None, Some(cut)) => {
             let normal = match cut.normal {
@@ -490,7 +507,11 @@ pub(super) fn split_face(model: &mut Model, a: SplitArgs) -> Res {
         Ok(())
     })?;
     let created: Vec<u64> = model.faces.keys().chain(model.edges.keys()).copied().filter(|id| !before.contains(id)).collect();
-    let new_faces: Vec<u64> = created.iter().copied().filter(|id| model.faces.contains_key(id)).collect();
+    let new_faces: Vec<u64> = created.iter().copied().filter(|id| {
+        model.parent(*id) == owner && model.faces.get(id).is_some_and(|face| {
+            face.vertices.iter().all(|v| (model.vertices[v].position - original_plane.origin).dot(original_plane.normal).abs() < 1.0e-6)
+        })
+    }).collect();
     if new_faces.is_empty() {
         return Err(fail("the face was not split", "The line must cross the face from edge to edge, lying on it."));
     }
@@ -627,6 +648,11 @@ pub(super) fn merge_faces(model: &mut Model, a: MergeArgs) -> Res {
         }
         _ => return Err(fail("give either id or ids", "id is a board; ids are faces of one board.")),
     };
+    // Merging removes seams and cleans the board's boundary, so locks on
+    // faces and edges matter even when the caller only named the board.
+    if model.selection_protected(&BTreeSet::from([board])) {
+        return Err(benchup_core::tr!("core.modeling.unlock_the_selection_before_editing_it").into());
+    }
     let mut path = Some(board);
     while let Some(object) = path {
         if matches!(model.objects.get(&object).map(|o| &o.kind), Some(benchup_core::ObjectKind::Component { .. })) {
@@ -1481,7 +1507,7 @@ pub(super) fn get_estimate(model: &Model, a: EstimateArgs) -> Res {
             "elapsed_hours": round1((work + finishing_wait) / 60.),
             "by_category": {"finishing_work_minutes": round1(finishing_work), "finishing_wait_minutes": round1(finishing_wait),
                 "joinery_work_minutes": round1(joint_work), "router_work_minutes": round1(router_work)}},
-        "wood": crate::review::cut_list(model)["materials"].clone(),
+        "wood": crate::review::cut_list_for(model, scope.as_ref())["materials"].clone(),
         "note": "BenchUp's default allowances: joints by kind, router 5 min setup per profile plus 1 min per metre, finishing per m² and coat. \
                  The last coat of a stage waits its final drying time. elapsed_hours adds work and drying, as if done one after the other. \
                  Boards without set_finish use the defaults, which sand and finish nothing. Rates and prices edited in the app are not stored in the project.",

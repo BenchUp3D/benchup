@@ -2231,5 +2231,7 @@
   "joinery_cards.groove": "Uma ranhura contínua é cortada na segunda peça; a primeira tem uma face de contato plana.",
   "joinery_cards.loose_tongue": "Ranhuras contínuas correspondentes recebem uma lingueta solta separada.",
   "sidebar.floating_dimension_input": "Caixa de medidas flutuante",
-  "cli.agent_edit": "Edição do agente"
+  "cli.agent_edit": "Edição do agente",
+  "agent_tools.split_face.invalid_line": "A linha deve atravessar a face selecionada e estar sobre ela.",
+  "agent_tools.split_face.line_hint": "Use dois pontos distintos na face selecionada, de uma borda à outra."
 }

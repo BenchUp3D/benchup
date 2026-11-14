@@ -98,6 +98,26 @@ fn check_model_only_new_reports_problems_added_by_the_batch() {
 }
 
 #[test]
+fn check_model_only_new_does_not_hide_copied_overlaps_after_regrouping() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "A", [0., 0., 0.], [100., 100., 18.]);
+    let b = board(&mut model, &mut env, "B", [50., 0., 0.], [100., 100., 18.]);
+    env.before = None;
+    for id in [a, b] {
+        ok(&mut model, &mut env, "create_copy", json!({"id": id, "offset_mm": [1000, 0, 0]}));
+    }
+    for regroup in [false, true] {
+        if regroup {
+            ok(&mut model, &mut env, "group", json!({"ids": [a, b], "name": "Original pair", "component": false}));
+        }
+        let check = ok(&mut model, &mut env, "check_model", json!({"only_new": true}));
+        assert_eq!(check["passed"], false, "{check}");
+        assert_eq!(check["warnings"], 1, "the copied overlap is new even though its message matches: {check}");
+        assert_eq!(check["existing_by_kind"]["overlap_without_joint"], 1, "the original overlap survives regrouping: {check}");
+    }
+}
+
+#[test]
 fn distribute_makes_equal_gaps_or_centres() {
     let (mut model, mut env) = (Model::default(), ToolEnv::default());
     let shelves: Vec<u64> = (0..3).map(|i| board(&mut model, &mut env, "Shelf", [0., 0., 10. * i as f64], [500., 300., 18.])).collect();
@@ -263,6 +283,70 @@ fn split_face_by_plane_then_push_one_piece_and_merge_back() {
 }
 
 #[test]
+fn split_face_rejects_lines_on_other_faces_and_outside_the_selected_face() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let panel = board(&mut model, &mut env, "Panel", [0., 0., 0.], [400., 200., 18.]);
+    let up = ok(&mut model, &mut env, "get_object", json!({"id": panel}))["faces"].as_array().unwrap().iter()
+        .find(|f| f["facing"] == "+z").unwrap()["id"].as_u64().unwrap();
+    for line in [
+        [[100, 0, 0], [100, 200, 0]], // The bottom face, not the requested top.
+        [[100, -100, 18], [100, 300, 18]], // Would add edges outside the board.
+        [[100, 0, 18], [100, 0, 18]], // No direction.
+    ] {
+        err(&mut model, &mut env, "split_face", json!({"face_id": up, "line_mm": line}));
+    }
+    let split = ok(&mut model, &mut env, "split_face", json!({"face_id": up, "line_mm": [[100, 0, 18], [100, 200, 18]]}));
+    assert_eq!(split["faces"].as_array().unwrap().len(), 2);
+    assert!(split["faces"].as_array().unwrap().iter().all(|f| f["facing"] == "+z"));
+    model.validate().unwrap();
+}
+
+#[test]
+fn split_face_clips_a_line_across_a_concave_outline() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let panel = ok(&mut model, &mut env, "create_profile_board", json!({
+        "name": "U panel", "plane": "xy", "origin_mm": [0, 0, 0], "thickness_mm": 20,
+        "points": [[0, 0], [300, 0], [300, 300], [200, 300], [200, 100], [100, 100], [100, 300], [0, 300]]
+    }))["created"][0].as_u64().unwrap();
+    let up = ok(&mut model, &mut env, "get_object", json!({"id": panel}))["faces"].as_array().unwrap().iter()
+        .find(|f| f["facing"] == "+z").unwrap()["id"].as_u64().unwrap();
+    let split = ok(&mut model, &mut env, "split_face", json!({"face_id": up, "line_mm": [[0, 200, 20], [300, 200, 20]]}));
+    let pieces = split["faces"].as_array().unwrap();
+    assert_eq!(pieces.len(), 3, "the two arms are cut separately: {split}");
+    assert_eq!(pieces.iter().map(|f| f["area_mm2"].as_f64().unwrap()).sum::<f64>(), 70_000.);
+    assert!(!model.edges.values().any(|edge| {
+        let (a, b) = model.points(edge);
+        ((a + b) * 0.5 - DVec3::new(0.15, 0.2, 0.02)).length() < 1e-9
+    }), "the cut must not bridge the empty space between the arms");
+    model.validate().unwrap();
+}
+
+#[test]
+fn merge_faces_respects_face_and_seam_locks_when_given_a_board() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let panel = board(&mut model, &mut env, "Panel", [0., 0., 0.], [400., 200., 18.]);
+    let up = ok(&mut model, &mut env, "get_object", json!({"id": panel}))["faces"].as_array().unwrap().iter()
+        .find(|f| f["facing"] == "+z").unwrap()["id"].as_u64().unwrap();
+    let split = ok(&mut model, &mut env, "split_face", json!({"face_id": up, "line_mm": [[100, 0, 18], [100, 200, 18]]}));
+    let face = split["face_ids"][0].as_u64().unwrap();
+    let seam = model.edges.values().find(|edge| {
+        let (a, b) = model.points(edge);
+        (a.x - 0.1).abs() < 1e-9 && (b.x - 0.1).abs() < 1e-9 && (a.z - 0.018).abs() < 1e-9 && (b.z - 0.018).abs() < 1e-9
+    }).unwrap().id;
+    for locked in [face, seam] {
+        model.locked.insert(locked);
+        for args in [json!({"id": panel}), json!({"ids": [panel]}), json!({"ids": split["face_ids"]})] {
+            err(&mut model, &mut env, "merge_faces", args);
+        }
+        assert!(model.contains_entity(&locked));
+        model.validate().unwrap();
+        model.locked.remove(&locked);
+    }
+    ok(&mut model, &mut env, "merge_faces", json!({"id": panel}));
+    model.validate().unwrap();
+}
+
+#[test]
 fn change_thickness_keeps_outer_faces_and_joint_shares() {
     let (mut model, mut env) = (Model::default(), ToolEnv::default());
     let (left, right, shelf, _j1, _j2) = carcass(&mut model, &mut env);
@@ -311,6 +395,33 @@ fn set_finish_and_get_estimate() {
     ok(&mut model, &mut env, "set_finish", json!({"ids": [group], "clear": true}));
     assert!(model.objects[&shelf].surface_treatment_override().is_none());
     err(&mut model, &mut env, "set_finish", json!({"ids": [shelf]}));
+}
+
+#[test]
+fn scoped_estimates_only_include_selected_wood_and_keep_inherited_materials() {
+    let (mut model, mut env) = (Model::default(), ToolEnv::default());
+    let a = board(&mut model, &mut env, "Small", [0., 0., 0.], [100., 100., 20.]);
+    let b = board(&mut model, &mut env, "Large", [200., 0., 0.], [1000., 1000., 20.]);
+    let group = ok(&mut model, &mut env, "group", json!({"ids": [a, b], "name": "Pair", "component": false}))["created"][0].as_u64().unwrap();
+    let small = model.objects.values().find(|o| o.name == "Small").unwrap().id;
+    let material = ok(&mut model, &mut env, "create_stock_material", json!({"name": "Plywood", "thickness_mm": 20, "width_mm": 1220, "length_mm": 2440}))["material_id"].clone();
+    ok(&mut model, &mut env, "set_material", json!({"ids": [group], "material_id": material}));
+    board(&mut model, &mut env, "Unrelated", [2000., 0., 0.], [1000., 1000., 20.]);
+    let one = ok(&mut model, &mut env, "get_estimate", json!({"ids": [small]}));
+    assert_eq!(one["boards"], 1);
+    assert_eq!(one["wood"].as_array().unwrap().len(), 1);
+    assert_eq!(one["wood"][0]["material"], "Plywood");
+    assert_eq!(one["wood"][0]["pieces"], 1);
+    assert_eq!(one["wood"][0]["area_m2"], 0.01);
+    assert_eq!(one["wood"][0]["volume_m3"], 0.0002);
+    let pair = ok(&mut model, &mut env, "get_estimate", json!({"ids": [group, small]}));
+    assert_eq!(pair["boards"], 2);
+    assert_eq!(pair["wood"].as_array().unwrap().len(), 1);
+    assert_eq!(pair["wood"][0]["pieces"], 2);
+    assert_eq!(pair["wood"][0]["area_m2"], 1.01);
+    let all = ok(&mut model, &mut env, "get_estimate", json!({}));
+    assert_eq!(all["wood"], crate::review::cut_list(&model)["materials"]);
+    assert_eq!(all["wood"].as_array().unwrap().iter().map(|m| m["pieces"].as_u64().unwrap()).sum::<u64>(), 3);
 }
 
 #[test]

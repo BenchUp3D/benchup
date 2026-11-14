@@ -2231,5 +2231,7 @@
   "joinery_cards.groove": "在第二个零件中切出连续凹槽，第一个零件保留平直接合面。",
   "joinery_cards.loose_tongue": "配对的连续凹槽容纳独立的活动嵌条。",
   "sidebar.floating_dimension_input": "浮动尺寸输入框",
-  "cli.agent_edit": "智能体编辑"
+  "cli.agent_edit": "智能体编辑",
+  "agent_tools.split_face.invalid_line": "线段必须位于所选面上并穿过该面。",
+  "agent_tools.split_face.line_hint": "在所选面上使用两个不同的点，从一条边到另一条边。"
 }

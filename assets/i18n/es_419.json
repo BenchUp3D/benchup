@@ -2212,5 +2212,7 @@
   "sidebar.move_wireframe": "Estructura alámbrica de otros objetos al mover",
   "sidebar.selected_edge_lengths": "Longitudes de aristas seleccionadas",
   "sidebar.floating_dimension_input": "Cuadro de medidas flotante",
-  "cli.agent_edit": "Edición del agente"
+  "cli.agent_edit": "Edición del agente",
+  "agent_tools.split_face.invalid_line": "La línea debe atravesar la cara seleccionada y estar sobre ella.",
+  "agent_tools.split_face.line_hint": "Usa dos puntos distintos sobre la cara seleccionada, de un borde al otro."
 }

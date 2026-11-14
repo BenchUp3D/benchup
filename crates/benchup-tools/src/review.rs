@@ -68,6 +68,11 @@ fn full_axes(board: (DVec3, DVec3), shared: DVec3) -> usize {
 
 /// Boards grouped by material and blank size, with totals per material.
 pub fn cut_list(model: &Model) -> Value {
+    cut_list_for(model, None)
+}
+
+/// The same stock calculation, restricted to the expanded object selection.
+pub(crate) fn cut_list_for(model: &Model, scope: Option<&BTreeSet<u64>>) -> Value {
     // A material is its name and stock size, so same-named materials of
     // different sizes stay apart; `None` is unassigned.
     type Material = Option<(String, [u64; 3])>;
@@ -75,7 +80,7 @@ pub fn cut_list(model: &Model) -> Value {
     type Group = (usize, BTreeSet<String>, Vec<u64>);
     let mut groups: BTreeMap<(Material, [i64; 3]), Group> = BTreeMap::new();
     let mut skipped = Vec::new();
-    for id in boards(model) {
+    for id in boards(model).into_iter().filter(|id| scope.is_none_or(|s| s.contains(id))) {
         let Some(size) = blank(model, id) else {
             skipped.push(id);
             continue;
@@ -145,8 +150,43 @@ pub fn check(model: &Model) -> Value {
     summarize(model, collect(model), None)
 }
 
+type Position = [u64; 3];
+
+/// World geometry without entity IDs, for recognizing boards remapped by grouping.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct BoardGeometry {
+    edges: Vec<[Position; 2]>,
+    faces: Vec<Vec<Vec<Position>>>,
+}
+
+fn board_geometry(model: &Model, id: u64) -> BoardGeometry {
+    let position = |id: u64| model.vertices[&id].position.to_array().map(|v| if v == 0. { 0 } else { v.to_bits() });
+    let ring = |vertices: &[u64]| {
+        let points: Vec<Position> = vertices.iter().map(|id| position(*id)).collect();
+        let start = (0..points.len()).min_by_key(|i| points[*i]).unwrap_or(0);
+        let forward: Vec<_> = (0..points.len()).map(|i| points[(start + i) % points.len()]).collect();
+        let backward: Vec<_> = (0..points.len()).map(|i| points[(start + points.len() - i) % points.len()]).collect();
+        forward.min(backward)
+    };
+    let object = &model.objects[&id];
+    let mut edges: Vec<_> = object.entities.iter().filter_map(|id| model.edges.get(id)).map(|edge| {
+        let mut ends = [position(edge.a), position(edge.b)];
+        ends.sort_unstable();
+        ends
+    }).collect();
+    let mut faces: Vec<_> = object.entities.iter().filter_map(|id| model.faces.get(id)).map(|face| {
+        let mut holes: Vec<_> = face.holes.iter().map(|hole| ring(hole)).collect();
+        holes.sort_unstable();
+        std::iter::once(ring(&face.vertices)).chain(holes).collect()
+    }).collect();
+    edges.sort_unstable();
+    faces.sort_unstable();
+    BoardGeometry { edges, faces }
+}
+
 /// Like [`check`], listing only the problems that are not in `baseline` (the
-/// model before this batch). An issue is the same when its kind and ids match.
+/// model before this batch). Grouping may replace board IDs; only disappeared
+/// boards with identical world geometry can match those replacements.
 pub fn check_new(model: &Model, baseline: Option<&Model>) -> Value {
     let found = collect(model);
     let Some(baseline) = baseline else {
@@ -155,20 +195,37 @@ pub fn check_new(model: &Model, baseline: Option<&Model>) -> Value {
         out["note"] = json!("Nothing has changed yet in this batch, so there are no new problems. Run check_model without only_new to see all.");
         return out;
     };
-    let key = |issue: &Value| -> (String, Vec<u64>) {
+    let earlier = collect(baseline);
+    let mut removed: BTreeMap<BoardGeometry, Vec<u64>> = BTreeMap::new();
+    for id in &earlier.boards {
+        if !model.contains_entity(id) {
+            removed.entry(board_geometry(baseline, *id)).or_default().push(*id);
+        }
+    }
+    let mut remapped = BTreeMap::new();
+    if !removed.is_empty() {
+        for id in &found.boards {
+            if !baseline.contains_entity(id)
+                && let Some(old) = removed.get_mut(&board_geometry(model, *id)).and_then(Vec::pop)
+            {
+                remapped.insert(*id, old);
+            }
+        }
+    }
+    let key = |issue: &Value, remap: bool| -> (String, Vec<u64>) {
         let mut ids: Vec<u64> = issue["ids"].as_array().into_iter().flatten().filter_map(Value::as_u64).collect();
+        if remap {
+            for id in &mut ids {
+                *id = remapped.get(id).copied().unwrap_or(*id);
+            }
+        }
         ids.sort_unstable();
         (issue["kind"].as_str().unwrap_or_default().to_owned(), ids)
     };
-    // Grouping gives boards new ids, so an issue also counts as existing when
-    // its message (names, joint ids, sizes) is unchanged.
-    let message = |issue: &Value| (issue["kind"].as_str().unwrap_or_default().to_owned(), issue["message"].as_str().unwrap_or_default().to_owned());
-    let earlier = collect(baseline).issues;
-    let old: BTreeSet<(String, Vec<u64>)> = earlier.iter().map(key).collect();
-    let old_messages: BTreeSet<(String, String)> = earlier.iter().map(message).collect();
+    let old: BTreeSet<(String, Vec<u64>)> = earlier.issues.iter().map(|issue| key(issue, false)).collect();
     let total = found.issues.len();
     let (existing, issues): (Vec<Value>, Vec<Value>) =
-        found.issues.into_iter().partition(|issue| old.contains(&key(issue)) || old_messages.contains(&message(issue)));
+        found.issues.into_iter().partition(|issue| old.contains(&key(issue, true)));
     let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
     for issue in &existing {
         *kinds.entry(issue["kind"].as_str().unwrap_or_default().to_owned()).or_default() += 1;

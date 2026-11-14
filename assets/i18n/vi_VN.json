@@ -2212,5 +2212,7 @@
   "sidebar.move_wireframe": "Hiển thị khung dây cho đối tượng khác khi di chuyển",
   "sidebar.selected_edge_lengths": "Chiều dài các cạnh đã chọn",
   "sidebar.floating_dimension_input": "Ô nhập kích thước nổi",
-  "cli.agent_edit": "Chỉnh sửa của tác nhân"
+  "cli.agent_edit": "Chỉnh sửa của tác nhân",
+  "agent_tools.split_face.invalid_line": "Đường thẳng phải cắt qua và nằm trên mặt đã chọn.",
+  "agent_tools.split_face.line_hint": "Dùng hai điểm khác nhau trên mặt đã chọn, từ cạnh này đến cạnh kia."
 }

@@ -2231,5 +2231,7 @@
   "joinery_cards.groove": "A continuous groove is cut in the second part; the first part has a flat mating face.",
   "joinery_cards.loose_tongue": "Matching continuous grooves receive a separate loose tongue or spline.",
   "sidebar.floating_dimension_input": "Floating Dimension Input",
-  "cli.agent_edit": "Agent edit"
+  "cli.agent_edit": "Agent edit",
+  "agent_tools.split_face.invalid_line": "The line must cross the selected face and lie on it.",
+  "agent_tools.split_face.line_hint": "Use two distinct points on the selected face, from edge to edge."
 }

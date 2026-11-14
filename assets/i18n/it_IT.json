@@ -2217,5 +2217,7 @@
   "sidebar.move_wireframe": "Wireframe per gli altri oggetti durante lo spostamento",
   "sidebar.selected_edge_lengths": "Lunghezze degli spigoli selezionati",
   "sidebar.floating_dimension_input": "Input flottante delle quote",
-  "cli.agent_edit": "Modifica dell'agente"
+  "cli.agent_edit": "Modifica dell'agente",
+  "agent_tools.split_face.invalid_line": "La linea deve attraversare la faccia selezionata e giacere su di essa.",
+  "agent_tools.split_face.line_hint": "Usa due punti distinti sulla faccia selezionata, da un bordo all’altro."
 }
