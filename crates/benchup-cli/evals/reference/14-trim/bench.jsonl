@@ -1,0 +1,21 @@
+{"tool": "create_stock_material", "arguments": {"name": "Haya 50x50", "thickness_mm": 50, "width_mm": 50, "length_mm": 2000}}
+{"tool": "create_stock_material", "arguments": {"name": "Haya 22 mm", "thickness_mm": 22, "width_mm": 200, "length_mm": 2500}}
+{"tool": "create_board", "arguments": {"name": "Pata delantera izquierda", "origin_mm": [0, 0, 0], "size_mm": [50, 50, 425], "grain_axis": "z", "material_id": "$1.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Pata delantera derecha", "origin_mm": [1150, 0, 0], "size_mm": [50, 50, 425], "grain_axis": "z", "material_id": "$1.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Pata trasera izquierda", "origin_mm": [0, 300, 0], "size_mm": [50, 50, 425], "grain_axis": "z", "material_id": "$1.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Pata trasera derecha", "origin_mm": [1150, 300, 0], "size_mm": [50, 50, 425], "grain_axis": "z", "material_id": "$1.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Travesaño delantero", "origin_mm": [-30, 14, 300], "size_mm": [1260, 22, 70], "grain_axis": "x", "material_id": "$2.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Travesaño trasero", "origin_mm": [-30, 314, 300], "size_mm": [1260, 22, 70], "grain_axis": "x", "material_id": "$2.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Travesaño lateral izquierdo", "origin_mm": [14, -30, 200], "size_mm": [22, 410, 70], "grain_axis": "y", "material_id": "$2.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Travesaño lateral derecho", "origin_mm": [1164, -30, 200], "size_mm": [22, 410, 70], "grain_axis": "y", "material_id": "$2.material_id"}}
+{"tool": "create_stock_material", "arguments": {"name": "Haya 25 mm", "thickness_mm": 25, "width_mm": 400, "length_mm": 2500}}
+{"tool": "create_board", "arguments": {"name": "Asiento", "origin_mm": [0, 0, 425], "size_mm": [1200, 350, 25], "grain_axis": "x", "material_id": "$11.material_id"}}
+{"tool": "add_joint", "arguments": {"a": "$7.created[0]", "b": "$3.created[0]", "kind": "mortise_tenon", "params": {"width_ratio": 0.33, "height_ratio": 0.75, "trim": "a", "keep_end": "upper"}}}
+{"tool": "add_joint", "arguments": {"a": "$7.created[0]", "b": "$4.created[0]", "kind": "mortise_tenon", "params": {"width_ratio": 0.33, "height_ratio": 0.75, "trim": "a", "keep_end": "lower"}}}
+{"tool": "add_joint", "arguments": {"a": "$8.created[0]", "b": "$5.created[0]", "kind": "mortise_tenon", "params": {"width_ratio": 0.33, "height_ratio": 0.75, "trim": "a", "keep_end": "upper"}}}
+{"tool": "add_joint", "arguments": {"a": "$8.created[0]", "b": "$6.created[0]", "kind": "mortise_tenon", "params": {"width_ratio": 0.33, "height_ratio": 0.75, "trim": "a", "keep_end": "lower"}}}
+{"tool": "add_joint", "arguments": {"a": "$9.created[0]", "b": "$3.created[0]", "kind": "mortise_tenon", "params": {"width_ratio": 0.33, "height_ratio": 0.75, "trim": "a", "keep_end": "upper"}}}
+{"tool": "add_joint", "arguments": {"a": "$9.created[0]", "b": "$5.created[0]", "kind": "mortise_tenon", "params": {"width_ratio": 0.33, "height_ratio": 0.75, "trim": "a", "keep_end": "lower"}}}
+{"tool": "add_joint", "arguments": {"a": "$10.created[0]", "b": "$4.created[0]", "kind": "mortise_tenon", "params": {"width_ratio": 0.33, "height_ratio": 0.75, "trim": "a", "keep_end": "upper"}}}
+{"tool": "add_joint", "arguments": {"a": "$10.created[0]", "b": "$6.created[0]", "kind": "mortise_tenon", "params": {"width_ratio": 0.33, "height_ratio": 0.75, "trim": "a", "keep_end": "lower"}}}
+{"tool": "check_model", "arguments": {}}

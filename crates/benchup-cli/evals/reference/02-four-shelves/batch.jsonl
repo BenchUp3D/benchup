@@ -1,0 +1,6 @@
+{"tool": "erase", "arguments": {"ids": [450, 715]}}
+{"tool": "move", "arguments": {"ids": [238, 503], "delta_mm": [0, 0, 60.6]}}
+{"tool": "move", "arguments": {"ids": [291, 556], "delta_mm": [0, 0, 121.2]}}
+{"tool": "move", "arguments": {"ids": [344, 609], "delta_mm": [0, 0, 181.8]}}
+{"tool": "move", "arguments": {"ids": [397, 662], "delta_mm": [0, 0, 242.4]}}
+{"tool": "check_model", "arguments": {}}

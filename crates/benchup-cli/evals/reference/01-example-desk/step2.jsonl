@@ -1,0 +1,6 @@
+{"tool": "push_pull", "arguments": {"face_id": 5119, "distance_mm": 200}}
+{"tool": "enter_object", "arguments": {"id": 5430}}
+{"tool": "enter_object", "arguments": {"id": 5427}}
+{"tool": "draw_polyline", "arguments": {"points_mm": [[649,960,892],[649,960,928]]}}
+{"tool": "exit_to_root", "arguments": {}}
+{"tool": "get_object", "arguments": {"id": 5427}}

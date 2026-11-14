@@ -1,0 +1,366 @@
+{
+  "seeds": {
+    "estanteria": "crates/benchup-cli/evals/fixtures/estanteria.bup",
+    "example": "assets/examples/Example.bup",
+    "new": null
+  },
+  "cases": [
+    {
+      "id": "01-example-desk",
+      "title": "Lengthen the desk",
+      "mode": "cli",
+      "seed": "example",
+      "file": "Example.bup",
+      "request": "En Example.bup, haz el escritorio (Desk) 200 mm más largo.",
+      "focus": [
+        "get_scene filters",
+        "split_face",
+        "merge_faces",
+        "measure_space",
+        "find_surfaces",
+        "push_pull"
+      ],
+      "reference": {
+        "batches": [
+          "step1.jsonl",
+          "step2.jsonl"
+        ],
+        "expect": {
+          "errors": 0,
+          "allowed_kinds": [
+            "no_material"
+          ]
+        }
+      }
+    },
+    {
+      "id": "02-four-shelves",
+      "title": "Five shelves to four",
+      "mode": "cli",
+      "seed": "estanteria",
+      "file": "estanteria.bup",
+      "request": "En estanteria.bup, ahora quiero que tenga 4 baldas en cada columna en vez de 5, repartidas por igual, manteniendo los ensambles.",
+      "focus": [
+        "distribute",
+        "flip_joint"
+      ],
+      "reference": {
+        "batches": [
+          "batch.jsonl",
+          "flip.jsonl"
+        ],
+        "expect": {
+          "passed": true
+        }
+      }
+    },
+    {
+      "id": "03-table",
+      "title": "Dining table",
+      "mode": "cli",
+      "seed": "new",
+      "file": "mesa.bup",
+      "request": "Créame mesa.bup: una mesa de comedor de 1400×800 mm y 750 mm de alto, con 4 patas de 70×70 mm, faldones unidos a las patas con caja y espiga, y un tablero de 30 mm encima.",
+      "focus": [
+        "create_board",
+        "add_joint"
+      ],
+      "reference": {
+        "batches": [
+          "mesa.jsonl"
+        ],
+        "expect": {
+          "passed": true
+        }
+      }
+    },
+    {
+      "id": "04-drawers",
+      "title": "Chest of drawers",
+      "mode": "cli",
+      "seed": "new",
+      "file": "cajonera.bup",
+      "request": "Créame cajonera.bup: una cajonera de 500 mm de ancho, 450 de fondo y 700 de alto, con 3 cajones iguales. Los frentes de cajón unidos a los laterales del cajón con colas de milano. Los tres cajones deben ser el mismo componente.",
+      "focus": [
+        "group",
+        "create_copy",
+        "add_joint"
+      ],
+      "reference": {
+        "batches": [
+          "build.jsonl"
+        ],
+        "expect": {
+          "passed": true
+        }
+      }
+    },
+    {
+      "id": "05-back-rabbet",
+      "title": "Back in a rabbet and plinth",
+      "mode": "cli",
+      "seed": "estanteria",
+      "file": "estanteria.bup",
+      "request": "En estanteria.bup, añade una trasera de 6 mm metida en un galce en los laterales, y un zócalo de 80 mm de alto retranqueado 20 mm por delante.",
+      "focus": [
+        "add_joint",
+        "check_model only_new"
+      ],
+      "reference": {
+        "batches": [
+          "flip.jsonl",
+          "change.jsonl"
+        ],
+        "expect": {
+          "passed": true
+        }
+      }
+    },
+    {
+      "id": "06-oak",
+      "title": "Solid oak 19 mm",
+      "mode": "cli",
+      "seed": "estanteria",
+      "file": "estanteria.bup",
+      "request": "En estanteria.bup, hazla en roble macizo de 19 mm en vez de tablero de 18.",
+      "focus": [
+        "change_thickness",
+        "create_stock_material"
+      ],
+      "reference": {
+        "batches": [
+          "flip.jsonl",
+          "oak.jsonl"
+        ],
+        "expect": {
+          "passed": true
+        }
+      }
+    },
+    {
+      "id": "07-curved-side",
+      "title": "Bedside table with curved sides",
+      "mode": "cli",
+      "seed": "new",
+      "file": "mesilla.bup",
+      "request": "Créame mesilla.bup: una mesilla de noche de 450 mm de ancho, 350 de fondo y 550 de alto. Los laterales tienen el borde delantero curvo (un arco que entra 40 mm en el centro) y la tapa tiene un chaflán de 10 mm en las esquinas delanteras.",
+      "focus": [
+        "create_profile_board",
+        "add_profile"
+      ],
+      "reference": {
+        "batches": [
+          "build.jsonl"
+        ],
+        "expect": {
+          "passed": true
+        }
+      }
+    },
+    {
+      "id": "08-ladder-shelf",
+      "title": "Leaning ladder shelf",
+      "mode": "cli",
+      "seed": "new",
+      "file": "escalera.bup",
+      "request": "Créame escalera.bup: una estantería tipo escalera apoyada en la pared, de 1800 mm de alto, con dos largueros inclinados 15° respecto a la vertical y 4 baldas horizontales de 600 mm de ancho, cada una menos profunda que la de abajo, encajadas en los largueros.",
+      "focus": [
+        "create_profile_board",
+        "rotate"
+      ],
+      "reference": {
+        "batches": [
+          "batch.jsonl"
+        ],
+        "expect": {
+          "passed": true
+        }
+      }
+    },
+    {
+      "id": "09-dimensions",
+      "title": "Workshop dimensions",
+      "mode": "cli",
+      "seed": "estanteria",
+      "file": "estanteria.bup",
+      "request": "En estanteria.bup, acota el alto, el ancho y el fondo totales, y la distancia entre baldas, y pon un texto con el nombre del mueble, para llevarlo al taller.",
+      "focus": [
+        "add_dimension",
+        "render_view"
+      ],
+      "reference": {
+        "batches": [
+          "batch.jsonl"
+        ],
+        "expect": {
+          "errors": 0,
+          "allowed_kinds": [
+            "joint_roles_reversed",
+            "no_material"
+          ],
+          "min_dimensions": 4,
+          "min_texts": 1
+        }
+      }
+    },
+    {
+      "id": "10-organize",
+      "title": "Modules, components and tags",
+      "mode": "cli",
+      "seed": "estanteria",
+      "file": "estanteria.bup",
+      "request": "Organiza estanteria.bup: agrupa cada columna como un módulo (Módulo izquierdo, Módulo derecho), haz que todas las baldas sean el mismo componente, y pon la etiqueta «Baldas» a las baldas y «Estructura» a laterales y separador.",
+      "focus": [
+        "group",
+        "tag"
+      ],
+      "reference": {
+        "batches": [
+          "organize.jsonl"
+        ],
+        "expect": {
+          "errors": 0,
+          "allowed_kinds": [
+            "joint_roles_reversed",
+            "no_material"
+          ]
+        }
+      }
+    },
+    {
+      "id": "11-cut-material",
+      "title": "Cut list and sheets",
+      "mode": "cli",
+      "seed": "estanteria",
+      "file": "estanteria.bup",
+      "request": "Para estanteria.bup, ¿cuánto tablero necesito? Dame la lista de despiece (pieza, medidas, cantidad) y cuántos tableros de 2440×1220 mm de 18 mm tengo que comprar.",
+      "focus": [
+        "get_cut_list",
+        "get_estimate"
+      ],
+      "reference": {
+        "batches": [
+          "batch.jsonl"
+        ],
+        "expect": {
+          "errors": 0,
+          "allowed_kinds": [
+            "joint_roles_reversed",
+            "no_material"
+          ]
+        }
+      }
+    },
+    {
+      "id": "12-impossible",
+      "title": "A shelf that does not fit",
+      "mode": "cli",
+      "seed": "estanteria",
+      "file": "estanteria.bup",
+      "request": "En estanteria.bup, añade una balda de 1200 mm de largo en la columna izquierda, a 1000 mm del suelo, encajada en los laterales.",
+      "focus": [
+        "check_model",
+        "measure_space"
+      ],
+      "reference": {
+        "batches": [
+          "literal.jsonl"
+        ],
+        "expect": {
+          "required_kinds": [
+            "passes_through"
+          ]
+        }
+      }
+    },
+    {
+      "id": "13-router",
+      "title": "Edge profiles",
+      "mode": "cli",
+      "seed": "estanteria",
+      "file": "estanteria.bup",
+      "request": "En estanteria.bup, achaflana 2 mm el canto delantero superior de todas las baldas y redondea con radio 3 mm los dos cantos delanteros del separador central.",
+      "focus": [
+        "add_profile"
+      ],
+      "reference": {
+        "batches": [
+          "profiles.jsonl"
+        ],
+        "expect": {
+          "passed": true
+        }
+      }
+    },
+    {
+      "id": "14-trim",
+      "title": "Bench with trimmed through tenons",
+      "mode": "cli",
+      "seed": "new",
+      "file": "banco.bup",
+      "request": "Créame banco.bup: un banco de 1200×350 mm y 450 mm de alto, con 4 patas de 50×50 mm y un asiento de 25 mm. Los travesaños (70×22 mm) atraviesan las patas con caja y espiga pasante y deben quedar enrasados por fuera de las patas.",
+      "focus": [
+        "add_joint trim",
+        "set_joint"
+      ],
+      "reference": {
+        "batches": [
+          "bench.jsonl"
+        ],
+        "expect": {
+          "passed": true
+        }
+      }
+    },
+    {
+      "id": "15-finish",
+      "title": "Finish and time",
+      "mode": "cli",
+      "seed": "estanteria",
+      "file": "estanteria.bup",
+      "request": "En estanteria.bup, quiero lijarla a grano 120 y 180 y darle dos manos de barniz satinado. ¿Cuánto tiempo me llevará terminarla, contando el secado?",
+      "focus": [
+        "set_finish",
+        "get_estimate"
+      ],
+      "reference": {
+        "batches": [
+          "finish.jsonl"
+        ],
+        "expect": {
+          "errors": 0,
+          "allowed_kinds": [
+            "joint_roles_reversed",
+            "no_material"
+          ]
+        }
+      }
+    },
+    {
+      "id": "16-big-project",
+      "title": "Shelf above the desk, checked visually",
+      "mode": "cli",
+      "seed": "example",
+      "file": "Example.bup",
+      "request": "En Example.bup, pon una balda de 18 mm y 250 mm de fondo encima del escritorio, a 400 mm por encima del tablero y del mismo largo, sin chocar con nada. Comprueba el resultado con una imagen.",
+      "focus": [
+        "get_scene filters",
+        "measure_space",
+        "render"
+      ]
+    },
+    {
+      "id": "17-mcp-shelves",
+      "title": "Five shelves to four, over MCP",
+      "mode": "mcp",
+      "seed": "estanteria",
+      "file": "estanteria.bup",
+      "request": "En estanteria.bup, ahora quiero que tenga 4 baldas en cada columna en vez de 5, repartidas por igual, manteniendo los ensambles.",
+      "focus": [
+        "MCP",
+        "distribute",
+        "render_view"
+      ]
+    }
+  ]
+}

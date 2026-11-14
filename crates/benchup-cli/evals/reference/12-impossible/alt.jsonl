@@ -1,0 +1,4 @@
+{"tool": "create_board", "arguments": {"origin_mm": [9, 0, 1000], "size_mm": [491, 300, 18], "name": "Balda izquierda 1000", "grain_axis": "x"}}
+{"tool": "add_joint", "arguments": {"a": "$1.created[0]", "b": 79, "kind": "tongue_groove"}}
+{"tool": "add_joint", "arguments": {"a": "$1.created[0]", "b": 185, "kind": "tongue_groove"}}
+{"tool": "check_model", "arguments": {}}
