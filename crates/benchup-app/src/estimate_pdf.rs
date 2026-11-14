@@ -28,6 +28,7 @@ const RIGHT: f64 = 553.;
 const BOTTOM: f64 = 55.;
 const INK: &str = "0.15 0.20 0.17";
 const BORDER: &str = "0.73 0.79 0.74";
+const ROBOTO_FONT_DATA: &[u8] = include_bytes!("../../../assets/fonts/Roboto[wdth,wght].ttf");
 
 enum RowStyle {
     Plain,
@@ -52,6 +53,7 @@ impl RowStyle {
 struct Pdf<'a> {
     font: FontRef<'a>,
     fallback: FontRef<'a>,
+    unicode_fallback: FontRef<'a>,
     chars: BTreeMap<char, (u16, u16, f64)>,
     pages: Vec<String>,
     page: String,
@@ -63,8 +65,10 @@ impl<'a> Pdf<'a> {
     fn glyph(&self, ch: char) -> (u8, u16, f64) {
         let (index, font) = if self.font.charmap().map(ch).is_some() {
             (1, &self.font)
-        } else {
+        } else if self.fallback.charmap().map(ch).is_some() {
             (2, &self.fallback)
+        } else {
+            (3, &self.unicode_fallback)
         };
         let glyph = font.charmap().map(ch).unwrap_or_default();
         let width = font
@@ -244,7 +248,12 @@ impl<'a> Pdf<'a> {
             start = end;
         }
     }
-    fn finish(mut self, font_data: &[u8], fallback_data: &[u8]) -> Result<Vec<u8>, String> {
+    fn finish(
+        mut self,
+        font_data: &[u8],
+        fallback_data: &[u8],
+        unicode_fallback_data: &[u8],
+    ) -> Result<Vec<u8>, String> {
         self.pages.push(std::mem::take(&mut self.page));
         let count = self.pages.len();
         // Add page numbers before constructing the shared font's character map.
@@ -289,7 +298,7 @@ impl<'a> Pdf<'a> {
         let rgb = crate::pdf_header::logo_rgb();
         let mut objects = vec![
             b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-            format!("<< /Type /Pages /Count {count} /Kids [{}] >>", (0..count).map(|i| format!("{} 0 R", 14+i*2)).collect::<Vec<_>>().join(" ")).into_bytes(),
+            format!("<< /Type /Pages /Count {count} /Kids [{}] >>", (0..count).map(|i| format!("{} 0 R", 18+i*2)).collect::<Vec<_>>().join(" ")).into_bytes(),
             b"<< /Type /Font /Subtype /Type0 /BaseFont /BenchUpUbuntu /Encoding /Identity-H /DescendantFonts [4 0 R] /ToUnicode 8 0 R >>".to_vec(),
             format!("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /BenchUpUbuntu /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor 5 0 R /CIDToGIDMap 7 0 R /W [0 [{widths}]] >>").into_bytes(),
             b"<< /Type /FontDescriptor /FontName /BenchUpUbuntu /Flags 32 /FontBBox [-1000 -1000 3000 3000] /ItalicAngle 0 /Ascent 1000 /Descent -300 /CapHeight 750 /StemV 80 /FontFile2 6 0 R >>".to_vec(),
@@ -303,8 +312,14 @@ impl<'a> Pdf<'a> {
             b"<< /Type /FontDescriptor /FontName /BenchUpHack /Flags 33 /FontBBox [-1000 -1000 3000 3000] /ItalicAngle 0 /Ascent 1000 /Descent -300 /CapHeight 750 /StemV 80 /FontFile2 13 0 R >>".to_vec(),
             stream(&format!("/Length1 {}", fallback_data.len()), fallback_data),
         ]);
+        objects.extend([
+            b"<< /Type /Font /Subtype /Type0 /BaseFont /BenchUpRoboto /Encoding /Identity-H /DescendantFonts [15 0 R] /ToUnicode 8 0 R >>".to_vec(),
+            format!("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /BenchUpRoboto /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor 16 0 R /CIDToGIDMap 7 0 R /W [0 [{widths}]] >>").into_bytes(),
+            b"<< /Type /FontDescriptor /FontName /BenchUpRoboto /Flags 32 /FontBBox [-1000 -1000 3000 3000] /ItalicAngle 0 /Ascent 1000 /Descent -300 /CapHeight 750 /StemV 80 /FontFile2 17 0 R >>".to_vec(),
+            stream(&format!("/Length1 {}", unicode_fallback_data.len()), unicode_fallback_data),
+        ]);
         for (i, page) in self.pages.iter().enumerate() {
-            objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 10 0 R >> /XObject << /Logo 9 0 R >> >> /Contents {} 0 R >>", 15+i*2).into_bytes());
+            objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 10 0 R /F3 14 0 R >> /XObject << /Logo 9 0 R >> >> /Contents {} 0 R >>", 19+i*2).into_bytes());
             objects.push(stream("", page.as_bytes()));
         }
         let mut bytes = b"%PDF-1.4\n%\xE2\xE3\xCF\xD3\n".to_vec();
@@ -396,6 +411,10 @@ pub(crate) fn render(report: &Report) -> Result<Vec<u8>, String> {
     let fallback_data: &[u8] = definitions.font_data["Hack"].font.as_ref().as_ref();
     let fallback = FontRef::new(fallback_data)
         .map_err(|error| tr!("estimate_pdf.could_not_load_report_symbol_font", error = error))?;
+    // UI font definitions are separate from the fonts embedded in this PDF.
+    // Keep the existing text and symbol fonts, and use Roboto for Vietnamese.
+    let unicode_fallback = FontRef::new(ROBOTO_FONT_DATA)
+        .map_err(|error| tr!("estimate_pdf.could_not_load_report_font", error = error))?;
     let mut text = vec![report.name.as_str(), report.currency.as_str()];
     text.extend(report.summary.iter().map(String::as_str));
     text.extend(report.notes.iter().map(String::as_str));
@@ -414,10 +433,11 @@ pub(crate) fn render(report: &Report) -> Result<Vec<u8>, String> {
     if chars.len() > 65_000 {
         return Err(tr!("estimate_pdf.too_many_distinct_characters_for_one_estimate_pdf").into());
     }
-    if let Some(ch) = chars
-        .iter()
-        .find(|ch| font.charmap().map(**ch).is_none() && fallback.charmap().map(**ch).is_none())
-    {
+    if let Some(ch) = chars.iter().find(|ch| {
+        font.charmap().map(**ch).is_none()
+            && fallback.charmap().map(**ch).is_none()
+            && unicode_fallback.charmap().map(**ch).is_none()
+    }) {
         return Err(tr!(
             "estimate_pdf.the_pdf_font_cannot_display_u_replace_this",
             *ch as u32,
@@ -427,6 +447,7 @@ pub(crate) fn render(report: &Report) -> Result<Vec<u8>, String> {
     let mut pdf = Pdf {
         font,
         fallback,
+        unicode_fallback,
         chars: BTreeMap::new(),
         pages: Vec::new(),
         page: String::new(),
@@ -562,7 +583,7 @@ pub(crate) fn render(report: &Report) -> Result<Vec<u8>, String> {
             pdf.table_row(row, &widths, &headers, title, RowStyle::alternating(index));
         }
     }
-    pdf.finish(data, fallback_data)
+    pdf.finish(data, fallback_data, ROBOTO_FONT_DATA)
 }
 
 #[cfg(test)]
@@ -596,6 +617,7 @@ mod tests {
         let mut pdf = Pdf {
             font: FontRef::new(data).unwrap(),
             fallback: FontRef::new(fallback).unwrap(),
+            unicode_fallback: FontRef::new(ROBOTO_FONT_DATA).unwrap(),
             chars: BTreeMap::new(),
             pages: Vec::new(),
             page: String::new(),
@@ -623,6 +645,49 @@ mod tests {
         assert!(pdf.page.contains("48.000 695.500 Tm"));
         assert!(pdf.page.contains("293.000 682.500 Tm"));
         assert!(pdf.page.contains("358.000 682.500 Tm"));
+    }
+
+    #[test]
+    fn vietnamese_report_embeds_readable_selectable_text_in_any_ui_language() {
+        struct ResetLanguage;
+        impl Drop for ResetLanguage {
+            fn drop(&mut self) {
+                benchup_core::i18n::set_language("en");
+            }
+        }
+        let _reset = ResetLanguage;
+        benchup_core::i18n::set_language("vi_VN");
+        let mut report = Report {
+            name: "Xưởng gỗ Việt".into(),
+            currency: "VND".into(),
+            notes: vec![tr!("wood_glue.estimate_note", area = "1 m²")],
+            ..Default::default()
+        };
+        for language in ["vi_VN", "en_US"] {
+            benchup_core::i18n::set_language(language);
+            let bytes =
+                render(&report).expect("Vietnamese project names and notes can be exported");
+            let text = String::from_utf8_lossy(&bytes);
+            assert!(text.contains("/BaseFont /BenchUpRoboto"));
+            assert!(text.contains("/F3 14 0 R"));
+            assert!(text.contains("BT /F3 "));
+            assert!(
+                bytes
+                    .windows(ROBOTO_FONT_DATA.len())
+                    .any(|data| data == ROBOTO_FONT_DATA)
+            );
+            for ch in ['ộ', 'ủ', 'ỗ', 'ự'] {
+                assert!(
+                    text.contains(&format!("<{:04X}>", ch as u32)),
+                    "missing {ch}"
+                );
+            }
+        }
+        report.notes.push("\u{10ffff}".into());
+        assert!(
+            render(&report).is_err(),
+            "unsupported characters still produce an error"
+        );
     }
 
     #[test]

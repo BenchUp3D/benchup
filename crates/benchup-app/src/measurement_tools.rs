@@ -17,10 +17,15 @@ pub(super) struct Measurement {
 impl BenchUpApp {
     /// Use the same infinite line for the live preview and the saved guide.
     pub(super) fn measurement_guide(&self) -> Option<benchup_core::ConstructionGuide> {
-        self.measurement.as_ref()?;
+        let reference = self.measurement.as_ref()?.reference_direction;
         let points = self.measurement_points();
         let (origin, direction) = match (self.tool, points.as_slice()) {
-            (Tool::TapeMeasure, [start, end]) => (*end, (*end - *start).try_normalize()?),
+            // Like SketchUp, a tape started on an edge offsets a guide parallel
+            // to that edge; from a point it extends along the tape.
+            (Tool::TapeMeasure, [start, end]) => (
+                *end,
+                reference.or_else(|| (*end - *start).try_normalize())?,
+            ),
             (Tool::Protractor, [center, _, end]) => (*center, (*end - *center).try_normalize()?),
             _ => return None,
         };
@@ -130,7 +135,15 @@ impl BenchUpApp {
                 .copied()
                 .or(self.snap.map(|s| s.point))
                 .ok_or(tr!("measurement_tools.move_the_pointer_to_choose_a_direction_first"))?;
-            let direction = (endpoint - origin)
+            let mut tape = endpoint - origin;
+            // An edge-parallel guide is placed at the typed perpendicular offset.
+            if let Some(reference) = m.reference_direction {
+                let offset = tape - reference * tape.dot(reference);
+                if offset.length() > 1e-7 {
+                    tape = offset;
+                }
+            }
+            let direction = tape
                 .try_normalize()
                 .ok_or(tr!("measurement_tools.move_the_pointer_to_choose_a_direction_first"))?;
             Ok(origin + direction * length)

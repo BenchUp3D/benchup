@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const catalog = require('../assets/i18n/en.json');
+const catalog = require('../assets/i18n/en_US.json');
 const html = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
 const startup = html.match(/<script id="startup-messages">([\s\S]*?)<\/script>/)[1];
 
@@ -42,7 +42,7 @@ test('the browser shell uses English catalog messages while loading', async () =
         getElementById: id => ({'benchup-canvas': canvas, 'loading-label': loading})[id],
     };
     await runStartup(document, async url => {
-        assert.equal(url, 'assets/i18n/en.json');
+        assert.equal(url, 'assets/i18n/en_US.json');
         return {ok: true, json: async () => catalog};
     });
     assert.equal(document.title, 'Untitled model - BenchUp');

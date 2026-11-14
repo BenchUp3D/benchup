@@ -25,6 +25,7 @@ const HISTORY_LABEL_KEYS: &[&str] = &[
     "app.paint_face",
     "app.paint_group",
     "app.paste",
+    "cli.agent_edit",
     "construction_guides.delete_guides",
     "context_menu.clean_aligned_vertices",
     "context_menu.duplicate",
@@ -111,7 +112,7 @@ fn plural(one: &str, other: &str, singular: bool) -> String {
 }
 
 fn main() {
-    let messages = read_catalog("../../assets/i18n/en.json", "English");
+    let messages = read_catalog("../../assets/i18n/en_US.json", "English");
     let translations = [
         Translation {
             variant: "SimplifiedChinese",
@@ -121,6 +122,16 @@ fn main() {
         Translation {
             variant: "BrazilianPortuguese",
             catalog: read_catalog("../../assets/i18n/pt_BR.json", "Brazilian Portuguese"),
+            singular: true,
+        },
+        Translation {
+            variant: "Vietnamese",
+            catalog: read_catalog("../../assets/i18n/vi_VN.json", "Vietnamese"),
+            singular: false,
+        },
+        Translation {
+            variant: "Spanish",
+            catalog: read_catalog("../../assets/i18n/es_419.json", "Spanish"),
             singular: true,
         },
     ];
