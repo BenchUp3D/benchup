@@ -1,0 +1,13 @@
+{"tool": "flip_joint", "arguments": {"ids": [716, 717, 718, 719, 720, 721, 722, 723, 724, 725]}}
+{"tool": "add_profile", "arguments": {"id": 238, "between": [["+z", "-y"]], "profile": "chamfer", "width_mm": 2}}
+{"tool": "add_profile", "arguments": {"id": 291, "between": [["+z", "-y"]], "profile": "chamfer", "width_mm": 2}}
+{"tool": "add_profile", "arguments": {"id": 344, "between": [["+z", "-y"]], "profile": "chamfer", "width_mm": 2}}
+{"tool": "add_profile", "arguments": {"id": 397, "between": [["+z", "-y"]], "profile": "chamfer", "width_mm": 2}}
+{"tool": "add_profile", "arguments": {"id": 450, "between": [["+z", "-y"]], "profile": "chamfer", "width_mm": 2}}
+{"tool": "add_profile", "arguments": {"id": 503, "between": [["+z", "-y"]], "profile": "chamfer", "width_mm": 2}}
+{"tool": "add_profile", "arguments": {"id": 556, "between": [["+z", "-y"]], "profile": "chamfer", "width_mm": 2}}
+{"tool": "add_profile", "arguments": {"id": 609, "between": [["+z", "-y"]], "profile": "chamfer", "width_mm": 2}}
+{"tool": "add_profile", "arguments": {"id": 662, "between": [["+z", "-y"]], "profile": "chamfer", "width_mm": 2}}
+{"tool": "add_profile", "arguments": {"id": 715, "between": [["+z", "-y"]], "profile": "chamfer", "width_mm": 2}}
+{"tool": "add_profile", "arguments": {"id": 185, "between": [["-y", "-x"], ["-y", "+x"]], "profile": "roundover", "width_mm": 3}}
+{"tool": "check_model", "arguments": {"only_new": true}}

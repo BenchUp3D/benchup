@@ -1,0 +1,3 @@
+{"tool": "create_board", "arguments": {"origin_mm": [9, 0, 1000], "size_mm": [1200, 300, 18], "name": "Left shelf at 1000"}}
+{"tool": "set_grain", "arguments": {"id": "$1.created[0]", "axis": "x"}}
+{"tool": "check_model", "arguments": {}}

@@ -1,0 +1,17 @@
+{"tool": "add_dimension", "arguments": {"start_mm": [0, 0, 0], "end_mm": [0, 0, 1800], "axis": "z", "offset_mm": [-250, 0, 0]}}
+{"tool": "add_dimension", "arguments": {"start_mm": [0, 0, 1800], "end_mm": [1000, 0, 1800], "axis": "x", "offset_mm": [0, 0, 250]}}
+{"tool": "add_dimension", "arguments": {"start_mm": [1000, 0, 1800], "end_mm": [1000, 300, 1800], "axis": "y", "offset_mm": [0, 0, 150]}}
+{"tool": "add_dimension", "arguments": {"start_mm": [18, 0, 0], "end_mm": [18, 0, 285], "axis": "z", "offset_mm": [-100, 0, 0]}}
+{"tool": "add_dimension", "arguments": {"start_mm": [18, 0, 303], "end_mm": [18, 0, 588], "axis": "z", "offset_mm": [-100, 0, 0]}}
+{"tool": "add_dimension", "arguments": {"start_mm": [18, 0, 606], "end_mm": [18, 0, 891], "axis": "z", "offset_mm": [-100, 0, 0]}}
+{"tool": "add_dimension", "arguments": {"start_mm": [18, 0, 909], "end_mm": [18, 0, 1194], "axis": "z", "offset_mm": [-100, 0, 0]}}
+{"tool": "add_dimension", "arguments": {"start_mm": [18, 0, 1212], "end_mm": [18, 0, 1497], "axis": "z", "offset_mm": [-100, 0, 0]}}
+{"tool": "add_dimension", "arguments": {"start_mm": [18, 0, 1515], "end_mm": [18, 0, 1800], "axis": "z", "offset_mm": [-100, 0, 0]}}
+{"tool": "add_dimension", "arguments": {"start_mm": [982, 0, 0], "end_mm": [982, 0, 285], "axis": "z", "offset_mm": [100, 0, 0]}}
+{"tool": "add_dimension", "arguments": {"start_mm": [982, 0, 303], "end_mm": [982, 0, 588], "axis": "z", "offset_mm": [100, 0, 0]}}
+{"tool": "add_dimension", "arguments": {"start_mm": [982, 0, 606], "end_mm": [982, 0, 891], "axis": "z", "offset_mm": [100, 0, 0]}}
+{"tool": "add_dimension", "arguments": {"start_mm": [982, 0, 909], "end_mm": [982, 0, 1194], "axis": "z", "offset_mm": [100, 0, 0]}}
+{"tool": "add_dimension", "arguments": {"start_mm": [982, 0, 1212], "end_mm": [982, 0, 1497], "axis": "z", "offset_mm": [100, 0, 0]}}
+{"tool": "add_dimension", "arguments": {"start_mm": [982, 0, 1515], "end_mm": [982, 0, 1800], "axis": "z", "offset_mm": [100, 0, 0]}}
+{"tool": "add_text", "arguments": {"point_mm": [500.0, 0, 1800], "offset_mm": [0, 0, 500], "text": "Bookcase"}}
+{"tool": "check_model", "arguments": {}}

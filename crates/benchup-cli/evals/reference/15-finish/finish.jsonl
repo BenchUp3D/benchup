@@ -1,0 +1,2 @@
+{"tool": "set_finish", "arguments": {"ids": [79, 132, 185, 238, 291, 344, 397, 450, 503, 556, 609, 662, 715], "sanding_grits": [120, 180], "varnish": {"coats": 2, "sheen": "satin"}}}
+{"tool": "get_estimate", "arguments": {}}
