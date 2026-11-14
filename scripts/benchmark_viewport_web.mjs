@@ -160,9 +160,13 @@ if window is None: raise RuntimeError('Cannot find the benchmark browser window'
 d.x.XRaiseWindow.argtypes=[C.c_void_p,C.c_ulong];d.x.XRaiseWindow(d.display,window)
 class Message(C.Structure):
  _fields_=[('type',C.c_int),('serial',C.c_ulong),('send_event',C.c_int),('display',C.c_void_p),('window',C.c_ulong),('message_type',C.c_ulong),('format',C.c_int),('data',C.c_long*5)]
+class Event(C.Union):
+ _fields_=[('client',Message),('padding',C.c_long*24)]
 m=Message(type=33,display=d.display,window=window,message_type=d.x.XInternAtom(d.display,b'_NET_ACTIVE_WINDOW',0),format=32)
 m.data[0]=2
-message=module.Event();C.memmove(C.byref(message),C.byref(m),C.sizeof(m))
+message=Event(client=m)
+d.x.XSendEvent.argtypes=[C.c_void_p,C.c_ulong,C.c_int,C.c_long,C.POINTER(Event)]
+d.x.XSendEvent.restype=C.c_int
 d.x.XSendEvent(d.display,d.root,0,(1<<19)|(1<<20),C.byref(message))
 d.x.XSetInputFocus(d.display,window,2,0);d.x.XFlush(d.display);time.sleep(.1)
 if d.property(d.root,'_NET_ACTIVE_WINDOW') != [window]: raise RuntimeError('The benchmark browser is not the active X11 window')
@@ -204,7 +208,10 @@ if d.property(d.root,'_NET_ACTIVE_WINDOW') != [window]: raise RuntimeError('The 
   if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));
   return r.result.value;
  };
- await until(()=>evaluate(`window.benchupViewportBenchmarkState`),'loaded workspace');
+ await until(async()=>{
+  if(diagnostics.includes('panicked at') || diagnostics.includes('Runtime.exceptionThrown'))throw Error(diagnostics);
+  return evaluate(`window.benchupViewportBenchmarkState`);
+ },'loaded workspace');
  const loadedNonce=await evaluate(`window.benchupBenchmarkLoadNonce`);
  const loadedWasmUrl=await evaluate(`performance.getEntriesByType('resource').find(r=>r.name.endsWith('.wasm'))?.name`);
  let loadedWasmHash;

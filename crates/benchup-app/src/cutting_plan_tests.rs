@@ -1078,3 +1078,32 @@ fn material_ids_keep_identical_catalog_entries_in_separate_cut_groups() {
     assert_ne!(required[0].material_id, required[1].material_id);
     assert!(required.iter().all(|item| item.quantity == 1));
 }
+
+#[test]
+fn view_agrees_with_the_estimates_and_pdf_on_sheets_and_oversized_cuts() {
+    let group = |dimensions: [u64; 3], parts: usize| CutGroup {
+        material_id: None,
+        material: material(),
+        dimensions,
+        rectangular: true,
+        grain: Default::default(),
+        joinery: Default::default(),
+        parts: vec!["Part".into(); parts],
+    };
+    let plan = CuttingPlan {
+        groups: vec![group([180, 6000, 20000], 3), group([180, 13000, 30000], 1)],
+        skipped: 0,
+        joinery_omitted: false,
+    };
+    let settings = LayoutSettings::default();
+    let view = plan.view(settings);
+    let required = plan.material_requirements(settings);
+    assert_eq!(view.sections.len(), required.len());
+    let section = &view.sections[0];
+    assert_eq!(section.sheets(), required[0].quantity);
+    assert_eq!(section.excluded(), required[0].excluded);
+    assert_eq!(section.excluded(), 1);
+    assert_eq!(section.layout.oversized[0].mark, 1);
+    let pdf = String::from_utf8(plan.pdf("Cabinet", false, true)).unwrap();
+    assert!(pdf.contains("DOES NOT FIT SELECTED STOCK"));
+}

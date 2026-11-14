@@ -10,6 +10,184 @@ fn deliver(app: &mut BenchUpApp, result: Result<Outcome, String>, ctx: &egui::Co
     app.poll_project(ctx);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn write_project_file(path: &std::path::Path, doc: &Document) {
+    let json = serde_json::to_string(doc).unwrap();
+    crate::project_files::write(path, &crate::project_files::encode(&json).unwrap()).unwrap();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn settle(app: &mut BenchUpApp, ctx: &egui::Context) {
+    for _ in 0..100 {
+        app.poll_project(ctx);
+        if app.project.pending.is_none() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn external_edit_reloads_a_clean_project_and_keeps_the_view() {
+    let ctx = egui::Context::default();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("house.bup");
+    write_project_file(&path, &Document::default());
+    let mut app = BenchUpApp::with_document(Document::default(), None, true);
+    app.replace_project(Document::default(), Some(path.clone()), &ctx);
+    app.doc.camera.yaw = 0.7;
+    let mut external = Document::default();
+    external.model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+    write_project_file(&path, &external);
+    app.poll_external_file(&ctx);
+    settle(&mut app, &ctx);
+    assert_eq!(app.doc.model, external.model);
+    assert_eq!(app.doc.camera.yaw, 0.7);
+    assert!(!app.project.modified);
+    assert!(!app.project.external_change);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn external_edit_with_unsaved_changes_asks_instead_of_replacing_the_model() {
+    let ctx = egui::Context::default();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("house.bup");
+    write_project_file(&path, &Document::default());
+    let mut app = BenchUpApp::with_document(Document::default(), None, true);
+    app.replace_project(Document::default(), Some(path.clone()), &ctx);
+    app.doc.model.add_edge(DVec3::ZERO, DVec3::Y).unwrap();
+    app.project.modified = true;
+    let local = app.doc.model.clone();
+    let mut external = Document::default();
+    external.model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+    write_project_file(&path, &external);
+    app.poll_external_file(&ctx);
+    assert!(app.project.external_change);
+    assert!(app.project.pending.is_none());
+    assert_eq!(app.doc.model, local);
+    app.poll_external_file(&ctx);
+    assert!(app.project.pending.is_none());
+    assert_eq!(app.doc.model, local);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn own_save_does_not_reload_the_project() {
+    let ctx = egui::Context::default();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("house.bup");
+    write_project_file(&path, &Document::default());
+    let mut app = BenchUpApp::with_document(Document::default(), None, true);
+    app.replace_project(Document::default(), Some(path.clone()), &ctx);
+    app.doc.model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+    app.project.modified = true;
+    write_project_file(&path, &app.doc);
+    deliver(&mut app, Ok(Outcome::Saved(Some(path))), &ctx);
+    app.poll_external_file(&ctx);
+    assert!(app.project.pending.is_none());
+    assert!(!app.project.external_change);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn unreadable_external_write_keeps_the_document_and_retries_on_the_next_change() {
+    let ctx = egui::Context::default();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("house.bup");
+    write_project_file(&path, &Document::default());
+    let mut app = BenchUpApp::with_document(Document::default(), None, true);
+    app.replace_project(Document::default(), Some(path.clone()), &ctx);
+    std::fs::write(&path, b"half written").unwrap();
+    app.poll_external_file(&ctx);
+    settle(&mut app, &ctx);
+    assert!(app.project.error.is_none());
+    assert!(app.doc.model.objects.is_empty());
+    let mut external = Document::default();
+    external.model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+    write_project_file(&path, &external);
+    app.project.external_checked = None;
+    app.poll_external_file(&ctx);
+    settle(&mut app, &ctx);
+    assert_eq!(app.doc.model, external.model);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn external_file_is_checked_at_most_once_a_second() {
+    let ctx = egui::Context::default();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("house.bup");
+    write_project_file(&path, &Document::default());
+    let mut app = BenchUpApp::with_document(Document::default(), None, true);
+    app.replace_project(Document::default(), Some(path.clone()), &ctx);
+    app.poll_external_file(&ctx);
+    let mut external = Document::default();
+    external.model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+    write_project_file(&path, &external);
+    app.poll_external_file(&ctx);
+    assert!(app.project.pending.is_none());
+    assert!(app.doc.model.objects.is_empty());
+    app.project.external_checked = None;
+    app.poll_external_file(&ctx);
+    settle(&mut app, &ctx);
+    assert_eq!(app.doc.model, external.model);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn same_content_rewrite_does_not_reload_or_prompt() {
+    let ctx = egui::Context::default();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("house.bup");
+    write_project_file(&path, &Document::default());
+    let mut app = BenchUpApp::with_document(Document::default(), None, true);
+    app.replace_project(Document::default(), Some(path.clone()), &ctx);
+    app.doc.model.add_edge(DVec3::ZERO, DVec3::Y).unwrap();
+    app.project.modified = true;
+    let local = app.doc.model.clone();
+    write_project_file(&path, &Document::default());
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60))
+        .unwrap();
+    app.poll_external_file(&ctx);
+    assert!(!app.project.external_change);
+    assert!(app.project.pending.is_none());
+    assert_eq!(app.doc.model, local);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn external_edit_waits_until_a_viewport_drag_ends() {
+    let ctx = egui::Context::default();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("house.bup");
+    write_project_file(&path, &Document::default());
+    let mut app = BenchUpApp::with_document(Document::default(), None, true);
+    app.replace_project(Document::default(), Some(path.clone()), &ctx);
+    app.gesture = Some(Gesture {
+        button: egui::PointerButton::Primary,
+        start: Pos2::ZERO,
+        last: Pos2::ZERO,
+        kind: GestureKind::Select { additive: false },
+    });
+    let mut external = Document::default();
+    external.model.add_edge(DVec3::ZERO, DVec3::X).unwrap();
+    write_project_file(&path, &external);
+    app.poll_external_file(&ctx);
+    assert!(app.project.pending.is_none());
+    assert!(app.doc.model.objects.is_empty());
+    app.gesture = None;
+    app.project.external_checked = None;
+    app.poll_external_file(&ctx);
+    settle(&mut app, &ctx);
+    assert_eq!(app.doc.model, external.model);
+}
+
 #[test]
 fn selection_restores_for_its_project_and_ignores_missing_or_hidden_entities() {
     let ctx = egui::Context::default();

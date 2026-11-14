@@ -14,6 +14,8 @@ pub use stock_frame::JoineryFrame;
 #[path = "joinery_trim.rs"]
 mod trimming;
 use trimming::trim_excess;
+#[path = "joinery_slots.rs"]
+mod slots;
 #[cfg(test)]
 #[path = "joinery_angle_tests.rs"]
 mod angle_tests;
@@ -28,16 +30,27 @@ pub enum JointKind {
     Rabbet,
     Dovetail,
     Finger,
+    Biscuit,
+    Domino,
+    Groove,
+    LooseTongue,
 }
 impl JointKind {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 10] = [
         Self::MortiseTenon,
         Self::HalfLap,
         Self::TongueGroove,
         Self::Rabbet,
         Self::Dovetail,
         Self::Finger,
+        Self::Biscuit,
+        Self::Domino,
+        Self::Groove,
+        Self::LooseTongue,
     ];
+    pub fn uses_pockets(self) -> bool {
+        matches!(self, Self::Biscuit | Self::Domino | Self::Groove | Self::LooseTongue)
+    }
     pub fn label(self) -> &'static str {
         match self {
             Self::MortiseTenon => tr!("core.joinery.mortise_and_tenon"),
@@ -46,6 +59,10 @@ impl JointKind {
             Self::Rabbet => tr!("core.joinery.rabbet"),
             Self::Dovetail => tr!("core.joinery.dovetail"),
             Self::Finger => tr!("core.joinery.finger_joint"),
+            Self::Biscuit => tr!("core.joinery.biscuit"),
+            Self::Domino => tr!("core.joinery.domino"),
+            Self::Groove => tr!("core.joinery.groove"),
+            Self::LooseTongue => tr!("core.joinery.loose_tongue"),
         }
     }
 }
@@ -87,6 +104,13 @@ pub struct JointSettings {
     pub width_ratio: f64,
     pub height_ratio: f64,
     pub fingers: u32,
+    /// Pocket dimensions in metres, in the joint's width/thickness/depth axes.
+    pub pocket_width: f64,
+    pub pocket_thickness: f64,
+    /// Insertion depth into each board from the middle of the shared volume.
+    pub pocket_depth: f64,
+    /// Evenly spaced biscuits or loose tenons; grooves are continuous.
+    pub pocket_count: u32,
     /// Number of evenly spaced dovetail tails across the joint width.
     pub dovetails: u32,
     /// Tail width in metres; absent for legacy count-based joints.
@@ -112,6 +136,10 @@ impl Default for JointSettings {
             width_ratio: 0.5,
             height_ratio: 0.5,
             fingers: 4,
+            pocket_width: 0.03,
+            pocket_thickness: 0.004,
+            pocket_depth: 0.01,
+            pocket_count: 1,
             dovetails: 1,
             dovetail_width: None,
             dovetail_pin_width: 0.005,
@@ -151,6 +179,9 @@ impl JointSettings {
             && (0.1..=0.9).contains(&self.width_ratio)
             && self.height_ratio.is_finite()
             && (0.1..=0.9).contains(&self.height_ratio)
+            && [self.pocket_width, self.pocket_thickness, self.pocket_depth]
+                .into_iter().all(|value| value.is_finite() && value > EPS * 10.)
+            && (1..=16).contains(&self.pocket_count)
             && (2..=16).contains(&self.fingers)
             && (1..=16).contains(&self.dovetails)
             && self.dovetail_width.is_none_or(|width| width.is_finite() && width > 0.)
@@ -241,6 +272,39 @@ pub struct JoineryOverlap {
     pub bounds: (DVec3, DVec3),
 }
 
+/// Geometry-only orientation measurements. No camera or profile settings are
+/// retained, and no CSG is needed when querying a different pocket dimension.
+#[derive(Clone, Copy)]
+pub struct JoineryOptions {
+    geometry: JoineryOverlap,
+    bounds: [(DVec3, DVec3); 2],
+}
+impl JoineryOptions {
+    pub fn overlap(&self) -> JoineryOverlap { self.geometry }
+    pub fn supported_axes(&self, settings: &JointSettings) -> Vec<(usize, usize)> {
+        let (lo, hi) = self.geometry.bounds;
+        let size = hi - lo;
+        let mut supported = Vec::new();
+        for d in 0..3 {
+            for u in 0..3 {
+                if u == d { continue; }
+                let v = 3 - d - u;
+                let mut candidate = settings.clone();
+                candidate.depth_axis = d;
+                candidate.width_axis = u;
+                if !candidate.valid() || settings.clearance * 2. >= size[u].min(size[v]) * 0.1 { continue; }
+                if settings.kind.uses_pockets() && !slots::fits_bounds(self.geometry, self.bounds, &candidate) { continue; }
+                if settings.kind == JointKind::Dovetail {
+                    let Some((_, width)) = settings.dovetail_layout(size[u]) else { continue; };
+                    if size[d] * settings.taper_degrees.to_radians().tan() * 2. >= width - EPS { continue; }
+                }
+                supported.push((d, u));
+            }
+        }
+        supported
+    }
+}
+
 struct JointStock {
     geometry: JoineryOverlap,
     frame: Frame,
@@ -314,26 +378,14 @@ impl Model {
     pub fn joinery_options(&self, members: [u64; 2], settings: &JointSettings)
         -> (Option<JoineryOverlap>, Vec<(usize, usize)>)
     {
-        let Ok(stock) = JointStock::new(self, members) else { return (None, Vec::new()); };
-        let (lo, hi) = stock.geometry.bounds;
-        let size = hi - lo;
-        let mut supported = Vec::new();
-        for d in 0..3 {
-            for u in 0..3 {
-                if u == d { continue; }
-                let v = 3 - d - u;
-                let mut candidate = settings.clone();
-                candidate.depth_axis = d;
-                candidate.width_axis = u;
-                if !candidate.valid() || settings.clearance * 2. >= size[u].min(size[v]) * 0.1 { continue; }
-                if settings.kind == JointKind::Dovetail {
-                    let Some((_, width)) = settings.dovetail_layout(size[u]) else { continue; };
-                    if size[d] * settings.taper_degrees.to_radians().tan() * 2. >= width - EPS { continue; }
-                }
-                supported.push((d, u));
-            }
-        }
-        (Some(stock.geometry), supported)
+        let Ok(prepared) = self.prepare_joinery(members) else { return (None, Vec::new()); };
+        (Some(prepared.overlap()), prepared.supported_axes(settings))
+    }
+    /// Validate/import stock and intersect the boards once. The editor may reuse
+    /// these measurements while dimensions and profile choices change.
+    pub fn prepare_joinery(&self, members: [u64; 2]) -> Result<JoineryOptions, &'static str> {
+        let stock = JointStock::new(self, members)?;
+        Ok(JoineryOptions { geometry: stock.geometry, bounds: stock.bounds })
     }
     /// Apply a relation to a disposable evaluated model. Original board bounds
     /// always come from stock, allowing multiple joints to affect the same board.
@@ -365,117 +417,122 @@ impl Model {
             solids::import(&copies[0], frame)?,
             solids::import(&copies[1], frame)?,
         ];
-        let overlap = stock.overlap;
-        let mut profiles = Vec::new();
-        let mut pockets = Vec::new();
-        let dovetail = if settings.kind == JointKind::Dovetail {
-            Some(settings.dovetail_layout(size[u]).ok_or(tr!("core.joinery.choose_a_tail_width_that_fits_the_overlap"))?)
-        } else { None };
-        let count = if settings.kind == JointKind::Finger {
-            settings.fingers * 2
-        } else if let Some((count, _)) = dovetail {
-            count
+        let overlap = stock.overlap.clone();
+        if settings.kind.uses_pockets() {
+            solids = slots::cut(&stock, settings, solids)?;
         } else {
-            1
-        };
-        for i in 0..count {
-            if settings.kind == JointKind::Finger && i % 2 == 1 {
-                continue;
-            }
-            let (mut l, mut h) = (lo, hi);
-            match settings.kind {
-                JointKind::MortiseTenon | JointKind::TongueGroove | JointKind::Dovetail => {
-                    let slot_width = size[u] / count as f64;
-                    let tail_width = dovetail.map_or(slot_width * settings.width_ratio, |(_, width)| width);
-                    let margin = (slot_width - tail_width) * 0.5;
-                    l[u] = lo[u] + slot_width * i as f64 + margin;
-                    h[u] = lo[u] + slot_width * (i + 1) as f64 - margin;
-                    if settings.kind == JointKind::MortiseTenon {
-                        let margin = size[v] * (1. - settings.height_ratio) * 0.5;
-                        l[v] += margin;
-                        h[v] -= margin;
+            let mut profiles = Vec::new();
+            let mut pockets = Vec::new();
+            let dovetail = if settings.kind == JointKind::Dovetail {
+                Some(settings.dovetail_layout(size[u]).ok_or(tr!("core.joinery.choose_a_tail_width_that_fits_the_overlap"))?)
+            } else { None };
+            let count = if settings.kind == JointKind::Finger {
+                settings.fingers * 2
+            } else if let Some((count, _)) = dovetail {
+                count
+            } else {
+                1
+            };
+            for i in 0..count {
+                if settings.kind == JointKind::Finger && i % 2 == 1 {
+                    continue;
+                }
+                let (mut l, mut h) = (lo, hi);
+                match settings.kind {
+                    JointKind::MortiseTenon | JointKind::TongueGroove | JointKind::Dovetail => {
+                        let slot_width = size[u] / count as f64;
+                        let tail_width = dovetail.map_or(slot_width * settings.width_ratio, |(_, width)| width);
+                        let margin = (slot_width - tail_width) * 0.5;
+                        l[u] = lo[u] + slot_width * i as f64 + margin;
+                        h[u] = lo[u] + slot_width * (i + 1) as f64 - margin;
+                        if settings.kind == JointKind::MortiseTenon {
+                            let margin = size[v] * (1. - settings.height_ratio) * 0.5;
+                            l[v] += margin;
+                            h[v] -= margin;
+                        }
+                    }
+                    JointKind::HalfLap => {
+                        h[v] = lo[v] + size[v] * 0.5;
+                    }
+                    JointKind::Rabbet => {
+                        h[u] = lo[u] + size[u] * settings.width_ratio;
+                    }
+                    JointKind::Biscuit | JointKind::Domino | JointKind::Groove | JointKind::LooseTongue => unreachable!(),
+                    JointKind::Finger => {
+                        l[u] = lo[u] + size[u] * i as f64 / count as f64;
+                        h[u] = lo[u] + size[u] * (i + 1) as f64 / count as f64;
                     }
                 }
-                JointKind::HalfLap => {
-                    h[v] = lo[v] + size[v] * 0.5;
-                }
-                JointKind::Rabbet => {
-                    h[u] = lo[u] + size[u] * settings.width_ratio;
-                }
-                JointKind::Finger => {
-                    l[u] = lo[u] + size[u] * i as f64 / count as f64;
-                    h[u] = lo[u] + size[u] * (i + 1) as f64 / count as f64;
-                }
-            }
-            let mut points = box_points(l, h);
-            if settings.kind == JointKind::Dovetail {
-                let taper = size[d] * settings.taper_degrees.to_radians().tan();
-                if taper * 2. >= h[u] - l[u] - EPS {
-                    return Err(tr!("core.joinery.dovetail_angle_or_depth_leaves_no_material_at"));
-                }
-                // A narrow neck at the first board's shoulder, widening into B.
-                for p in &mut points {
-                    let neck = if forward {
-                        (p[d] - lo[d]).abs() < EPS
-                    } else {
-                        (p[d] - hi[d]).abs() < EPS
-                    };
-                    if neck {
-                        p[u] += if (p[u] - l[u]).abs() < EPS {
-                            taper
+                let mut points = box_points(l, h);
+                if settings.kind == JointKind::Dovetail {
+                    let taper = size[d] * settings.taper_degrees.to_radians().tan();
+                    if taper * 2. >= h[u] - l[u] - EPS {
+                        return Err(tr!("core.joinery.dovetail_angle_or_depth_leaves_no_material_at"));
+                    }
+                    // A narrow neck at the first board's shoulder, widening into B.
+                    for p in &mut points {
+                        let neck = if forward {
+                            (p[d] - lo[d]).abs() < EPS
                         } else {
-                            -taper
+                            (p[d] - hi[d]).abs() < EPS
+                        };
+                        if neck {
+                            p[u] += if (p[u] - l[u]).abs() < EPS {
+                                taper
+                            } else {
+                                -taper
+                            };
+                        }
+                    }
+                }
+                profiles.push(prism(points.map(|p| stock_frame.world(p)), frame)?);
+                // Grow the receiver cut only laterally; clip it to its stock by CSG.
+                let center = (l + h) * 0.5;
+                for p in &mut points {
+                    for axis in [u, v] {
+                        p[axis] += if p[axis] < center[axis] {
+                            -settings.clearance
+                        } else {
+                            settings.clearance
                         };
                     }
                 }
+                pockets.push(prism(points.map(|p| stock_frame.world(p)), frame)?);
             }
-            profiles.push(prism(points.map(|p| stock_frame.world(p)), frame)?);
-            // Grow the receiver cut only laterally; clip it to its stock by CSG.
-            let center = (l + h) * 0.5;
-            for p in &mut points {
-                for axis in [u, v] {
-                    p[axis] += if p[axis] < center[axis] {
-                        -settings.clearance
-                    } else {
-                        settings.clearance
-                    };
-                }
+            let mut waste = overlap.clone();
+            for profile in profiles {
+                waste = csg::apply(waste, profile, Boolean::Difference, frame.epsilon)?;
             }
-            pockets.push(prism(points.map(|p| stock_frame.world(p)), frame)?);
-        }
-        let mut waste = overlap.clone();
-        for profile in profiles {
-            waste = csg::apply(waste, profile, Boolean::Difference, frame.epsilon)?;
-        }
-        let overlap_volume = csg::volume(&overlap).abs();
-        let waste_volume = csg::volume(&waste).abs();
-        let minimum = (overlap_volume * 1e-9).max(frame.epsilon.powi(3) * 8.);
-        if waste_volume <= minimum || overlap_volume - waste_volume <= minimum {
-            return Err(tr!("core.joinery.the_profile_does_not_divide_the_shared_material"));
-        }
-        solids[0] = csg::apply(solids[0].clone(), waste, Boolean::Difference, frame.epsilon)?;
-        // Clip receiving pockets to the first board's stock, including a small
-        // lateral allowance. An angled overlap's bounding box is not material.
-        let envelope = stock.solids[0].iter().map(|polygon| {
-            let center = (a.0 + a.1) * 0.5;
-            let mut scale = DVec3::ONE;
-            for axis in [u, v] { scale[axis] += 2. * settings.clearance / (a.1[axis] - a.0[axis]); }
-            Polygon::new(polygon.vertices.iter().map(|p| {
-                let local = stock_frame.local(frame.world(*p));
-                frame.local(stock_frame.world(center + (local - center) * scale))
-            }).collect(), polygon.color, frame.epsilon).ok_or(tr!("core.joinery.the_clearance_is_too_small_for_the_model"))
-        }).collect::<Result<Vec<_>, _>>()?;
-        let envelope = if settings.clearance > 0. {
-            csg::apply(envelope, stock.solids[0].clone(), Boolean::Union, frame.epsilon)?
-        } else { envelope };
-        for pocket in pockets {
-            let pocket = csg::apply(pocket, envelope.clone(), Boolean::Intersect, frame.epsilon)?;
-            solids[1] = csg::apply(
-                solids[1].clone(),
-                pocket,
-                Boolean::Difference,
-                frame.epsilon,
-            )?;
+            let overlap_volume = csg::volume(&overlap).abs();
+            let waste_volume = csg::volume(&waste).abs();
+            let minimum = (overlap_volume * 1e-9).max(frame.epsilon.powi(3) * 8.);
+            if waste_volume <= minimum || overlap_volume - waste_volume <= minimum {
+                return Err(tr!("core.joinery.the_profile_does_not_divide_the_shared_material"));
+            }
+            solids[0] = csg::apply(solids[0].clone(), waste, Boolean::Difference, frame.epsilon)?;
+            // Clip receiving pockets to the first board's stock, including a small
+            // lateral allowance. An angled overlap's bounding box is not material.
+            let envelope = stock.solids[0].iter().map(|polygon| {
+                let center = (a.0 + a.1) * 0.5;
+                let mut scale = DVec3::ONE;
+                for axis in [u, v] { scale[axis] += 2. * settings.clearance / (a.1[axis] - a.0[axis]); }
+                Polygon::new(polygon.vertices.iter().map(|p| {
+                    let local = stock_frame.local(frame.world(*p));
+                    frame.local(stock_frame.world(center + (local - center) * scale))
+                }).collect(), polygon.color, frame.epsilon).ok_or(tr!("core.joinery.the_clearance_is_too_small_for_the_model"))
+            }).collect::<Result<Vec<_>, _>>()?;
+            let envelope = if settings.clearance > 0. {
+                csg::apply(envelope, stock.solids[0].clone(), Boolean::Union, frame.epsilon)?
+            } else { envelope };
+            for pocket in pockets {
+                let pocket = csg::apply(pocket, envelope.clone(), Boolean::Intersect, frame.epsilon)?;
+                solids[1] = csg::apply(
+                    solids[1].clone(),
+                    pocket,
+                    Boolean::Difference,
+                    frame.epsilon,
+                )?;
+            }
         }
         if let Some(index) = settings.trim.member() {
             solids[index] = trim_excess(source, members, index, settings,
@@ -987,8 +1044,8 @@ mod tests {
         result.model.validate().unwrap();
     }
     #[test]
-    fn all_six_profiles_remove_only_overlap_and_leave_two_valid_nonintersecting_boards() {
-        for kind in JointKind::ALL {
+    fn integral_profiles_remove_only_overlap_and_leave_two_valid_nonintersecting_boards() {
+        for kind in JointKind::ALL.into_iter().filter(|kind| !kind.uses_pockets()) {
             for reverse in [false, true] {
                 let (mut model, mut members) = pair();
                 if reverse {
@@ -1164,7 +1221,12 @@ mod tests {
                 model.test_cut_joint(members, &settings).unwrap();
                 model.validate().unwrap();
                 let total: f64 = members.into_iter().map(|id| model.solid_volume(id).unwrap()).sum();
-                assert!((total - (0.3 * 0.3 * 0.04 + 0.04 * 0.3 * 0.3 - 0.04 * 0.3 * 0.04)).abs() < 1e-9);
+                let union_volume = 0.3 * 0.3 * 0.04 + 0.04 * 0.3 * 0.3 - 0.04 * 0.3 * 0.04;
+                if kind.uses_pockets() {
+                    assert!(total < union_volume - 1e-9);
+                } else {
+                    assert!((total - union_volume).abs() < 1e-9);
+                }
             }
         }
     }

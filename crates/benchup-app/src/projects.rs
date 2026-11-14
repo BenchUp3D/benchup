@@ -1,7 +1,26 @@
 use benchup_core::tr;
 use super::*;
+use crate::cutting_layout::Strategy;
 use crate::project_files::{self, Outcome};
 use std::{path::PathBuf, sync::mpsc::TryRecvError};
+
+#[cfg(not(target_arch = "wasm32"))]
+const EXTERNAL_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Modification time and size flag a possible external write without reading the file.
+fn file_stamp(path: &std::path::Path) -> Option<(std::time::SystemTime, u64)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
+
+/// A content hash tells a real external edit from a rewrite with the same bytes.
+fn file_hash(path: &std::path::Path) -> Option<u64> {
+    use std::hash::Hasher;
+    let bytes = std::fs::read(path).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write(&bytes);
+    Some(hasher.finish())
+}
 
 #[derive(Clone)]
 pub(super) enum Action {
@@ -19,6 +38,8 @@ pub(super) enum Action {
 pub(super) enum Operation {
     #[default]
     Open,
+    #[cfg(not(target_arch = "wasm32"))]
+    Reload,
     Save,
     Import,
     Export,
@@ -34,6 +55,14 @@ pub(super) struct Project {
     pub export_stl: bool,
     pub export_scale_open: bool,
     pub modified: bool,
+    // Only the desktop poll reads these; the web build never has a project path.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub disk_stamp: Option<(std::time::SystemTime, u64)>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub disk_hash: Option<u64>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub external_checked: Option<std::time::Instant>,
+    pub external_change: bool,
     pub pending: Option<project_files::Pending>,
     pub preview_save: Option<(super::screenshot_dialog::Capture, Option<PathBuf>, String)>,
     pub operation: Operation,
@@ -45,6 +74,8 @@ pub(super) struct Project {
     // Both reports share scope so their marks can be printed for the same parts.
     pub cutting_plan_selection_preference: Option<bool>,
     pub cutting_plan_layout: crate::cutting_layout::Settings,
+    pub cutting_plan_used_area_cost: bool,
+    pub cut_view: super::cutting_view::Cache,
 }
 impl Default for Project {
     fn default() -> Self {
@@ -55,6 +86,10 @@ impl Default for Project {
             export_stl: false,
             export_scale_open: false,
             modified: false,
+            disk_stamp: None,
+            disk_hash: None,
+            external_checked: None,
+            external_change: false,
             pending: None,
             preview_save: None,
             operation: Operation::default(),
@@ -65,6 +100,8 @@ impl Default for Project {
             cut_report: None,
             cutting_plan_selection_preference: None,
             cutting_plan_layout: crate::cutting_layout::Settings::default(),
+            cutting_plan_used_area_cost: false,
+            cut_view: Default::default(),
         }
     }
 }
@@ -105,6 +142,7 @@ impl Project {
             || self.confirm.is_some()
             || self.error.is_some()
             || self.cut_report.is_some()
+            || self.external_change
     }
 }
 
@@ -217,6 +255,7 @@ impl BenchUpApp {
         self.paste_face_cache = renderer::FaceCache::default();
         self.changed(ctx);
         self.project.path = path;
+        self.remember_project_file();
         self.sync_stock_materials(ctx);
         self.project.modified = false;
         self.project.confirm = None;
@@ -459,6 +498,63 @@ impl BenchUpApp {
         self.project.pending = Some(project_files::save(ctx, path, self.doc.name.clone(), contents));
     }
 
+    fn remember_project_file(&mut self) {
+        self.project.disk_stamp = self.project.path.as_deref().and_then(file_stamp);
+        self.project.disk_hash = self.project.path.as_deref().and_then(file_hash);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn viewport_interaction_active(&self, ctx: &egui::Context) -> bool {
+        self.gesture.is_some()
+            || self.drawing.is_some()
+            || self.modeling.is_some()
+            || self.paste_preview.is_some()
+            || self.section_drag.is_some()
+            || self.text_editor.is_some()
+            || self.object_creation.is_some()
+            || self.object_rename.is_some()
+            || ctx.egui_wants_keyboard_input()
+            || ctx.input(|input| input.pointer.any_down())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn poll_external_file(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.project.path.clone() else {
+            return;
+        };
+        ctx.request_repaint_after(EXTERNAL_CHECK_INTERVAL);
+        if self.project.external_checked.is_some_and(|checked| checked.elapsed() < EXTERNAL_CHECK_INTERVAL) {
+            return;
+        }
+        self.project.external_checked = Some(std::time::Instant::now());
+        if self.project.blocked() || self.viewport_interaction_active(ctx) {
+            return;
+        }
+        let stamp = file_stamp(&path);
+        if stamp.is_none() || stamp == self.project.disk_stamp {
+            return;
+        }
+        self.project.disk_stamp = stamp;
+        // Touching a file or saving identical bytes must not count as a change. An
+        // unreadable write keeps the document; the next write to the file retries.
+        let hash = file_hash(&path);
+        if hash.is_none() || hash == self.project.disk_hash {
+            return;
+        }
+        self.project.disk_hash = hash;
+        if self.project.modified {
+            self.project.external_change = true;
+        } else {
+            self.reload_project(ctx, path);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn reload_project(&mut self, ctx: &egui::Context, path: PathBuf) {
+        self.project.operation = Operation::Reload;
+        self.project.pending = Some(project_files::open_path(ctx, path));
+    }
+
     pub(super) fn poll_project(&mut self, ctx: &egui::Context) {
         if let Some((mut capture, path, contents)) = self.project.preview_save.take() {
             match capture.poll(ctx) {
@@ -503,10 +599,28 @@ impl BenchUpApp {
             other => (other, None),
         };
         match result {
-            Ok(Outcome::Opened(doc, path)) => {
+            Ok(Outcome::Opened(mut doc, path)) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let reloading = matches!(operation, Operation::Reload);
+                #[cfg(target_arch = "wasm32")]
+                let reloading = false;
+                if reloading {
+                    self.sync_viewport_cameras();
+                    doc.camera = self.doc.camera.clone();
+                    doc.viewport_cameras = self.doc.viewport_cameras.clone();
+                }
                 self.replace_project(*doc, path, ctx);
-                self.remember_recent_project(browser_file);
-                self.say(ctx, tr!("projects.project_opened"));
+                if !reloading {
+                    self.remember_recent_project(browser_file);
+                }
+                self.say(
+                    ctx,
+                    if reloading {
+                        tr!("projects.project_reloaded_from_disk")
+                    } else {
+                        tr!("projects.project_opened")
+                    },
+                );
             }
             Ok(Outcome::Saved(path)) => {
                 let downloaded = cfg!(target_arch = "wasm32") && path.is_none();
@@ -518,6 +632,7 @@ impl BenchUpApp {
                     self.changed(ctx);
                 }
                 self.project.path = path;
+                self.remember_project_file();
                 self.project.modified = modified;
                 self.say(
                     ctx,
@@ -579,10 +694,173 @@ impl BenchUpApp {
             #[cfg(target_arch = "wasm32")]
             Ok(Outcome::BrowserOpened(..)) => unreachable!(),
             Ok(Outcome::Cancelled) => self.project.after_save = None,
+            // A reload can read a file another program is still writing. Keep the
+            // current document; the next change to the file retries.
+            #[cfg(not(target_arch = "wasm32"))]
+            Err(_) if matches!(operation, Operation::Reload) => {}
             Err(error) => {
                 self.project.after_save = None;
                 self.project.error = Some(tr!("projects.could_not_complete_file_operation", error = error));
             }
+        }
+    }
+
+    fn cut_report_controls(&mut self, ui: &mut egui::Ui, report: CutReport, selection: &mut bool) {
+        ui.add_enabled_ui(!self.selected.is_empty(), |ui| {
+            ui.radio_value(
+                selection,
+                true,
+                tr!("projects.selected_parts_assemblies_visible_only"),
+            );
+        });
+        ui.radio_value(selection, false, tr!("projects.whole_project_visible_only"));
+        ui.add_space(10.);
+        if report == CutReport::CuttingPlan {
+            ui.horizontal_wrapped(|ui| {
+                ui.text_label(tr!("projects.saw_kerf_cut_width"));
+                ui.add(
+                    egui::DragValue::new(&mut self.project.cutting_plan_layout.kerf_mm)
+                        .speed(0.1)
+                        .range(0. ..=100.)
+                        .suffix(tr!("projects.mm")),
+                );
+            });
+            ui.checkbox(
+                &mut self.project.cutting_plan_layout.allow_rotation,
+                tr!("projects.allow_rotating_pieces_90_degrees"),
+            )
+            .on_hover_text(tr!("projects.leave_off_when_the_length_must_follow_the"));
+            ui.checkbox(
+                &mut self.project.cutting_plan_layout.respect_grain,
+                tr!("projects.respect_wood_grain_direction"),
+            )
+            .on_hover_text(tr!("projects.align_part_grain_with_stock_length"));
+            ui.checkbox(
+                &mut self.project.cutting_plan_layout.show_joinery,
+                tr!("projects.show_wood_joinery"),
+            )
+            .on_hover_text(tr!("projects.show_joinery_as_dashed_outlines"));
+            ui.text_label(tr!("projects.cut_layout_strategy"));
+            egui::ComboBox::from_id_salt("cut_layout_strategy")
+                .width(ui.available_width())
+                .selected_text(self.project.cutting_plan_layout.strategy.label())
+                .show_ui(ui, |ui| {
+                    for strategy in [
+                        Strategy::Fewest,
+                        Strategy::RipFirst,
+                        Strategy::LargestOffcut,
+                    ] {
+                        ui.selectable_value(
+                            &mut self.project.cutting_plan_layout.strategy,
+                            strategy,
+                            strategy.label(),
+                        )
+                        .on_hover_text(strategy.hint());
+                    }
+                })
+                .response
+                .on_hover_text(self.project.cutting_plan_layout.strategy.hint());
+            ui.horizontal_wrapped(|ui| {
+                ui.text_label(tr!("projects.edge_trim"));
+                ui.add(
+                    egui::DragValue::new(&mut self.project.cutting_plan_layout.edge_trim_mm)
+                        .speed(0.1)
+                        .range(0. ..=100.)
+                        .suffix(tr!("projects.mm")),
+                )
+                .on_hover_text(tr!("projects.edge_trim_hint"));
+            });
+            ui.checkbox(
+                &mut self.project.cutting_plan_used_area_cost,
+                tr!("projects.show_used_area_cost"),
+            )
+            .on_hover_text(tr!("projects.used_area_cost_hint"));
+        }
+        ui.text_weak(tr!(
+            "projects.only_visible_parts_with_assigned_stock_materials_are"
+        ));
+        if report == CutReport::CuttingPlan {
+            ui.text_weak(tr!(
+                "projects.layouts_use_assigned_stock_dimensions_and_saw_kerf"
+            ));
+        }
+    }
+
+    fn cutting_plan_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        selection: &mut bool,
+        revision: u64,
+        model: &std::sync::Arc<benchup_core::Model>,
+    ) {
+        let (body, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+        let stacked = body.width() < 760.;
+        let controls = Rect::from_min_size(
+            body.min,
+            if stacked {
+                egui::vec2(body.width(), body.height() * 0.55)
+            } else {
+                egui::vec2((body.width() * 0.35).clamp(300., 420.), body.height())
+            },
+        );
+        let preview = Rect::from_min_max(
+            if stacked {
+                egui::pos2(body.left(), controls.bottom() + 1.)
+            } else {
+                egui::pos2(controls.right() + 1., body.top())
+            },
+            body.max,
+        );
+        for (rect, key, is_preview) in [
+            (controls, "cutting_plan/controls", false),
+            (preview, "cutting_plan/preview", true),
+        ] {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(rect));
+                let scroll = sidebar::restored_scroll_area(
+                    ui,
+                    key,
+                    egui::ScrollArea::vertical()
+                        .id_salt(key)
+                        .max_height(rect.height())
+                        .auto_shrink([false, false]),
+                );
+                let output = scroll.show(ui, |ui| {
+                    egui::Frame::new().inner_margin(20).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.spacing_mut().item_spacing = egui::vec2(8., 8.);
+                        if is_preview {
+                            let empty = BTreeSet::new();
+                            let scope = if *selection { &self.selected } else { &empty };
+                            let view = self.project.cut_view.view(
+                                ctx,
+                                revision,
+                                model,
+                                scope,
+                                self.project.cutting_plan_layout,
+                            );
+                            super::cutting_view::show(
+                                ui,
+                                view,
+                                &self.general_settings.stock,
+                                self.project.cutting_plan_layout.kerf_mm,
+                                self.project.cutting_plan_used_area_cost,
+                            );
+                        } else {
+                            self.cut_report_controls(ui, CutReport::CuttingPlan, selection);
+                        }
+                    });
+                });
+                sidebar::remember_scroll(ui.ctx(), key, output.state.clamped_offset());
+            });
+        }
+        let stroke = Stroke::new(1., Palette::for_ui(ui).border);
+        if stacked {
+            ui.painter()
+                .hline(body.x_range(), controls.bottom(), stroke);
+        } else {
+            ui.painter().vline(controls.right(), body.y_range(), stroke);
         }
     }
 
@@ -601,41 +879,29 @@ impl BenchUpApp {
                     tr!("projects.create_one_label_per_piece_with_its_cutting"),
                 ),
             };
-            let response = Modal::new(id, 480.).show(ctx, |modal| {
-                modal.header(|ui| {
-                    ui.text_heading(title);
-                    ui.text_weak(description);
-                });
-                modal.body(|ui| {
-                    ui.add_enabled_ui(!self.selected.is_empty(), |ui| {
-                        ui.radio_value(&mut selection, true, tr!("projects.selected_parts_assemblies_visible_only"));
+            let width = if report == CutReport::CuttingPlan { 1440. } else { 480. };
+            let cut_inputs = (report == CutReport::CuttingPlan)
+                .then(|| (self.document_revision(ctx), self.document_model.shared()));
+            let response = Modal::new(id, width)
+                .resizable(report == CutReport::CuttingPlan)
+                .show(ctx, |modal| {
+                    modal.header(|ui| {
+                        ui.text_heading(title);
+                        ui.text_weak(description);
                     });
-                    ui.radio_value(&mut selection, false, tr!("projects.whole_project_visible_only"));
-                    ui.add_space(10.);
-                    if report == CutReport::CuttingPlan {
-                        ui.horizontal(|ui| {
-                            ui.text_label(tr!("projects.saw_kerf_cut_width"));
-                            ui.add(egui::DragValue::new(&mut self.project.cutting_plan_layout.kerf_mm)
-                                .speed(0.1).range(0. ..=100.).suffix(tr!("projects.mm")));
+                    if let Some((revision, model)) = &cut_inputs {
+                        modal.body_unpadded(700., |ui| {
+                            self.cutting_plan_body(ui, ctx, &mut selection, *revision, model);
                         });
-                        ui.checkbox(&mut self.project.cutting_plan_layout.allow_rotation, tr!("projects.allow_rotating_pieces_90_degrees"))
-                            .on_hover_text(tr!("projects.leave_off_when_the_length_must_follow_the"));
-                        ui.checkbox(&mut self.project.cutting_plan_layout.respect_grain, tr!("projects.respect_wood_grain_direction"))
-                            .on_hover_text(tr!("projects.align_part_grain_with_stock_length"));
-                        ui.checkbox(&mut self.project.cutting_plan_layout.show_joinery, tr!("projects.show_wood_joinery"))
-                            .on_hover_text(tr!("projects.show_joinery_as_dashed_outlines"));
+                    } else {
+                        modal.body(|ui| self.cut_report_controls(ui, report, &mut selection));
                     }
-                    ui.text_weak(tr!("projects.only_visible_parts_with_assigned_stock_materials_are"));
-                    if report == CutReport::CuttingPlan {
-                        ui.text_weak(tr!("projects.layouts_use_assigned_stock_dimensions_and_saw_kerf"));
-                    }
+                    modal.footer(|ui| {
+                        if ui.button(tr!("common.cancel")).clicked() { Some(false) }
+                        else if primary_button(ui, tr!("projects.generate_pdf"), true).clicked() { Some(true) }
+                        else { None }
+                    })
                 });
-                modal.footer(|ui| {
-                    if ui.button(tr!("common.cancel")).clicked() { Some(false) }
-                    else if primary_button(ui, tr!("projects.generate_pdf"), true).clicked() { Some(true) }
-                    else { None }
-                })
-            });
             if selection != selection_before {
                 self.project.cutting_plan_selection_preference = Some(selection);
             }
@@ -662,6 +928,8 @@ impl BenchUpApp {
                             ui.spinner();
                             ui.text_label(match self.project.operation {
                                 Operation::Open => tr!("projects.opening_project"),
+                                #[cfg(not(target_arch = "wasm32"))]
+                                Operation::Reload => tr!("projects.opening_project"),
                                 Operation::Save => tr!("projects.saving_project"),
                                 Operation::Import => tr!("projects.importing_geometry"),
                                 Operation::Export => tr!("projects.exporting_geometry"),
@@ -719,6 +987,34 @@ impl BenchUpApp {
                 }
             } else if response.should_close() {
                 self.project.confirm = None;
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.project.external_change {
+            let response = Modal::new("project_external_change", 480.).show(ctx, |modal| {
+                modal.header(|ui| {
+                    ui.text_heading(tr!("projects.project_changed_on_disk_title"));
+                });
+                modal.body(|ui| {
+                    ui.text_label(tr!("projects.project_changed_on_disk", name = self.doc.name));
+                });
+                modal.footer(|ui| {
+                    if primary_button(ui, tr!("projects.keep_my_changes"), true).clicked() {
+                        Some(false)
+                    } else if ui.button(tr!("projects.reload_from_disk")).clicked() {
+                        Some(true)
+                    } else {
+                        None
+                    }
+                })
+            });
+            if let Some(reload) = response.inner {
+                self.project.external_change = false;
+                if let (true, Some(path)) = (reload, self.project.path.clone()) {
+                    self.reload_project(ctx, path);
+                }
+            } else if response.should_close() {
+                self.project.external_change = false;
             }
         }
         if let Some(error) = &self.project.error {

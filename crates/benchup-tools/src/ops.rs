@@ -7,7 +7,7 @@ use benchup_core::{
     Axis, DVec3, MaterialId, Model, StockMaterial,
     connections::{Connection, ConnectionOperation},
     inference::AxisConstraint,
-    joinery::{JointKind, JointSettings},
+    joinery::{JointKind, JointSettings, KeepEnd, TrimBoard},
 };
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
@@ -102,15 +102,23 @@ const TOOLS: &[(&str, bool)] = &[
     ("check_model", false),
     ("get_cut_list", false),
     ("get_guide", false),
+    ("get_estimate", false),
+    ("measure_space", false),
+    ("find_surfaces", false),
     ("create_stock_material", true),
     ("create_board", true),
     ("create_copy", true),
+    ("create_profile_board", true),
     ("draw_polyline", true),
+    ("split_face", true),
+    ("merge_faces", true),
     ("move", true),
     ("move_to", true),
     ("rotate", true),
     ("scale", true),
     ("resize_board", true),
+    ("change_thickness", true),
+    ("distribute", true),
     ("push_pull", true),
     ("rename", true),
     ("set_material", true),
@@ -123,6 +131,10 @@ const TOOLS: &[(&str, bool)] = &[
     ("add_joint", true),
     ("remove_joint", true),
     ("flip_joint", true),
+    ("set_joint", true),
+    ("add_profile", true),
+    ("remove_profile", true),
+    ("set_finish", true),
     ("add_dimension", true),
     ("add_text", true),
     ("select", false),
@@ -233,15 +245,18 @@ pub fn mcp_tools() -> Vec<Value> {
 
 pub fn definitions() -> Vec<ToolDefinition> {
     let joint_kinds = json!(["mortise_tenon", "half_lap", "tongue_groove", "rabbet", "dovetail", "finger"]);
-    vec![
-        def("get_scene", "Return the whole scene summary again (objects, selection, stock, joints). Lengths are in mm.", json!({}), &[]),
+    let mut list = vec![
+        def("get_scene", "Return the scene summary (objects, selection, stock, joints, dimensions, texts). Lengths are in mm. Filters keep it small on big projects: ids lists only those objects and what is inside them; depth limits nesting (0 = top level only, or only the given ids); fields picks object fields (id is always included); sections picks the parts of the summary.",
+            json!({"ids": ids(), "depth": {"type": "integer", "minimum": 0, "maximum": 64},
+                "fields": {"type": "array", "items": {"type": "string", "enum": scene::OBJECT_FIELDS}},
+                "sections": {"type": "array", "items": {"type": "string", "enum": scene::SECTIONS}}}), &[]),
         def("find_objects", "Search objects (groups and components) when the scene summary was truncated. query matches part of a name, tag or material name, a kind (\"group\" or \"component\") or an exact id; omit it or pass \"\" to list every object. Dimensions and texts are not objects.",
             json!({"query": text(), "limit": {"type": "integer", "minimum": 1, "maximum": 100}}), &[]),
         def("get_object", "Details of one entity, including its faces (id, normal, facing, center_mm, area_mm2) for push_pull. Face normals point out of the part; a positive push_pull distance moves a face outward.",
             json!({"id": id()}), &["id"]),
         def("get_selection", "Entities currently selected in the editor.", json!({}), &[]),
         def("list_stock_materials", "Stock materials that can be assigned to boards (ids for material_id). A new project has none: add them with create_stock_material.", json!({}), &[]),
-        def("check_model", "Look for problems before building: boards passing through others or overlapping without a joint, joints that cannot be cut, look reversed or lost a board, thickness that does not match the material, open solids, loose geometry, boards without material. passed is true when there are no errors or warnings (ok only says the check ran). Run it after a change.", json!({}), &[]),
+        def("check_model", "Look for problems before building: boards passing through others or overlapping without a joint, joints that cannot be cut, look reversed or lost a board, thickness that does not match the material, open solids, loose geometry, boards without material. passed is true when there are no errors or warnings (ok only says the check ran). Run it after a change. With only_new, it reports only the problems that the earlier calls of this batch (or session turn) introduced, so a dry-run batch ending with check_model{only_new:true} ignores problems that were already there.", json!({"only_new": {"type": "boolean"}}), &[]),
         def("get_cut_list", "Cut list: boards grouped by material and blank size (length along the grain x width x thickness, mm) with quantities, and area totals per material.", json!({}), &[]),
         def("get_guide", "Conventions, workflow and woodworking recipes for building furniture with these tools. Read it before the first change.", json!({}), &[]),
         def("create_stock_material", "Add a stock material (sheet or board) to this project and return its id for material_id. Sizes in mm; length runs along the grain.",
@@ -272,24 +287,27 @@ pub fn definitions() -> Vec<ToolDefinition> {
         def("set_material", "Assign a stock material to objects, or null to clear.",
             json!({"ids": ids(), "material_id": {"type": ["string", "null"], "format": "uuid",
                 "description": "id from list_stock_materials or create_stock_material"}}), &["ids", "material_id"]),
-        def("set_grain", "Set the grain direction of an object along a world axis, or null to clear.",
-            json!({"id": id(), "axis": {"type": ["string", "null"], "enum": ["x", "y", "z", null]}}), &["id", "axis"]),
+        def("set_grain", "Set the grain direction of objects along a world axis, or null to clear (\"id\" for one object is accepted too).",
+            json!({"ids": ids(), "axis": {"type": ["string", "null"], "enum": ["x", "y", "z", null]}}), &["ids", "axis"]),
         def("group", "Group entities into one object, or make that object a component. Several ids become ONE group or component; for linked copies, make one component and use create_copy. Faces bring their edges along. Member ids change: the group is created[0] and its objects are listed in members.",
             json!({"ids": ids(), "name": text(), "component": {"type": "boolean"}}), &["ids", "name", "component"]),
-        def("ungroup", "Dissolve groups/components one level.", json!({"ids": ids()}), &["ids"]),
+        def("ungroup", "Dissolve groups/components one level. The released objects keep their ids and are listed in members.", json!({"ids": ids()}), &["ids"]),
         def("tag", "Assign a tag by name (created if missing), or null to clear.",
             json!({"ids": ids(), "tag": tag_name(true)}), &["ids", "tag"]),
         def("paint", "Paint objects or faces with an RGB color.",
             json!({"ids": ids(), "rgb": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 255}, "minItems": 3, "maxItems": 3}}), &["ids", "rgb"]),
         def("erase", "Delete entities (objects, faces, edges, dimensions, texts). Joints that use an erased board are removed with it; use remove_joint to delete a joint alone.", json!({"ids": ids()}), &["ids"]),
-        def("add_joint", "Add a wood joint between two boards that already overlap where they meet; the overlap is the joint's depth. a carries the tenon, tongue, tails, fingers or lap: the board that goes into the other (shelf, apron, drawer side). b receives the mortise, groove or sockets (side, leg, drawer front). params.depth_axis is the direction a goes into b; width_axis is the axis across which the tongue, tenon or fingers are spread (width_ratio of it); the third axis is the height (height_ratio, mortise_tenon only). Axes are 0=x, 1=y, 2=z (a's own axes if it is rotated). Omit them and the first orientation that can be cut is chosen. Params by kind: mortise_tenon uses width_ratio and height_ratio; tongue_groove and rabbet use width_ratio; dovetail uses dovetails, width_ratio (share of the width taken by tails) and taper_degrees; finger uses fingers; all use clearance_mm. Ranges: ratios 0.1-0.9 (0.5), fingers 2-16 (4), dovetails 1-16 (1), taper_degrees 0-30 (8), clearance_mm 0-5 (0.1). The joint must be cuttable or the call fails; joints on one board must not cross, touch or end in the same plane. Both boards must be at the same group level. Returns joint_id and the orientation used; get_object on a joint shows its settings and supported orientations.",
+        def("add_joint", "Add a wood joint between two boards that already overlap where they meet; the overlap is the joint's depth. a carries the tenon, tongue, tails, fingers or lap: the board that goes into the other (shelf, apron, drawer side). b receives the mortise, groove or sockets (side, leg, drawer front). params.depth_axis is the direction a goes into b; width_axis is the axis across which the tongue, tenon or fingers are spread (width_ratio of it); the third axis is the height (height_ratio, mortise_tenon only). Axes are 0=x, 1=y, 2=z (a's own axes if it is rotated). Omit them and the first orientation that can be cut is chosen. Params by kind: mortise_tenon uses width_ratio and height_ratio; tongue_groove and rabbet use width_ratio; dovetail uses dovetails, width_ratio (share of the width taken by tails) and taper_degrees; finger uses fingers; all use clearance_mm. Ranges: ratios 0.1-0.9 (0.5), fingers 2-16 (4), dovetails 1-16 (1), taper_degrees 0-30 (8), clearance_mm 0-5 (0.1). The joint must be cuttable or the call fails; joints on one board must not cross, touch or end in the same plane. Both boards must be at the same group level. Trimming: trim \"a\" or \"b\" cuts that board's excess flush with the other board's outer face (keep_end lower or upper says which end of the board stays, along trim_axis, default its longest axis). Returns joint_id and the orientation used; get_object on a joint shows its settings, geometry and supported orientations. set_joint changes an existing joint.",
             json!({"a": id(), "b": id(), "kind": {"type": "string", "enum": joint_kinds},
                 "params": {"type": "object", "properties": {
                     "width_ratio": number(), "height_ratio": number(),
                     "fingers": {"type": "integer"}, "dovetails": {"type": "integer"},
                     "taper_degrees": number(), "clearance_mm": number(),
                     "depth_axis": {"type": "integer", "minimum": 0, "maximum": 2},
-                    "width_axis": {"type": "integer", "minimum": 0, "maximum": 2}},
+                    "width_axis": {"type": "integer", "minimum": 0, "maximum": 2},
+                    "trim": {"type": "string", "enum": ["none", "a", "b"]},
+                    "trim_axis": {"type": "integer", "minimum": 0, "maximum": 2},
+                    "keep_end": {"type": "string", "enum": ["lower", "upper"]}},
                     "additionalProperties": false}}),
             &["a", "b", "kind"]),
         def("remove_joint", "Delete wood joints by id (from the joints list in get_scene); the boards stay.",
@@ -303,7 +321,9 @@ pub fn definitions() -> Vec<ToolDefinition> {
         def("select", "Select entities in the editor so the designer sees them.", json!({"ids": ids()}), &["ids"]),
         def("enter_object", "Open a group/component so that creating tools (create_board, draw_polyline, add_dimension...) put new parts inside it. Editing tools reach parts inside groups by themselves when all the ids share one group. Nested groups open from the outside in. The group stays open until exit_to_root or the end of the session (with the benchup CLI, one command or --batch).", json!({"id": id()}), &["id"]),
         def("exit_to_root", "Leave any open group and edit the top level again.", json!({}), &[]),
-    ]
+    ];
+    list.extend(more::definitions());
+    list
 }
 
 // ---------------------------------------------------------------- arguments
@@ -482,7 +502,9 @@ struct MaterialArgs {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GrainArgs {
-    id: u64,
+    /// `"id": 5` is accepted too, like the other tools that take several objects.
+    #[serde(alias = "id", deserialize_with = "one_or_many")]
+    ids: Vec<u64>,
     axis: Option<AxisArg>,
 }
 #[derive(Deserialize)]
@@ -515,6 +537,22 @@ struct JointParams {
     clearance_mm: Option<f64>,
     depth_axis: Option<usize>,
     width_axis: Option<usize>,
+    trim: Option<TrimArg>,
+    trim_axis: Option<usize>,
+    keep_end: Option<KeepEndArg>,
+}
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum TrimArg {
+    None,
+    A,
+    B,
+}
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum KeepEndArg {
+    Lower,
+    Upper,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -775,11 +813,21 @@ fn scale(model: &mut Model, a: ScaleArgs) -> Res {
 }
 fn resize_board(model: &mut Model, a: ResizeArgs) -> Res {
     let id = one_object(model, a.id)?;
-    let set = BTreeSet::from([id]);
     let target = point(a.size_mm)?;
     if target.min_element() < 1.0e-4 {
         return Err(fail("size_mm out of range", "Each extent must be at least 0.1 mm."));
     }
+    let anchors = match a.anchor {
+        None => [Anchor::Min; 3],
+        Some(AnchorArg::All(anchor)) => [anchor; 3],
+        Some(AnchorArg::PerAxis(anchors)) => anchors,
+    };
+    resize_object(model, id, target, anchors)?;
+    Ok(modified(&BTreeSet::from([id])))
+}
+/// Stretch an object to `target` (world extents), keeping the `anchors` side of each axis.
+fn resize_object(model: &mut Model, id: u64, target: DVec3, anchors: [Anchor; 3]) -> Result<(), Fail> {
+    let set = BTreeSet::from([id]);
     let (lo, hi) = model.selection_bounds(&set).ok_or("the object has no geometry")?;
     let current = hi - lo;
     for axis in [Axis::X, Axis::Y, Axis::Z] {
@@ -792,11 +840,6 @@ fn resize_board(model: &mut Model, a: ResizeArgs) -> Res {
         }
         model.scale_selection_constrained(&set, lo, new / old, Some(AxisConstraint::Axis(axis)))?;
     }
-    let anchors = match a.anchor {
-        None => [Anchor::Min; 3],
-        Some(AnchorArg::All(anchor)) => [anchor; 3],
-        Some(AnchorArg::PerAxis(anchors)) => anchors,
-    };
     let grown = target - current;
     let shift = DVec3::from_array(std::array::from_fn(|i| match anchors[i] {
         Anchor::Min => 0.,
@@ -806,7 +849,7 @@ fn resize_board(model: &mut Model, a: ResizeArgs) -> Res {
     if shift.length() > 1.0e-12 {
         model.move_selection(&set, shift)?;
     }
-    Ok(modified(&set))
+    Ok(())
 }
 fn move_to(model: &mut Model, a: MoveToArgs) -> Res {
     let id = one_object(model, a.id)?;
@@ -906,9 +949,12 @@ fn set_material(model: &mut Model, env: &ToolEnv, a: MaterialArgs) -> Res {
     Ok(modified(&set))
 }
 fn set_grain(model: &mut Model, a: GrainArgs) -> Res {
-    let id = one_object(model, a.id)?;
-    model.set_grain_direction(id, a.axis.map(|axis| axis.axis().vector()))?;
-    Ok(modified(&BTreeSet::from([id])))
+    let set = objects(model, &a.ids, true)?;
+    let direction = a.axis.map(|axis| axis.axis().vector());
+    for id in &set {
+        model.set_grain_direction(*id, direction)?;
+    }
+    Ok(modified(&set))
 }
 fn group(model: &mut Model, a: GroupArgs) -> Res {
     let mut set = entities(model, &a.ids, true)?;
@@ -960,11 +1006,14 @@ fn group(model: &mut Model, a: GroupArgs) -> Res {
 fn ungroup(model: &mut Model, a: IdsArg) -> Res {
     let set = objects(model, &a.ids, true)?;
     let released = model.dissolve_objects(&set, false);
-    Ok(Done {
+    let mut done = Done {
         modified: released.into_iter().filter(|id| model.contains_entity(id)).collect(),
         erased: set.iter().copied().filter(|id| !model.contains_entity(id)).collect(),
         ..Default::default()
-    })
+    };
+    // Ungrouping keeps the members' ids (grouping does not).
+    done.extra.insert("members".into(), Value::Array(done.modified.iter().filter_map(|id| scene::object_entry(model, *id)).collect()));
+    Ok(done)
 }
 fn tag(model: &mut Model, a: TagArgs) -> Res {
     let set = entities(model, &a.ids, true)?;
@@ -1085,7 +1134,7 @@ fn remove_joint(model: &mut Model, env: &ToolEnv, a: IdsArg) -> Res {
 /// The orientation a woodworker would pick, in the first board's axes. Depth
 /// is the axis along which `a` goes into `b` (where the overlap is shortest
 /// compared with `a`). Tongues, tenons and rabbets are spread across `a`'s
-/// thickness; dovetails, fingers and laps across its broad side.
+/// thickness; dovetails, fingers, laps and pockets across its broad side.
 fn preferred_axes(model: &Model, members: [u64; 2], settings: &JointSettings) -> Option<(usize, usize)> {
     let overlap = model.joinery_options(members, settings).0?;
     let (lo, hi) = model.joinery_frame(members[0]).ok()?.bounds(model, members[0])?;
@@ -1095,9 +1144,78 @@ fn preferred_axes(model: &Model, members: [u64; 2], settings: &JointSettings) ->
     let (thin, broad) = if board[p] <= board[q] { (p, q) } else { (q, p) };
     let width = match settings.kind {
         JointKind::TongueGroove | JointKind::MortiseTenon | JointKind::Rabbet => thin,
-        JointKind::Dovetail | JointKind::Finger | JointKind::HalfLap => broad,
+        JointKind::Dovetail | JointKind::Finger | JointKind::HalfLap
+        | JointKind::Biscuit | JointKind::Domino | JointKind::Groove | JointKind::LooseTongue => broad,
     };
     Some((depth, width))
+}
+/// Apply the optional joint settings an agent passed; true when it chose the axes.
+fn apply_joint_params(settings: &mut JointSettings, p: JointParams) -> Result<bool, Fail> {
+    let ratio = |value: Option<f64>, what: &str| -> Result<Option<f64>, Fail> {
+        value
+            .map(|v| {
+                (v.is_finite() && (0.1..=0.9).contains(&v))
+                    .then_some(v)
+                    .ok_or_else(|| Fail::from(format!("{what} must be between 0.1 and 0.9")))
+            })
+            .transpose()
+    };
+    if let Some(v) = ratio(p.width_ratio, "width_ratio")? {
+        settings.width_ratio = v;
+    }
+    if let Some(v) = ratio(p.height_ratio, "height_ratio")? {
+        settings.height_ratio = v;
+    }
+    if let Some(v) = p.fingers {
+        if !(2..=16).contains(&v) {
+            return Err("fingers must be between 2 and 16".into());
+        }
+        settings.fingers = v;
+    }
+    if let Some(v) = p.dovetails {
+        if !(1..=16).contains(&v) {
+            return Err("dovetails must be between 1 and 16".into());
+        }
+        settings.dovetails = v;
+    }
+    if let Some(v) = p.taper_degrees {
+        settings.taper_degrees = finite(v, "taper_degrees")?.clamp(0., 30.);
+    }
+    if let Some(v) = p.clearance_mm {
+        settings.clearance = from_mm(finite(v, "clearance_mm")?.clamp(0., 5.));
+    }
+    for (axis, slot) in [(p.depth_axis, &mut settings.depth_axis), (p.width_axis, &mut settings.width_axis)] {
+        if let Some(axis) = axis {
+            if axis > 2 {
+                return Err("axis indexes are 0, 1 or 2".into());
+            }
+            *slot = axis;
+        }
+    }
+    if let Some(trim) = p.trim {
+        settings.trim = match trim {
+            TrimArg::None => TrimBoard::None,
+            TrimArg::A => TrimBoard::First,
+            TrimArg::B => TrimBoard::Second,
+        };
+    }
+    if let Some(axis) = p.trim_axis {
+        if axis > 2 {
+            return Err("trim_axis is 0, 1 or 2".into());
+        }
+        settings.trim_axis = Some(axis);
+    }
+    if let Some(end) = p.keep_end {
+        settings.keep_end = match end {
+            KeepEndArg::Lower => KeepEnd::Lower,
+            KeepEndArg::Upper => KeepEnd::Upper,
+        };
+    }
+    Ok(p.depth_axis.is_some() || p.width_axis.is_some())
+}
+struct JointPair {
+    a: u64,
+    b: u64,
 }
 fn add_joint(model: &mut Model, a: JointArgs) -> Res {
     if a.a == a.b {
@@ -1113,59 +1231,29 @@ fn add_joint(model: &mut Model, a: JointArgs) -> Res {
     let set = objects(model, &[a.a, a.b], true)?;
     for id in [a.a, a.b] {
         if let Err(error) = model.joinery_frame(id) {
-            return Err(fail(
-                format!("{id} is not a single board: {error}"),
-                "Join the boards themselves; get_object on a group lists its children.",
-            ));
+            let hint = if matches!(model.objects[&id].kind, benchup_core::ObjectKind::Component { .. }) {
+                "It is a component instance. The board inside it (get_object lists it) can only be joined to boards inside the same instance, \
+                 not to boards outside it; make the joints before making the component."
+            } else {
+                "Join the boards themselves; get_object on a group lists its children."
+            };
+            return Err(fail(format!("{id} is not a single board: {error}"), hint));
         }
     }
     let mut settings = JointSettings { kind: a.kind.kind(), ..Default::default() };
-    let mut chosen_axes = false;
-    if let Some(p) = a.params {
-        let ratio = |value: Option<f64>, what: &str| -> Result<Option<f64>, Fail> {
-            value
-                .map(|v| {
-                    (v.is_finite() && (0.1..=0.9).contains(&v))
-                        .then_some(v)
-                        .ok_or_else(|| Fail::from(format!("{what} must be between 0.1 and 0.9")))
-                })
-                .transpose()
-        };
-        if let Some(v) = ratio(p.width_ratio, "width_ratio")? {
-            settings.width_ratio = v;
-        }
-        if let Some(v) = ratio(p.height_ratio, "height_ratio")? {
-            settings.height_ratio = v;
-        }
-        if let Some(v) = p.fingers {
-            if !(2..=16).contains(&v) {
-                return Err("fingers must be between 2 and 16".into());
-            }
-            settings.fingers = v;
-        }
-        if let Some(v) = p.dovetails {
-            if !(1..=16).contains(&v) {
-                return Err("dovetails must be between 1 and 16".into());
-            }
-            settings.dovetails = v;
-        }
-        if let Some(v) = p.taper_degrees {
-            settings.taper_degrees = finite(v, "taper_degrees")?.clamp(0., 30.);
-        }
-        if let Some(v) = p.clearance_mm {
-            settings.clearance = from_mm(finite(v, "clearance_mm")?.clamp(0., 5.));
-        }
-        for (axis, slot) in [(p.depth_axis, &mut settings.depth_axis), (p.width_axis, &mut settings.width_axis)] {
-            if let Some(axis) = axis {
-                if axis > 2 {
-                    return Err("axis indexes are 0, 1 or 2".into());
-                }
-                *slot = axis;
-            }
-        }
-        chosen_axes = p.depth_axis.is_some() || p.width_axis.is_some();
-    }
-    let members = [a.a, a.b];
+    let chosen_axes = match a.params {
+        Some(p) => apply_joint_params(&mut settings, p)?,
+        None => false,
+    };
+    let mut done = commit_joint(model, [a.a, a.b], settings, chosen_axes, None)?;
+    done.modified = set.into_iter().collect();
+    Ok(done)
+}
+
+/// Pick the orientation, then add the joint (or replace joint `replace`) and
+/// make sure it cuts; the error names the joints it collides with.
+fn commit_joint(model: &mut Model, members: [u64; 2], mut settings: JointSettings, chosen_axes: bool, replace: Option<u64>) -> Res {
+    let a = JointPair { a: members[0], b: members[1] };
     let orientations = |model: &Model, s: &JointSettings| -> String {
         let list: Vec<String> = model.supported_joinery_axes(members, s).iter().map(|(d, w)| format!("{{depth_axis:{d}, width_axis:{w}}}")).collect();
         if list.is_empty() { "none".into() } else { list.join(", ") }
@@ -1202,11 +1290,14 @@ fn add_joint(model: &mut Model, a: JointArgs) -> Res {
             }
         }
     }
-    let joint = model.add_connection(Connection {
-        members: [a.a, a.b],
-        entry_face: None,
-        operation: ConnectionOperation::Joinery(settings.clone()),
-    })?;
+    let connection = Connection { members: [a.a, a.b], entry_face: None, operation: ConnectionOperation::Joinery(settings.clone()) };
+    let joint = match replace {
+        Some(id) => {
+            model.connections.insert(id, connection);
+            id
+        }
+        None => model.add_connection(connection)?,
+    };
     if let Some(error) = scene::joint_errors(model).remove(&joint) {
         // Only joints whose shared region touches this one's can be the cause.
         let region = |pair: [u64; 2]| -> Option<(DVec3, DVec3)> {
@@ -1227,6 +1318,27 @@ fn add_joint(model: &mut Model, a: JointArgs) -> Res {
             "No other joint touches this one; the board's own geometry is the problem: a shaped board with many small faces, \
              or vertices very close to the joint's planes. Change the number of segments of a curve (try 24 or 48), or move the joint a few millimetres."
                 .to_owned()
+        } else if others.is_empty() && (error.contains("closed solid") || error.contains("precision")) {
+            // Nothing touches this joint and the boards are plain boxes: a
+            // precision limit of the cutter, which small changes get round.
+            let mut hint = "No other joint touches this one and the boards are plain boxes, so this is a precision limit of BenchUp's \
+                 joint cutter, not a clash. A small change usually gets round it: height_ratio or width_ratio a little different \
+                 (0.6 → 0.65), or one board moved by 0.5 to 1 mm. Try it in a dry run."
+                .to_owned();
+            let earlier: Vec<String> = model
+                .connections
+                .iter()
+                .filter(|(id, c)| **id != joint && c.members.contains(&members[0]) && matches!(c.operation, ConnectionOperation::Joinery(_)))
+                .map(|(id, _)| id.to_string())
+                .collect();
+            if !earlier.is_empty() {
+                hint.push_str(&format!(
+                    " Board {} already has joint {} elsewhere; adding this joint first and that one after also gets round it.",
+                    members[0],
+                    earlier.join(", ")
+                ));
+            }
+            hint
         } else if others.is_empty() {
             format!("Orientations that fit: {}. Check the overlap and params.", orientations(model, &settings))
         } else {
@@ -1238,7 +1350,7 @@ fn add_joint(model: &mut Model, a: JointArgs) -> Res {
         };
         return Err(fail(format!("the joint cannot be cut: {error}"), hint));
     }
-    let mut done = modified(&set);
+    let mut done = modified(&BTreeSet::from(members));
     done.joints.push(joint);
     done.extra.insert("joint_id".into(), json!(joint));
     done.extra.insert("a".into(), json!(a.a));
@@ -1289,9 +1401,9 @@ fn find_objects(model: &Model, a: FindArgs) -> Res {
 fn run(model: &mut Model, env: &mut ToolEnv, name: &str, arguments: &str) -> Res {
     match name {
         "get_scene" => {
-            parse::<Empty>(arguments)?;
+            let filter = more::scene_filter(model, parse(arguments)?)?;
             let shared = if env.hide_selection { BTreeSet::new() } else { env.selection.clone() };
-            read(scene::summary(model, &shared, &env.catalog, scene::SCENE_BUDGET))
+            read(scene::summary_with(model, &shared, &env.catalog, scene::SCENE_BUDGET, &filter))
         }
         "find_objects" => find_objects(model, parse(arguments)?),
         "get_object" => {
@@ -1319,7 +1431,10 @@ fn run(model: &mut Model, env: &mut ToolEnv, name: &str, arguments: &str) -> Res
             read(out)
         }
         "check_model" => {
-            parse::<Empty>(arguments)?;
+            let a: more::CheckArgs = parse(arguments)?;
+            if a.only_new.unwrap_or(false) {
+                return read(crate::review::check_new(model, env.before.as_ref()));
+            }
             read(crate::review::check(model))
         }
         "get_cut_list" => {
@@ -1353,6 +1468,18 @@ fn run(model: &mut Model, env: &mut ToolEnv, name: &str, arguments: &str) -> Res
         "flip_joint" => flip_joint(model, env, parse(arguments)?),
         "add_dimension" => add_dimension(model, parse(arguments)?),
         "add_text" => add_text(model, parse(arguments)?),
+        "get_estimate" => more::get_estimate(model, parse(arguments)?),
+        "measure_space" => more::measure_space(model, parse(arguments)?),
+        "find_surfaces" => more::find_surfaces(model, parse(arguments)?),
+        "create_profile_board" => more::create_profile_board(model, env, parse(arguments)?),
+        "split_face" => more::split_face(model, parse(arguments)?),
+        "merge_faces" => more::merge_faces(model, parse(arguments)?),
+        "change_thickness" => more::change_thickness(model, env, parse(arguments)?),
+        "distribute" => more::distribute(model, parse(arguments)?),
+        "set_joint" => more::set_joint(model, env, parse(arguments)?),
+        "add_profile" => more::add_profile(model, parse(arguments)?),
+        "remove_profile" => more::remove_profile(model, parse(arguments)?),
+        "set_finish" => more::set_finish(model, parse(arguments)?),
         "select" => {
             let a: IdsArg = parse(arguments)?;
             let chosen = entities(model, &a.ids, false)?;
@@ -1408,11 +1535,12 @@ fn error_outcome(error: String, hint: Option<String>) -> ToolOutcome {
 
 /// Tools that only add new entities: nothing existing is touched, so there is
 /// nothing to lease. (`create_copy` reads its source without changing it.)
-const CREATING: &[&str] = &["create_board", "create_copy", "draw_polyline", "add_dimension", "add_text"];
+const CREATING: &[&str] = &["create_board", "create_copy", "create_profile_board", "draw_polyline", "add_dimension", "add_text"];
 /// Editing tools that open the group around their targets by themselves.
 const AUTO_SCOPE: &[&str] = &[
     "move", "move_to", "rotate", "scale", "resize_board", "rename", "set_material", "set_grain",
-    "group", "ungroup", "tag", "paint", "erase", "add_joint", "create_copy",
+    "group", "ungroup", "tag", "paint", "erase", "add_joint", "create_copy", "change_thickness", "distribute",
+    "add_profile", "remove_profile", "set_finish", "merge_faces",
 ];
 
 /// The group to open so that all `ids` are editable, if they share one that is
@@ -1664,6 +1792,13 @@ pub fn execute(model: &mut Model, call: &Call, env: &mut ToolEnv) -> ToolOutcome
     }
 }
 
+#[path = "ops_more.rs"]
+mod more;
+
 #[cfg(test)]
 #[path = "ops_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ops_more_tests.rs"]
+mod more_tests;

@@ -1,0 +1,25 @@
+{"tool": "create_stock_material", "arguments": {"name": "Panel 18 mm", "thickness_mm": 18, "width_mm": 1220, "length_mm": 2440}}
+{"tool": "create_stock_material", "arguments": {"name": "Panel 6 mm (back)", "thickness_mm": 6, "width_mm": 1220, "length_mm": 2440}}
+{"tool": "draw_polyline", "arguments": {"points_mm": [[10.0, 0, 532.0], [440.0, 0, 532.0], [450.0, 10.0, 532.0], [450.0, 350.0, 532.0], [0, 350.0, 532.0], [0, 10.0, 532.0]], "close": true}}
+{"tool": "push_pull", "arguments": {"face_id": "$3.face_id", "distance_mm": 18.0}}
+{"tool": "group", "arguments": {"ids": ["$3.created", "$4.created"], "name": "Top", "component": false}}
+{"tool": "set_grain", "arguments": {"id": "$5.created[0]", "axis": "x"}}
+{"tool": "draw_polyline", "arguments": {"points_mm": [[0.0, 20.0, 0], [0.0, 350.0, 0], [0.0, 350.0, 541.0], [0.0, 20.0, 541.0], [0.0, 20.0, 532.0], [0.0, 23.333, 520.917], [0.0, 26.512, 509.833], [0.0, 29.539, 498.75], [0.0, 32.416, 487.667], [0.0, 35.143, 476.583], [0.0, 37.723, 465.5], [0.0, 40.157, 454.417], [0.0, 42.445, 443.333], [0.0, 44.589, 432.25], [0.0, 46.59, 421.167], [0.0, 48.45, 410.083], [0.0, 50.168, 399.0], [0.0, 51.745, 387.917], [0.0, 53.183, 376.833], [0.0, 54.483, 365.75], [0.0, 55.643, 354.667], [0.0, 56.666, 343.583], [0.0, 57.552, 332.5], [0.0, 58.301, 321.417], [0.0, 58.913, 310.333], [0.0, 59.389, 299.25], [0.0, 59.728, 288.167], [0.0, 59.932, 277.083], [0.0, 60.0, 266.0], [0.0, 59.932, 254.917], [0.0, 59.728, 243.833], [0.0, 59.389, 232.75], [0.0, 58.913, 221.667], [0.0, 58.301, 210.583], [0.0, 57.552, 199.5], [0.0, 56.666, 188.417], [0.0, 55.643, 177.333], [0.0, 54.483, 166.25], [0.0, 53.183, 155.167], [0.0, 51.745, 144.083], [0.0, 50.168, 133.0], [0.0, 48.45, 121.917], [0.0, 46.59, 110.833], [0.0, 44.589, 99.75], [0.0, 42.445, 88.667], [0.0, 40.157, 77.583], [0.0, 37.723, 66.5], [0.0, 35.143, 55.417], [0.0, 32.416, 44.333], [0.0, 29.539, 33.25], [0.0, 26.512, 22.167], [0.0, 23.333, 11.083]], "close": true}}
+{"tool": "push_pull", "arguments": {"face_id": "$7.face_id", "distance_mm": 18.0}}
+{"tool": "group", "arguments": {"ids": ["$7.created", "$8.created"], "name": "Left side", "component": false}}
+{"tool": "set_grain", "arguments": {"id": "$9.created[0]", "axis": "z"}}
+{"tool": "create_copy", "arguments": {"id": "$9.created[0]", "offset_mm": [432.0, 0, 0]}}
+{"tool": "rename", "arguments": {"id": "$11.created[0]", "name": "Right side"}}
+{"tool": "create_board", "arguments": {"name": "Bottom", "origin_mm": [9.0, 44, 50.0], "size_mm": [432.0, 298.0, 18.0], "grain_axis": "x", "material_id": "$1.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Shelf", "origin_mm": [9.0, 65, 291.0], "size_mm": [432.0, 277.0, 18.0], "grain_axis": "x", "material_id": "$1.material_id"}}
+{"tool": "create_board", "arguments": {"name": "Back", "origin_mm": [9.0, 344.0, 0], "size_mm": [432.0, 6.0, 530.0], "grain_axis": "z", "material_id": "$2.material_id"}}
+{"tool": "set_material", "arguments": {"ids": ["$5.created[0]", "$9.created[0]", "$11.created[0]"], "material_id": "$1.material_id"}}
+{"tool": "add_joint", "arguments": {"a": "$9.created[0]", "b": "$5.created[0]", "kind": "tongue_groove"}}
+{"tool": "add_joint", "arguments": {"a": "$11.created[0]", "b": "$5.created[0]", "kind": "tongue_groove"}}
+{"tool": "add_joint", "arguments": {"a": "$13.created[0]", "b": "$9.created[0]", "kind": "tongue_groove"}}
+{"tool": "add_joint", "arguments": {"a": "$13.created[0]", "b": "$11.created[0]", "kind": "tongue_groove"}}
+{"tool": "add_joint", "arguments": {"a": "$14.created[0]", "b": "$9.created[0]", "kind": "tongue_groove"}}
+{"tool": "add_joint", "arguments": {"a": "$14.created[0]", "b": "$11.created[0]", "kind": "tongue_groove"}}
+{"tool": "add_joint", "arguments": {"a": "$15.created[0]", "b": "$9.created[0]", "kind": "rabbet"}}
+{"tool": "add_joint", "arguments": {"a": "$15.created[0]", "b": "$11.created[0]", "kind": "rabbet"}}
+{"tool": "check_model", "arguments": {}}

@@ -2,6 +2,7 @@
 //! These describe joint topology; dimensions still come from the settings/model.
 use benchup_core::tr;
 use super::*;
+use std::sync::Arc;
 
 fn description(kind: JointKind) -> &'static str {
     match kind {
@@ -11,6 +12,10 @@ fn description(kind: JointKind) -> &'static str {
         JointKind::Rabbet => tr!("joinery_cards.a_stepped_edge_fits_against_the_complementary_rebate"),
         JointKind::Dovetail => tr!("joinery_cards.a_flared_tail_fits_into_a_matching_tapered"),
         JointKind::Finger => tr!("joinery_cards.alternating_straight_fingers_interlock_across_the_joint"),
+        JointKind::Biscuit => tr!("joinery_cards.biscuit"),
+        JointKind::Domino => tr!("joinery_cards.domino"),
+        JointKind::Groove => tr!("joinery_cards.groove"),
+        JointKind::LooseTongue => tr!("joinery_cards.loose_tongue"),
     }
 }
 
@@ -58,10 +63,10 @@ pub(super) fn selector(ui: &mut egui::Ui, current: &mut JointKind) {
                         );
                         preview(
                             &p,
+                            response.id.with("diagram"),
                             diagram,
                             kind,
                             colors.ink,
-                            ui.visuals().dark_mode,
                             ui.is_enabled(),
                         );
                         if *current == kind {
@@ -126,14 +131,50 @@ pub(super) fn selector(ui: &mut egui::Ui, current: &mut JointKind) {
     }
 }
 
-fn preview(
-    p: &egui::Painter,
+// These schematics never depend on the viewport camera or joint dimensions.
+// Retain their tessellated meshes instead of clipping solids and splitting
+// every edge again during each orbit frame. Keep one entry per visible card;
+// layout, theme, enabled state and DPI invalidate it without growing a cache.
+#[derive(Clone, Copy, PartialEq)]
+struct PreviewKey {
     rect: Rect,
     kind: JointKind,
     outline: Color32,
-    _dark: bool,
     enabled: bool,
-) {
+    pixels_per_point: f32,
+    atlas_size: [usize; 2],
+}
+struct CachedPreview {
+    key: PreviewKey,
+    mesh: Arc<egui::Mesh>,
+}
+fn cached_preview(ctx: &egui::Context, id: egui::Id, key: PreviewKey) -> Arc<CachedPreview> {
+    if let Some(cached) = ctx.data(|data| data.get_temp::<Arc<CachedPreview>>(id)) {
+        if cached.key == key { return cached; }
+    }
+    let shapes = build_preview(key.rect, key.kind, key.outline, key.enabled)
+        .into_iter().map(|shape| egui::epaint::ClippedShape::new(Rect::EVERYTHING, shape)).collect();
+    let mut mesh = egui::Mesh::default();
+    for primitive in ctx.tessellate(shapes, key.pixels_per_point) {
+        if let egui::epaint::Primitive::Mesh(part) = primitive.primitive {
+            mesh.append(part);
+        }
+    }
+    let cached = Arc::new(CachedPreview { key, mesh: Arc::new(mesh) });
+    ctx.data_mut(|data| data.insert_temp(id, Arc::clone(&cached)));
+    cached
+}
+fn preview(p: &egui::Painter, id: egui::Id, rect: Rect, kind: JointKind, outline: Color32, enabled: bool) {
+    let cached = cached_preview(p.ctx(), id, PreviewKey {
+        rect, kind, outline, enabled, pixels_per_point: p.ctx().pixels_per_point(),
+        atlas_size: p.ctx().fonts(|fonts| fonts.font_image_size()),
+    });
+    p.add(egui::Shape::Mesh(Arc::clone(&cached.mesh)));
+}
+
+fn build_preview(rect: Rect, kind: JointKind, outline: Color32, enabled: bool) -> Vec<egui::Shape> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let _profile = super::super::viewport_benchmark::scope("joinery_cards_build");
     let first = Color32::from_rgb(102, 171, 205);
     let second = Color32::from_rgb(207, 165, 107);
     let mut solids: Vec<Solid> = Vec::new();
@@ -196,6 +237,41 @@ fn preview(
                 second,
             );
         }
+        JointKind::Biscuit | JointKind::Domino | JointKind::Groove | JointKind::LooseTongue => {
+            let continuous = matches!(kind, JointKind::Groove | JointKind::LooseTongue);
+            let (low, high) = if continuous { (0., 1.) } else { (0.25, 0.75) };
+            for (x0, x1, color, cut) in [
+                (0.45, 0.85, first, kind != JointKind::Groove),
+                (2.15, 2.55, second, true),
+            ] {
+                if cut {
+                    block!(x0, x1, 0., 1., 0., 0.2, color);
+                    block!(x0, x1, 0., 1., 0.35, 0.55, color);
+                    if !continuous {
+                        block!(x0, x1, 0., low, 0.2, 0.35, color);
+                        block!(x0, x1, high, 1., 0.2, 0.35, color);
+                    }
+                } else {
+                    block!(x0, x1, 0., 1., 0., 0.55, color);
+                }
+            }
+            // Replace the full end blocks with their slotted versions above.
+            solids.drain(0..2);
+            block!(0., 0.45, 0., 1., 0., 0.55, first);
+            block!(2.55, 3., 0., 1., 0., 0.55, second);
+            if kind != JointKind::Groove {
+                let insert = Color32::from_rgb(153, 184, 114);
+                if kind == JointKind::Biscuit {
+                    let lens: Vec<_> = (0..20).map(|i| {
+                        let angle = std::f32::consts::TAU * i as f32 / 20.;
+                        [1.5 + 0.3 * angle.cos(), 0.5 + 0.25 * angle.sin()]
+                    }).collect();
+                    prism!(lens, 0.21, 0.34, insert);
+                } else {
+                    block!(1.2, 1.8, low, high, 0.21, 0.34, insert);
+                }
+            }
+        }
         JointKind::Finger => {
             for i in 0..6 {
                 let lo = i as f32 / 6.;
@@ -208,7 +284,7 @@ fn preview(
             }
         }
     }
-    paint_solids(p, rect, &solids, kind, outline, enabled);
+    paint_solids(rect, &solids, kind, outline, enabled)
 }
 
 type Solid = (Vec<[f32; 2]>, f32, f32, Color32);
@@ -216,13 +292,12 @@ type Solid = (Vec<[f32; 2]>, f32, f32, Color32);
 /// Draw only exposed surfaces. Split at every profile boundary so adjoining
 /// blocks never contribute internal faces or outlines through the other member.
 fn paint_solids(
-    p: &egui::Painter,
     rect: Rect,
     solids: &[Solid],
     kind: JointKind,
     outline: Color32,
     enabled: bool,
-) {
+) -> Vec<egui::Shape> {
     // Flat profiles read from above; depth cuts need their vertical walls.
     let (tilt, across, vertical) = match kind {
         JointKind::Dovetail => (0.08, 0.72, 0.48),
@@ -230,7 +305,8 @@ fn paint_solids(
         JointKind::Rabbet => (0.10, 0.62, 0.60),
         JointKind::HalfLap => (0.16, 0.40, 0.85),
         JointKind::MortiseTenon => (0.16, 0.28, 0.98),
-        JointKind::TongueGroove => (0.16, 0.24, 1.02),
+        JointKind::TongueGroove | JointKind::Groove | JointKind::LooseTongue => (0.16, 0.24, 1.02),
+        JointKind::Biscuit | JointKind::Domino => (0.16, 0.28, 0.98),
     };
     // Derive the camera direction from the projection so face visibility and
     // depth ordering stay consistent for every joint's viewing angle.
@@ -386,10 +462,11 @@ fn paint_solids(
         0.85,
         outline.gamma_multiply(if enabled { 0.7 } else { 0.3 }),
     );
+    let mut shapes = Vec::new();
     for (index, (face, color, shade)) in faces.iter().enumerate() {
         let left = is_left(*color);
         let fill = color.gamma_multiply(shade * if enabled { 1. } else { 0.45 });
-        p.add(egui::Shape::convex_polygon(
+        shapes.push(egui::Shape::convex_polygon(
             face.iter().map(|v| project(*v, left)).collect(),
             fill,
             Stroke::NONE,
@@ -403,10 +480,11 @@ fn paint_solids(
                         || (distance2(*a, *y) < 0.00000001 && distance2(*b, *x) < 0.00000001))
             });
             if !seam {
-                p.line_segment([project(*a, left), project(*b, left)], edge_stroke);
+                shapes.push(egui::Shape::line_segment([project(*a, left), project(*b, left)], edge_stroke));
             }
         }
     }
+    shapes
 }
 
 fn split_face(face: &[[f32; 3]], n: [f32; 3], d: f32) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
@@ -449,4 +527,48 @@ fn face_area(face: &[[f32; 3]]) -> f32 {
         normal[2] += (a[0] - b[0]) * (a[1] + b[1]);
     }
     normal.iter().map(|v| v * v).sum::<f32>().sqrt() * 0.5
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_ui::ContextExt;
+
+    #[test]
+    fn orbit_frames_reuse_every_joint_cards_tessellated_mesh() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run_test_ui(egui::RawInput::default(), |ui| {
+            for kind in JointKind::ALL {
+                let id = ui.id().with(("cached_joint_card", kind));
+                let key = PreviewKey {
+                    rect: Rect::from_min_size(egui::pos2(10., 20.), egui::vec2(145., 75.)),
+                    kind, outline: Color32::BLACK, enabled: true,
+                    pixels_per_point: ctx.pixels_per_point(),
+                    atlas_size: ctx.fonts(|fonts| fonts.font_image_size()),
+                };
+                let first = cached_preview(&ctx, id, key);
+                assert!(!first.mesh.indices.is_empty(), "{kind:?}");
+                assert!(first.mesh.is_valid());
+                for _ in 0..60 {
+                    let next = cached_preview(&ctx, id, key);
+                    assert!(Arc::ptr_eq(&first, &next));
+                    assert!(Arc::ptr_eq(&first.mesh, &next.mesh));
+                }
+                // Theme, scrolling, resizing, enabled state, DPI and font atlas
+                // changes affect pixels and must replace the cached mesh.
+                for edited in [
+                    PreviewKey { outline: Color32::WHITE, ..key },
+                    PreviewKey { rect: key.rect.translate(egui::vec2(0., -15.)), ..key },
+                    PreviewKey { rect: key.rect.expand(10.), ..key },
+                    PreviewKey { enabled: false, ..key },
+                    PreviewKey { pixels_per_point: 2., ..key },
+                    PreviewKey { atlas_size: [key.atlas_size[0], key.atlas_size[1] * 2], ..key },
+                ] {
+                    let next = cached_preview(&ctx, id, edited);
+                    assert!(!Arc::ptr_eq(&first, &next));
+                    assert!(Arc::ptr_eq(&next, &cached_preview(&ctx, id, edited)));
+                }
+            }
+        });
+    }
 }

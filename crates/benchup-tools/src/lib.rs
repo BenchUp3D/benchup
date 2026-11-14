@@ -9,10 +9,12 @@
 //! * [`scene`] describes the model compactly (summary, references, per-object
 //!   detail) for an agent to read.
 //! * [`files`] reads and writes `.bup` project files (gzip-compressed JSON).
+//! * [`render`] draws a PNG preview of a standard view without a GPU.
 //!
 //! The crate has no network or UI dependencies and builds for `wasm32`.
 pub mod files;
 pub mod ops;
+pub mod render;
 pub mod review;
 pub mod scene;
 

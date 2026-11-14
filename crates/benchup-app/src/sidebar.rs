@@ -509,6 +509,7 @@ impl Default for SnappingPreferences {
 struct CuttingPlanPreferences {
     layout: crate::cutting_layout::Settings,
     selection: Option<bool>,
+    used_area_cost: bool,
 }
 
 impl Default for CuttingPlanPreferences {
@@ -516,6 +517,7 @@ impl Default for CuttingPlanPreferences {
         Self {
             layout: Default::default(),
             selection: None,
+            used_area_cost: false,
         }
     }
 }
@@ -809,6 +811,7 @@ impl BenchUpApp {
             Default::default()
         };
         self.project.cutting_plan_selection_preference = preferences.cutting_plan.selection;
+        self.project.cutting_plan_used_area_cost = preferences.cutting_plan.used_area_cost;
         if let Some(snapping) = &preferences.snapping {
             self.snap_to_edge = snapping.geometry && snapping.edges;
             self.snap_to_face = snapping.geometry && snapping.faces;
@@ -905,6 +908,7 @@ impl BenchUpApp {
             cutting_plan: CuttingPlanPreferences {
                 layout: self.project.cutting_plan_layout,
                 selection: self.project.cutting_plan_selection_preference,
+                used_area_cost: self.project.cutting_plan_used_area_cost,
             },
             time_estimates: self.time_estimates.clone(),
             joinery_rates: self.joinery_rates.clone(),
@@ -1205,6 +1209,10 @@ mod preference_tests {
         let defaults: InspectorPreferences=serde_json::from_str("{}").unwrap();
         assert_eq!(defaults.joinery,joinery::Preferences::default());
         assert_eq!(defaults.joinery.settings.dovetail_pin_width, 0.005);
+        assert_eq!(defaults.joinery.settings.pocket_width, 0.03);
+        assert_eq!(defaults.joinery.settings.pocket_thickness, 0.004);
+        assert_eq!(defaults.joinery.settings.pocket_depth, 0.01);
+        assert_eq!(defaults.joinery.settings.pocket_count, 1);
         assert_eq!(defaults.joinery.settings.trim, benchup_core::joinery::TrimBoard::None);
         assert_eq!(defaults.joinery.settings.trim_axis, None);
         assert_eq!(defaults.joinery.settings.keep_end, benchup_core::joinery::KeepEnd::Lower);
@@ -1213,7 +1221,11 @@ mod preference_tests {
         let ctx=egui::Context::default();
         let mut storage=SavedPreferences::default();
         let mut app=BenchUpApp::with_document(Document::default(),None,true);
-        app.joinery.settings.kind=benchup_core::joinery::JointKind::Dovetail;
+        app.joinery.settings.kind=benchup_core::joinery::JointKind::Domino;
+        app.joinery.settings.pocket_width=0.05;
+        app.joinery.settings.pocket_thickness=0.008;
+        app.joinery.settings.pocket_depth=0.025;
+        app.joinery.settings.pocket_count=3;
         app.joinery.settings.depth_axis=2;
         app.joinery.settings.width_axis=0;
         app.joinery.settings.width_ratio=0.6;
@@ -1237,6 +1249,27 @@ mod preference_tests {
         assert!(!restored.doc.display.joinery_preview);
         assert!(restored.joinery_dialog.members.is_none());
         assert!(!restored.project.modified);
+    }
+
+    #[test]
+    fn pocket_joint_choices_save_immediately_without_model_edits() {
+        use benchup_core::joinery::JointKind;
+        let ctx = egui::Context::default();
+        let mut storage = SavedPreferences::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        for kind in [JointKind::Biscuit, JointKind::Domino, JointKind::Groove, JointKind::LooseTongue] {
+            app.joinery.settings.kind = kind;
+            app.joinery.settings.pocket_width = 0.04;
+            app.joinery.settings.pocket_thickness = 0.006;
+            app.joinery.settings.pocket_depth = 0.015;
+            app.joinery.settings.pocket_count = 2;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+            assert_eq!(restored.joinery, app.joinery);
+            assert!(!restored.project.modified);
+            assert!(restored.doc.model.connections.is_empty());
+        }
     }
 
     #[test]
@@ -1529,6 +1562,7 @@ mod preference_tests {
         app.persist_inspector_changes(&ctx, Some(&mut storage), false);
         remember_modal_size(&ctx, "general_settings", egui::vec2(820., 560.));
         remember_modal_size(&ctx, "another_dialog", egui::vec2(480., 320.));
+        remember_modal_size(&ctx, "woodworking_cutting_plan", egui::vec2(1280., 820.));
         storage.flushed = false;
         app.persist_inspector_changes(&ctx, Some(&mut storage), false);
         assert!(storage.flushed);
@@ -1544,6 +1578,10 @@ mod preference_tests {
         assert_eq!(
             modal_size(&restored_ctx, "another_dialog"),
             Some(egui::vec2(480., 320.))
+        );
+        assert_eq!(
+            modal_size(&restored_ctx, "woodworking_cutting_plan"),
+            Some(egui::vec2(1280., 820.))
         );
         assert_eq!(modal_size(&restored_ctx, "unknown"), None);
         let old: InspectorPreferences = serde_json::from_str("{}").unwrap();
@@ -2214,6 +2252,27 @@ mod preference_tests {
     }
 
     #[test]
+    fn dimension_input_overlay_restores_without_model_edits_and_defaults_on() {
+        let old: DisplaySettings = serde_json::from_str("{}").unwrap();
+        assert!(old.dimension_input_overlay);
+        let ctx = egui::Context::default();
+        let mut storage = SavedPreferences::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        for enabled in [false, true] {
+            app.doc.display.dimension_input_overlay = enabled;
+            storage.flushed = false;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&ctx, Some(&storage));
+            assert_eq!(restored.doc.display.dimension_input_overlay, enabled);
+            restored.new_model(&ctx);
+            assert_eq!(restored.doc.display.dimension_input_overlay, enabled);
+        }
+    }
+
+    #[test]
     fn grain_direction_visibility_and_tool_restore_without_model_edits() {
         let old: DisplaySettings = serde_json::from_str("{}").unwrap();
         assert!(old.grain_direction);
@@ -2460,7 +2519,7 @@ mod preference_tests {
 
     #[test]
     fn each_additional_option_saves_independently_without_a_model_edit() {
-        let options: [(&str, fn(&mut BenchUpApp)); 18] = [
+        let options: [(&str, fn(&mut BenchUpApp)); 21] = [
             ("face center snapping", |app| app.snap_to_face_center = false),
             ("axis snapping", |app| app.doc.snap_to_axes = false),
             ("edge snapping", |app| app.snap_to_edge = false),
@@ -2494,6 +2553,13 @@ mod preference_tests {
             ("saw kerf", |app| {
                 app.project.cutting_plan_layout.kerf_mm = 4.5
             }),
+            ("edge trim", |app| {
+                app.project.cutting_plan_layout.edge_trim_mm = 3.
+            }),
+            ("layout strategy", |app| {
+                app.project.cutting_plan_layout.strategy = crate::cutting_layout::Strategy::LargestOffcut
+            }),
+            ("used-area cost", |app| app.project.cutting_plan_used_area_cost = true),
             ("whole project scope", |app| {
                 app.project.cutting_plan_selection_preference = Some(false)
             }),
@@ -2618,6 +2684,8 @@ mod preference_tests {
             "{}",
             r#"{"cutting_plan":{"layout":{"kerf_mm":5.0}}}"#,
             r#"{"cutting_plan":{"group_stock":false,"layout":{"kerf_mm":4.5}}}"#,
+            r#"{"cutting_plan":{"layout":{"edge_trim_mm":2.0,"strategy":"rip_first"}}}"#,
+            r#"{"cutting_plan":{"used_area_cost":true,"layout":{"used_area_cost":true}}}"#,
         ] {
             let preferences: InspectorPreferences = serde_json::from_str(json).unwrap();
             assert!(preferences.snapping.is_none());
@@ -3843,6 +3911,9 @@ mod preference_tests {
         app.router_rates = time_estimates::RouterRates { setup_minutes: 3.5, minutes_per_meter: 2.25 };
         app.joinery_rates.set_minutes(JointKind::Dovetail, 31.5);
         app.joinery_rates.set_minutes(JointKind::Rabbet, 0.);
+        for kind in [JointKind::Biscuit, JointKind::Domino, JointKind::Groove, JointKind::LooseTongue] {
+            app.joinery_rates.set_minutes(kind, 6.5);
+        }
         for (step, product) in [
             &mut app.time_estimates.pre_stain,
             &mut app.time_estimates.stain,
@@ -3888,6 +3959,9 @@ mod preference_tests {
         assert_eq!(restored.joinery_rates.minutes(JointKind::Dovetail), 31.5);
         assert_eq!(restored.joinery_rates.minutes(JointKind::Rabbet), 0.);
         assert_eq!(restored.joinery_rates.minutes(JointKind::HalfLap), 8.);
+        for kind in [JointKind::Biscuit, JointKind::Domino, JointKind::Groove, JointKind::LooseTongue] {
+            assert_eq!(restored.joinery_rates.minutes(kind), 6.5);
+        }
         assert_eq!(
             restored.general_settings.stock.finishes,
             app.general_settings.stock.finishes
@@ -3915,7 +3989,7 @@ mod preference_tests {
         assert_eq!(old.router_rates, time_estimates::RouterRates::default());
         assert_eq!(
             JointKind::ALL.map(|kind| old.joinery_rates.minutes(kind)),
-            [15., 8., 8., 5., 25., 15.],
+            [15., 8., 8., 5., 25., 15., 5., 5., 5., 8.],
         );
     }
 
@@ -5520,6 +5594,7 @@ impl BenchUpApp {
             (&mut d.group_names, tr!("sidebar.group_names")),
             (&mut d.dimensions, tr!("sidebar.dimensions")),
             (&mut d.face_side_lengths, tr!("sidebar.selected_edge_lengths")),
+            (&mut d.dimension_input_overlay, tr!("sidebar.floating_dimension_input")),
             (&mut d.grain_direction, tr!("grain_direction.show")),
             (&mut d.wood_joinery, tr!("sidebar.wood_joinery")),
         ] {
@@ -5538,6 +5613,7 @@ impl BenchUpApp {
 
         // These application preferences do not modify the project.
         before.face_side_lengths = d.face_side_lengths;
+        before.dimension_input_overlay = d.dimension_input_overlay;
         before.grain_direction = d.grain_direction;
         before.group_emphasis = d.group_emphasis;
         if before != self.doc.display {

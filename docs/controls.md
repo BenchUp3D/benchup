@@ -50,6 +50,8 @@
 | Pan | **Hold Shift while orbiting**, including middle-drag |
 | Zoom | Mouse wheel; anchors at the pointer on the camera target plane |
 | Fit all geometry | Fit view button |
+| Standard view | Click an axis on the compass: Top, Bottom, Front, Back, Left, or Right |
+| New view | **+** after the view tabs above the viewport |
 | Focus on Edited Group | Enabled by default. View → Focus on Edited Group toggles the group/component currently being edited solid and everything else in muted wireframe, regardless of selection. Has no visual effect outside a group/component |
 | Toggle right sidebar | Tab, or the model inspector button |
 | Ground, sky, and horizon colors | Model inspector → Display → Environment; color pickers, Sky/Ground toggles, and reset colors |
@@ -58,6 +60,12 @@
 | Shortcuts | F1, or Help → Keyboard shortcuts |
 
 Orbiting always uses the combined bounding-box center of all objects, including hidden objects, or the origin in an empty model. Orbiting preserves the current framing and zoom after panning or zooming; the model center stays at its current viewport position. Shift may be pressed or released during an orbit gesture. Panning changes the camera position and target together without changing camera orientation. Temporary middle-button navigation preserves the active tool and unfinished line. While using Line, Rectangle, Circle, Polygon, or Freehand, holding Ctrl or Command makes cursor movement orbit without holding a mouse button. Releasing the modifier restores drawing without placing a point; unfinished geometry, axis locks, and typed lengths are preserved. Holding Shift also pans during this temporary orbit.
+
+## Views and cameras
+
+Click an axis label on the compass to look along it: −Y is the Front view, +X Right, +Y Back, −X Left, +Z Top, and −Z Bottom. The front of a model faces −Y. The sidebar's **Camera** section chooses Perspective or Parallel (orthographic) projection, sets the field of view in perspective (15–100°), and offers **Fit model**, **Fit selection**, and **Reset camera**.
+
+The tabs above the viewport are views of the same model. Each view keeps its own camera, while the model, selection, and undo history are shared; tools act in the active view. Click **+** to add a view that starts from the current camera. Drag a tab to an edge of a viewport to split the workspace, or to its center to stack it there as a tab. Right-click a tab to rename or close it; the last view cannot be closed. Each view's camera is saved in the project file. The layout, view names, and the active view are application preferences, so they are remembered across restarts but do not travel with the file.
 
 For a 3Dconnexion SpaceMouse, open Settings → Navigation and select **3D Mouse**. Tilt or twist the cap to orbit, slide it to pan, and push or pull it to zoom. The Fit button frames the model. Both navigation types share the Orbit, Pan, and Zoom controls and **Invert tilt and twist**, **Invert pan**, and **Invert zoom** options. Each type keeps its own saved values. For Mouse/Trackpad, inversion applies to orbit drags, panning, and wheel or pinch zoom.
 

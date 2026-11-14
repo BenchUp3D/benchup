@@ -61,6 +61,42 @@ fn a_call_edits_the_file_as_one_undo_step() {
 }
 
 #[test]
+fn mcp_runs_batches_with_dry_runs_undoes_them_and_renders() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = new_project(dir.path());
+    let calls = json!([
+        {"tool": "create_board", "arguments": board("Side", [0., 0., 0.], [18., 300., 900.])},
+        {"tool": "create_board", "arguments": board("Shelf", [9., 0., 400.], [500., 290., 18.])},
+        {"tool": "add_joint", "arguments": {"a": "$2.created[0]", "b": "$1.created[0]", "kind": "tongue_groove"}},
+    ]);
+    let call = |id: u64, name: &str, arguments: Value| json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": name, "arguments": arguments}});
+    let messages = [
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+        call(2, "run_batch", json!({"calls": calls, "dry_run": true})),
+        call(3, "run_batch", json!({"calls": calls})),
+        call(4, "run_batch", json!({"calls": [{"tool": "create_board", "arguments": board("Top", [0., 0., 900.], [500., 300., 18.])},
+                                              {"tool": "move", "arguments": {"ids": [999_999], "delta_mm": [1, 0, 0]}}]})),
+        call(5, "render_view", json!({"view": "front", "width": 200, "height": 150})),
+        call(6, "undo", json!({})),
+    ];
+    let input: String = messages.iter().map(|m| format!("{m}\n")).collect();
+    let output = benchup(&["mcp", &path], Some(&input));
+    let replies: Vec<Value> =
+        String::from_utf8(output.stdout).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let content = |n: usize| &replies[n]["result"]["structuredContent"];
+    assert_eq!(content(1)["dry_run"], true);
+    assert_eq!(content(1)["results"][2]["ok"], true, "references resolve in a dry run");
+    assert_eq!(content(2)["results"].as_array().unwrap().len(), 3);
+    assert_eq!(replies[3]["result"]["isError"], true);
+    assert_eq!(content(3)["failed_call"], 2);
+    assert_eq!(content(3)["error"], "unknown id 999999");
+    assert_eq!(replies[4]["result"]["content"][0]["mimeType"], "image/png");
+    assert_eq!(content(5)["ok"], true);
+    // The dry run and the failed batch changed nothing; undo took back the whole real batch.
+    assert_eq!(object_count(&path), 0);
+}
+
+#[test]
 fn a_batch_is_all_or_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let path = new_project(dir.path());
