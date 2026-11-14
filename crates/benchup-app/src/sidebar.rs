@@ -1209,6 +1209,10 @@ mod preference_tests {
         let defaults: InspectorPreferences=serde_json::from_str("{}").unwrap();
         assert_eq!(defaults.joinery,joinery::Preferences::default());
         assert_eq!(defaults.joinery.settings.dovetail_pin_width, 0.005);
+        assert_eq!(defaults.joinery.settings.pocket_width, 0.03);
+        assert_eq!(defaults.joinery.settings.pocket_thickness, 0.004);
+        assert_eq!(defaults.joinery.settings.pocket_depth, 0.01);
+        assert_eq!(defaults.joinery.settings.pocket_count, 1);
         assert_eq!(defaults.joinery.settings.trim, benchup_core::joinery::TrimBoard::None);
         assert_eq!(defaults.joinery.settings.trim_axis, None);
         assert_eq!(defaults.joinery.settings.keep_end, benchup_core::joinery::KeepEnd::Lower);
@@ -1217,7 +1221,11 @@ mod preference_tests {
         let ctx=egui::Context::default();
         let mut storage=SavedPreferences::default();
         let mut app=BenchUpApp::with_document(Document::default(),None,true);
-        app.joinery.settings.kind=benchup_core::joinery::JointKind::Dovetail;
+        app.joinery.settings.kind=benchup_core::joinery::JointKind::Domino;
+        app.joinery.settings.pocket_width=0.05;
+        app.joinery.settings.pocket_thickness=0.008;
+        app.joinery.settings.pocket_depth=0.025;
+        app.joinery.settings.pocket_count=3;
         app.joinery.settings.depth_axis=2;
         app.joinery.settings.width_axis=0;
         app.joinery.settings.width_ratio=0.6;
@@ -1241,6 +1249,27 @@ mod preference_tests {
         assert!(!restored.doc.display.joinery_preview);
         assert!(restored.joinery_dialog.members.is_none());
         assert!(!restored.project.modified);
+    }
+
+    #[test]
+    fn pocket_joint_choices_save_immediately_without_model_edits() {
+        use benchup_core::joinery::JointKind;
+        let ctx = egui::Context::default();
+        let mut storage = SavedPreferences::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        for kind in [JointKind::Biscuit, JointKind::Domino, JointKind::Groove, JointKind::LooseTongue] {
+            app.joinery.settings.kind = kind;
+            app.joinery.settings.pocket_width = 0.04;
+            app.joinery.settings.pocket_thickness = 0.006;
+            app.joinery.settings.pocket_depth = 0.015;
+            app.joinery.settings.pocket_count = 2;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&egui::Context::default(), Some(&storage));
+            assert_eq!(restored.joinery, app.joinery);
+            assert!(!restored.project.modified);
+            assert!(restored.doc.model.connections.is_empty());
+        }
     }
 
     #[test]
@@ -3882,6 +3911,9 @@ mod preference_tests {
         app.router_rates = time_estimates::RouterRates { setup_minutes: 3.5, minutes_per_meter: 2.25 };
         app.joinery_rates.set_minutes(JointKind::Dovetail, 31.5);
         app.joinery_rates.set_minutes(JointKind::Rabbet, 0.);
+        for kind in [JointKind::Biscuit, JointKind::Domino, JointKind::Groove, JointKind::LooseTongue] {
+            app.joinery_rates.set_minutes(kind, 6.5);
+        }
         for (step, product) in [
             &mut app.time_estimates.pre_stain,
             &mut app.time_estimates.stain,
@@ -3927,6 +3959,9 @@ mod preference_tests {
         assert_eq!(restored.joinery_rates.minutes(JointKind::Dovetail), 31.5);
         assert_eq!(restored.joinery_rates.minutes(JointKind::Rabbet), 0.);
         assert_eq!(restored.joinery_rates.minutes(JointKind::HalfLap), 8.);
+        for kind in [JointKind::Biscuit, JointKind::Domino, JointKind::Groove, JointKind::LooseTongue] {
+            assert_eq!(restored.joinery_rates.minutes(kind), 6.5);
+        }
         assert_eq!(
             restored.general_settings.stock.finishes,
             app.general_settings.stock.finishes
@@ -3954,7 +3989,7 @@ mod preference_tests {
         assert_eq!(old.router_rates, time_estimates::RouterRates::default());
         assert_eq!(
             JointKind::ALL.map(|kind| old.joinery_rates.minutes(kind)),
-            [15., 8., 8., 5., 25., 15.],
+            [15., 8., 8., 5., 25., 15., 5., 5., 5., 8.],
         );
     }
 

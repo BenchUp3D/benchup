@@ -399,7 +399,7 @@ pub(super) fn paint(
             Color32::from_rgb(231, 197, 255)
         };
         let width = if preview { 1.15 } else { 0.85 };
-        mesh.surface_grain(face.cached, axis, width, color);
+        mesh.surface_grain(face.cached, axis, width, color, face.color.a() == 255);
     }
 }
 
@@ -525,7 +525,7 @@ mod tests {
                 shadow: None,
             }]);
             mesh.set_entity(None);
-            mesh.surface_grain(face, axis, 0.85, Color32::BLACK);
+            mesh.surface_grain(face, axis, 0.85, Color32::BLACK, true);
             mesh.stroke_triangles()
         };
         let mut camera = Camera {
@@ -622,7 +622,8 @@ mod tests {
             };
             let mut mesh = renderer::Mesh::new(&camera, size);
             mesh.set_display(&display);
-            mesh.enable_gpu_edge_occlusion();
+            // These assertions inspect CPU stroke triangles. The production
+            // GPU overlay is covered by renderer and browser regressions.
             mesh.draw_faces(&faces);
             mesh.set_entity(None);
             if occlude {

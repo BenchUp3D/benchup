@@ -63,10 +63,14 @@ fn arbitrary_relative_angles_cut_complementary_profiles_without_removing_other_s
                     .iter()
                     .map(|id| model.solid_volume(*id).unwrap())
                     .sum::<f64>();
-                assert!(
-                    (total - expected).abs() < 1e-8,
-                    "{kind:?} must partition only the true overlap"
-                );
+                if kind.uses_pockets() {
+                    assert!(total < expected - 1e-9, "{kind:?} must remove pocket material as well as partition the overlap");
+                } else {
+                    assert!(
+                        (total - expected).abs() < 1e-8,
+                        "{kind:?} must partition only the true overlap"
+                    );
+                }
                 let remaining_overlap = csg::apply(
                     result[0].clone(),
                     result[1].clone(),
@@ -75,6 +79,8 @@ fn arbitrary_relative_angles_cut_complementary_profiles_without_removing_other_s
                 )
                 .unwrap();
                 assert!(csg::volume(&remaining_overlap).abs() * scale < 1e-9);
+                // Insert pockets deliberately extend beyond the shared volume.
+                if kind.uses_pockets() { continue; }
                 for i in 0..2 {
                     let outside = csg::apply(
                         stock.solids[i].clone(),

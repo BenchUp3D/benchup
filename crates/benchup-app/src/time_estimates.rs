@@ -51,6 +51,9 @@ impl JoineryRates {
             JointKind::Rabbet => 5.,
             JointKind::Dovetail => 25.,
             JointKind::Finger => 15.,
+            JointKind::Biscuit | JointKind::Domino => 5.,
+            JointKind::Groove => 5.,
+            JointKind::LooseTongue => 8.,
         }
     }
 
