@@ -142,6 +142,86 @@ fn overlap(a: (DVec3, DVec3), b: (DVec3, DVec3)) -> Option<DVec3> {
 /// Problems worth fixing before building: overlapping boards without a joint,
 /// joints that cannot be cut or lost a board, open solids and loose geometry.
 pub fn check(model: &Model) -> Value {
+    summarize(model, collect(model), None)
+}
+
+/// Like [`check`], listing only the problems that are not in `baseline` (the
+/// model before this batch). An issue is the same when its kind and ids match.
+pub fn check_new(model: &Model, baseline: Option<&Model>) -> Value {
+    let found = collect(model);
+    let Some(baseline) = baseline else {
+        let existing = found.issues.len();
+        let mut out = summarize(model, Found { issues: Vec::new(), ..found }, Some(existing));
+        out["note"] = json!("Nothing has changed yet in this batch, so there are no new problems. Run check_model without only_new to see all.");
+        return out;
+    };
+    let key = |issue: &Value| -> (String, Vec<u64>) {
+        let mut ids: Vec<u64> = issue["ids"].as_array().into_iter().flatten().filter_map(Value::as_u64).collect();
+        ids.sort_unstable();
+        (issue["kind"].as_str().unwrap_or_default().to_owned(), ids)
+    };
+    // Grouping gives boards new ids, so an issue also counts as existing when
+    // its message (names, joint ids, sizes) is unchanged.
+    let message = |issue: &Value| (issue["kind"].as_str().unwrap_or_default().to_owned(), issue["message"].as_str().unwrap_or_default().to_owned());
+    let earlier = collect(baseline).issues;
+    let old: BTreeSet<(String, Vec<u64>)> = earlier.iter().map(key).collect();
+    let old_messages: BTreeSet<(String, String)> = earlier.iter().map(message).collect();
+    let total = found.issues.len();
+    let (existing, issues): (Vec<Value>, Vec<Value>) =
+        found.issues.into_iter().partition(|issue| old.contains(&key(issue)) || old_messages.contains(&message(issue)));
+    let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+    for issue in &existing {
+        *kinds.entry(issue["kind"].as_str().unwrap_or_default().to_owned()).or_default() += 1;
+    }
+    debug_assert_eq!(total, issues.len() + existing.len());
+    let mut out = summarize(model, Found { issues, ..found }, Some(existing.len()));
+    out["existing_by_kind"] = json!(kinds);
+    out
+}
+
+struct Found {
+    issues: Vec<Value>,
+    joint_errors: BTreeMap<u64, String>,
+    boards: Vec<u64>,
+}
+
+fn summarize(model: &Model, found: Found, existing: Option<usize>) -> Value {
+    let Found { mut issues, joint_errors, boards: all } = found;
+    let total = issues.len();
+    let errors = issues.iter().filter(|i| i["severity"] == "error").count();
+    let warnings = issues.iter().filter(|i| i["severity"] == "warning").count();
+    issues.truncate(MAX_LISTED_ISSUES);
+    let wood_joints = model.connections.values().filter(|c| matches!(c.operation, ConnectionOperation::Joinery(_))).count();
+    let failing: Vec<u64> = joint_errors.keys().copied().filter(|id| model.connections.contains_key(id)).collect();
+    let mut out = json!({
+        "passed": errors == 0 && warnings == 0,
+        "boards": all.len(), "errors": errors, "warnings": warnings,
+        "joints": {"total": wood_joints, "ok": wood_joints - failing.len().min(wood_joints), "failing": failing},
+        "issues": issues,
+    });
+    if !model.routes.is_empty() {
+        let failing: Vec<u64> = joint_errors.keys().copied().filter(|id| model.routes.contains_key(id)).collect();
+        out["profiles"] = json!({"total": model.routes.len(), "failing": failing});
+    }
+    if let Some(existing) = existing {
+        out["only_new"] = json!(true);
+        out["existing_issues"] = json!(existing);
+    }
+    if total > MAX_LISTED_ISSUES {
+        out["issues_omitted"] = json!(total - MAX_LISTED_ISSUES);
+    }
+    if all.len() > MAX_CHECKED_BOARDS {
+        out["note"] = json!(format!("Only the first {MAX_CHECKED_BOARDS} boards were compared for overlaps."));
+    }
+    // The furniture's size: boards only, not dimensions or texts drawn around them.
+    let extents = all.iter().filter_map(|id| board_bounds(model, *id)).reduce(|x, y| (x.0.min(y.0), x.1.max(y.1)));
+    if let Some((lo, hi)) = extents {
+        out["model_bounds_mm"] = json!({"min": point_mm(lo), "max": point_mm(hi), "size": point_mm(hi - lo)});
+    }
+    out
+}
+
+fn collect(model: &Model) -> Found {
     let mut issues = Vec::new();
     let mut issue = |severity: &str, kind: &str, message: String, ids: Vec<u64>| {
         issues.push(json!({"severity": severity, "kind": kind, "message": message, "ids": ids}));
@@ -160,6 +240,7 @@ pub fn check(model: &Model) -> Value {
             Some((*id, model.selection_bounds(&BTreeSet::from([*id]))?, aligned))
         })
         .collect();
+    let mut machined: Option<Model> = None;
     for (i, (a, box_a, aligned_a)) in bounds.iter().enumerate() {
         for (b, box_b, aligned_b) in &bounds[i + 1..] {
             let Some(size) = overlap(*box_a, *box_b) else { continue };
@@ -169,6 +250,16 @@ pub fn check(model: &Model) -> Value {
             // Bounding boxes overlap; a notch around the other board means the solids do not.
             if model.joinery_options([*a, *b], &JointSettings::default()).0.is_none() {
                 continue;
+            }
+            // Nor do they when a router profile (a rabbet, a groove) removed the shared wood.
+            let routed = |id: u64| model.objects[&id].entities.iter().any(|e| model.routes.contains_key(e));
+            if routed(*a) || routed(*b) {
+                let evaluated = machined.get_or_insert_with(|| model.evaluate_joinery().model);
+                if evaluated.objects.contains_key(a) && evaluated.objects.contains_key(b)
+                    && evaluated.joinery_options([*a, *b], &JointSettings::default()).0.is_none()
+                {
+                    continue;
+                }
             }
             let (name_a, name_b) = (&model.objects[a].name, &model.objects[b].name);
             // One board crossing the other completely, cutting it in two: the
@@ -205,6 +296,13 @@ pub fn check(model: &Model) -> Value {
     let joint_errors = scene::joint_errors(model);
     for (id, error) in &joint_errors {
         let id = *id;
+        if model.routes.contains_key(&id) {
+            let board = model.route_board(id);
+            let name = board.and_then(|b| model.objects.get(&b)).map_or("loose geometry", |o| o.name.as_str());
+            issue("error", "profile_not_cut", format!("The router profile on edge {id} of {name} cannot be cut: {error}"),
+                board.into_iter().chain([id]).collect());
+            continue;
+        }
         let members = model.connections.get(&id).map_or(vec![id], |c| vec![id, c.members[0], c.members[1]]);
         issue("error", "joint_not_cut", format!("Joint {id} cannot be cut: {error}"), members);
     }
@@ -253,27 +351,5 @@ pub fn check(model: &Model) -> Value {
     if !unassigned.is_empty() {
         issue("info", "no_material", format!("{} boards have no stock material.", unassigned.len()), unassigned.into_iter().take(20).collect());
     }
-    let total = issues.len();
-    let errors = issues.iter().filter(|i| i["severity"] == "error").count();
-    let warnings = issues.iter().filter(|i| i["severity"] == "warning").count();
-    issues.truncate(MAX_LISTED_ISSUES);
-    let wood_joints = model.connections.values().filter(|c| matches!(c.operation, ConnectionOperation::Joinery(_))).count();
-    let mut out = json!({
-        "passed": errors == 0 && warnings == 0,
-        "boards": all.len(), "errors": errors, "warnings": warnings,
-        "joints": {"total": wood_joints, "ok": wood_joints - joint_errors.len().min(wood_joints), "failing": joint_errors.keys().collect::<Vec<_>>()},
-        "issues": issues,
-    });
-    if total > MAX_LISTED_ISSUES {
-        out["issues_omitted"] = json!(total - MAX_LISTED_ISSUES);
-    }
-    if all.len() > MAX_CHECKED_BOARDS {
-        out["note"] = json!(format!("Only the first {MAX_CHECKED_BOARDS} boards were compared for overlaps."));
-    }
-    // The furniture's size: boards only, not dimensions or texts drawn around them.
-    let extents = all.iter().filter_map(|id| board_bounds(model, *id)).reduce(|x, y| (x.0.min(y.0), x.1.max(y.1)));
-    if let Some((lo, hi)) = extents {
-        out["model_bounds_mm"] = json!({"min": point_mm(lo), "max": point_mm(hi), "size": point_mm(hi - lo)});
-    }
-    out
+    Found { issues, joint_errors, boards: all }
 }

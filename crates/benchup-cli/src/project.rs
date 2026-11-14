@@ -297,6 +297,53 @@ impl Project {
     }
 }
 
+/// The JSON answer for applied calls, as the CLI prints it and MCP returns
+/// it: one call's result, or `{"ok", "results"}` for a batch. A failed batch
+/// leads with the error and hint of the call that failed; the results of the
+/// calls before it are kept brief (ids and bounds, no object summaries).
+/// `batch` is true for `--batch` and `run_batch`, which always answer with
+/// `results`, even for one call.
+pub fn report(calls: &[(String, Value)], applied: Applied, batch: bool) -> (Value, bool) {
+    match applied {
+        Applied::Ok(mut results) if !batch => (results.pop().unwrap_or(Value::Null), true),
+        Applied::Ok(results) => (json!({"ok": true, "results": results}), true),
+        Applied::Failed { result, .. } if !batch => (result, false),
+        Applied::Failed { index, result, mut earlier } => {
+            earlier.iter_mut().for_each(brief);
+            let mut out = json!({
+                "ok": false,
+                "failed_call": index + 1,
+                "tool": calls[index].0,
+                "error": result.get("error").cloned().unwrap_or(Value::Null),
+                "result": result,
+                "earlier_results": earlier,
+                "note": "nothing was changed: earlier_results shows what the calls before it returned, then everything was rolled back; fix this call and run the whole batch again",
+            });
+            if let Some(hint) = out["result"].get("hint").cloned() {
+                out["hint"] = hint;
+            }
+            (out, false)
+        }
+    }
+}
+
+/// Drops the object summaries that changing tools attach to their results,
+/// keeping ids, bounds, errors and the answers of reading tools.
+pub fn brief(value: &mut Value) {
+    if let Some(map) = value.as_object_mut() {
+        if map.contains_key("created") {
+            map.remove("objects");
+        }
+        for key in ["results", "result", "earlier_results"] {
+            match map.get_mut(key) {
+                Some(Value::Array(items)) => items.iter_mut().for_each(brief),
+                Some(item @ Value::Object(_)) => brief(item),
+                _ => {}
+            }
+        }
+    }
+}
+
 /// MCP: each `tools/call` is applied (and saved) on its own, on the file as
 /// it is now on disk.
 impl crate::mcp::Backend for Project {
@@ -309,6 +356,41 @@ impl crate::mcp::Backend for Project {
             Ok(Applied::Failed { result, .. }) => (result, false),
             Err(error) => (json!({"ok": false, "error": error}), false),
         }
+    }
+
+    fn batch(&mut self, calls: Vec<(String, Value)>, dry_run: bool) -> (Value, bool) {
+        if let Err(error) = self.refresh() {
+            return (json!({"ok": false, "error": error}), false);
+        }
+        match self.run(&calls, !dry_run) {
+            Ok(applied) => {
+                let (mut value, ok) = report(&calls, applied, true);
+                if dry_run {
+                    value["dry_run"] = json!(true);
+                }
+                (value, ok)
+            }
+            Err(error) => (json!({"ok": false, "error": error}), false),
+        }
+    }
+
+    fn history(&mut self, redo: bool) -> (Value, bool) {
+        if let Err(error) = self.refresh() {
+            return (json!({"ok": false, "error": error}), false);
+        }
+        match self.step_history(redo) {
+            Ok(value) => {
+                let ok = value["ok"] == true;
+                (value, ok)
+            }
+            Err(error) => (json!({"ok": false, "error": error}), false),
+        }
+    }
+
+    fn render(&mut self, view: &str, width: u32, height: u32) -> Result<(Vec<u8>, Value), String> {
+        self.refresh()?;
+        let rendered = benchup_tools::render::render(&self.doc.model, view, width, height)?;
+        Ok((rendered.png, rendered.info))
     }
 }
 
