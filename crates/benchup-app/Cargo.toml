@@ -40,6 +40,12 @@ rayon = "1.12"
 # Shared opening on macOS keeps the 3DxWare driver working alongside BenchUp.
 hidapi = { version = "2.4", default-features = false, features = ["linux-static-hidraw", "macos-shared-device"] }
 
+# Same versions eframe uses; typed bindings for opening documents from Finder.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSNotification", "NSString"] }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 pollster = "0.4"
 png = "0.18"
