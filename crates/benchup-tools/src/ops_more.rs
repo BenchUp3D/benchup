@@ -1385,6 +1385,9 @@ fn joint_minutes(kind: JointKind) -> f64 {
         JointKind::Rabbet => 5.,
         JointKind::Dovetail => 25.,
         JointKind::Finger => 15.,
+        JointKind::Biscuit | JointKind::Domino => 5.,
+        JointKind::Groove => 5.,
+        JointKind::LooseTongue => 8.,
     }
 }
 const ROUTER_SETUP_MINUTES: f64 = 5.;

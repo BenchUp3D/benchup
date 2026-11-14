@@ -264,7 +264,11 @@ fn cut_box(stock: &JointStock, settings: &JointSettings, incoming: &[Polygon], m
     let triangles = mesh.face_triangles(&face);
     if triangles.is_empty() { return None; }
     for triangle in triangles {
-        let mut polygon = Polygon::new(triangle.map(|p| stock.frame.local(p)).to_vec(), opening_face.color, stock.frame.epsilon)?;
+        // Aligned openings can produce collapsed triangulation fragments from
+        // floating-point roundoff. Discard them as the solid importer does.
+        let Some(mut polygon) = Polygon::new(triangle.map(|p| stock.frame.local(p)).to_vec(), opening_face.color, stock.frame.epsilon) else {
+            continue;
+        };
         if polygon.normal.dot(opening_face.normal) < 0. { polygon.flip(); }
         shell.push(polygon);
     }
@@ -365,7 +369,8 @@ mod tests {
                 for member in 0..2 {
                     let tools = (0..count).map(|index| pocket(&stock, &settings, index,
                         if member == 1 { settings.clearance } else { 0. }).unwrap()).collect::<Vec<_>>();
-                    let fast = cut_box(&stock, &settings, &stock.solids[member], member, &tools, member == 0).unwrap();
+                    let fast = cut_box(&stock, &settings, &stock.solids[member], member, &tools, member == 0)
+                        .unwrap_or_else(|| panic!("direct pocket cut failed: {kind:?}, count={count}, member={member}"));
                     let (mut l, mut h) = (lo, hi);
                     if member == 0 { l.x = seam; } else { h.x = seam; }
                     let half = prism(box_points(l, h).map(|p| stock.geometry.frame.world(p)), stock.frame).unwrap();
