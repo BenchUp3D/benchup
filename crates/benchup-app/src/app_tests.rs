@@ -4869,6 +4869,7 @@ fn move_copy_arrays_inside_component_stay_in_context_and_update_peers() {
 #[test]
 fn move_copy_array_can_be_entered_in_the_measurements_field() {
     let mut h = Harness::new();
+    h.app.doc.display.dimension_input_overlay = false;
     begin_move_copy(&mut h, false);
     modeling_number(&mut h, "6");
     h.click(egui::pos2(h.size.x - 90., h.size.y - 21.));
@@ -4879,6 +4880,19 @@ fn move_copy_array_can_be_entered_in_the_measurements_field() {
     modeling_number(&mut h, "/3");
     assert_copy_positions(&h, &[0., 2., 4., 6.]);
     assert!(h.app.length_input.is_empty());
+}
+
+#[test]
+fn floating_dimension_boxes_replace_the_measurements_field() {
+    let mut h = Harness::new();
+    assert!(h.app.doc.display.dimension_input_overlay);
+    begin_move_copy(&mut h, false);
+    modeling_number(&mut h, "6");
+    h.click(egui::pos2(h.size.x - 90., h.size.y - 21.));
+    assert!(!h.ctx.egui_wants_keyboard_input(), "the field is hidden");
+    // Typing still reaches the dimension without the field.
+    modeling_number(&mut h, "/3");
+    assert_copy_positions(&h, &[0., 2., 4., 6.]);
 }
 
 fn ui_solid_box(model: &mut Model, min: DVec3, max: DVec3) -> u64 {
@@ -7281,10 +7295,11 @@ fn view_menu_localizes_display_options_and_toggles_selected_edge_lengths_without
     let _reset = ResetLanguage;
     let mut h = Harness::new();
     for (language, view, wireframe, lengths) in [
-        ("en", "View", "Wireframe other objects while moving", "Selected Edge Lengths"),
+        ("en_US", "View", "Wireframe other objects while moving", "Selected Edge Lengths"),
         ("zh_CN", "视图", "移动时以线框显示其他对象", "所选边的长度"),
         ("pt_BR", "Visualizar", "Exibir outros objetos em aramado ao mover", "Comprimentos das arestas selecionadas"),
-        ("en", "View", "Wireframe other objects while moving", "Selected Edge Lengths"),
+        ("es_419", "Vista", "Estructura alámbrica de otros objetos al mover", "Longitudes de aristas seleccionadas"),
+        ("en_US", "View", "Wireframe other objects while moving", "Selected Edge Lengths"),
     ] {
         h.app.general_settings.language = language.into();
         benchup_core::i18n::set_language(language);

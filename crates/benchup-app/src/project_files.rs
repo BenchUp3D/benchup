@@ -1,13 +1,13 @@
 //! Portable project files are separate from the local recovery/autosave document.
 use benchup_core::tr;
 use crate::cutting_plan::{CutReport, CuttingPlan};
-use flate2::{Compression, read::MultiGzDecoder, write::GzEncoder};
 use benchup_core::Document;
-use std::{
-    io::{Read, Write},
-    path::PathBuf,
-    sync::mpsc,
-};
+use std::{path::PathBuf, sync::mpsc};
+// The tests build and inspect project bytes by hand.
+#[cfg(test)]
+use flate2::{Compression, read::MultiGzDecoder, write::GzEncoder};
+#[cfg(test)]
+use std::io::{Read, Write};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "project_file_tests.rs"]
@@ -94,45 +94,17 @@ fn exchange_name(name: &str, extension: &str) -> String {
 }
 
 /// Portable previews use PNG with a private gzip document chunk. Headless saves
-/// retain gzip JSON; recovery and save snapshots stay JSON.
+/// retain gzip JSON; recovery and save snapshots stay JSON. The format lives in
+/// `benchup_tools::files`, shared with the command-line tools.
 pub(crate) fn encode(json: &str) -> Result<Vec<u8>, String> {
-    let mut value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    let preview = value.as_object_mut().and_then(|v| v.remove("viewport_preview_png"));
-    let json = if preview.is_some() { serde_json::to_string(&value).map_err(|e| e.to_string())? } else { json.to_owned() };
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(json.as_bytes()).map_err(|e| e.to_string())?;
-    let compressed = encoder.finish().map_err(|e| e.to_string())?;
-    if let Some(preview) = preview {
-        let mut png: Vec<u8> = serde_json::from_value(preview).map_err(|e| e.to_string())?;
-        // Insert a private ancillary chunk immediately before IEND. Standard PNG
-        // readers ignore it and display the saved GPU viewport thumbnail.
-        let end = png.len().checked_sub(12).ok_or(tr!("project_files.invalid_preview"))?;
-        let mut chunk = Vec::with_capacity(compressed.len() + 12);
-        chunk.extend_from_slice(&(u32::try_from(compressed.len()).map_err(|e| e.to_string())?).to_be_bytes());
-        chunk.extend_from_slice(b"buPd");
-        chunk.extend_from_slice(&compressed);
-        chunk.extend_from_slice(&png_crc(&chunk[4..]).to_be_bytes());
-        png.splice(end..end, chunk);
-        Ok(png)
-    } else { Ok(compressed) }
+    benchup_tools::files::encode(json)
 }
 
 pub fn decode(bytes: &[u8]) -> Result<Document, String> {
-    let bytes = project_payload(bytes)?;
-    // Detect the content rather than the extension so all project extensions
-    // accept compressed files and older, plain JSON files unchanged.
-    let mut decompressed = Vec::new();
-    let bytes: &[u8] = if bytes.starts_with(&[0x1f, 0x8b]) {
-        MultiGzDecoder::new(bytes)
-            .read_to_end(&mut decompressed)
-            .map_err(|error| tr!("project_files.could_not_decompress_project", error = error))?;
-        &decompressed
-    } else {
-        bytes
-    };
-    let json = std::str::from_utf8(bytes).map_err(|_| tr!("project_files.the_project_is_not_utf_8_text"))?;
-    Document::from_json(json)
+    benchup_tools::files::decode(bytes)
 }
+#[cfg(test)]
+use benchup_tools::files::project_payload;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn run(
@@ -783,28 +755,3 @@ pub fn extract_preview(path: &std::path::Path, output: &std::path::Path) -> Resu
     image.save_with_format(output, image::ImageFormat::Png).map_err(|e| e.to_string())
 }
 
-fn png_crc(bytes: &[u8]) -> u32 {
-    let mut crc = !0u32;
-    for &byte in bytes {
-        crc ^= byte as u32;
-        for _ in 0..8 { crc = (crc >> 1) ^ (0xedb88320u32 & 0u32.wrapping_sub(crc & 1)); }
-    }
-    !crc
-}
-
-fn project_payload(bytes: &[u8]) -> Result<&[u8], String> {
-    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") { return Ok(bytes); }
-    let mut position = 8usize;
-    while let Some(header) = bytes.get(position..position.saturating_add(8)) {
-        let length = u32::from_be_bytes(header[..4].try_into().unwrap()) as usize;
-        let end = position.checked_add(12).and_then(|v| v.checked_add(length)).ok_or(tr!("project_files.invalid_chunk_size"))?;
-        let chunk = bytes.get(position..end).ok_or(tr!("project_files.truncated_chunk"))?;
-        if &header[4..8] == b"buPd" {
-            let checksum = u32::from_be_bytes(chunk[8 + length..].try_into().unwrap());
-            if png_crc(&chunk[4..8 + length]) != checksum { return Err(tr!("project_files.invalid_checksum").into()); }
-            return Ok(&chunk[8..8 + length]);
-        }
-        position = end;
-    }
-    Err(tr!("project_files.png_has_no_project").into())
-}

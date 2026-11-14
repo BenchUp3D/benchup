@@ -256,7 +256,7 @@
       <div class="loading-progress" role="progressbar" aria-labelledby="loading-label"></div>
     </div>
     <script id="startup-messages">
-      fetch("assets/i18n/en.json")
+      fetch("assets/i18n/en_US.json")
         .then(response => response.ok ? response.json() : null)
         .then(messages => {
           if (!messages) return;

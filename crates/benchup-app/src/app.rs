@@ -47,10 +47,14 @@ mod arc_tool;
 mod context_menu;
 #[path = "currency.rs"]
 mod currency;
+#[path = "cutting_view.rs"]
+mod cutting_view;
 #[path = "display_scene.rs"]
 pub(crate) mod display_scene;
 #[path = "construction_guides.rs"]
 mod construction_guides;
+#[path = "dimension_overlay.rs"]
+mod dimension_overlay;
 #[path = "drawing_inference.rs"]
 mod drawing_inference;
 #[path = "entity_gizmo.rs"]
@@ -403,6 +407,10 @@ pub struct BenchUpApp {
     lock: Option<Axis>,
     second_lock: Option<Axis>,
     length_input: String,
+    /// Rectangle typing goes to height instead of width (toggled with Tab).
+    rect_height_active: bool,
+    /// After Tab, the active rectangle field is selected: typing replaces it.
+    rect_field_selected: bool,
     modeling: Option<Modeling>,
     push_pull_new_faces: bool,
     push_pull_modifier_down: bool,
@@ -596,6 +604,8 @@ impl BenchUpApp {
             lock: None,
             second_lock: None,
             length_input: String::new(),
+            rect_height_active: false,
+            rect_field_selected: false,
             modeling: None,
             push_pull_new_faces: false,
             push_pull_modifier_down: false,
@@ -1505,10 +1515,20 @@ impl BenchUpApp {
             .fold(0., f64::max)
     }
 
+    /// Resulting depth when pushing an already extruded face. `None` for a
+    /// fresh face, where it always equals the distance and would repeat it.
+    fn push_pull_total(&self, edit: &Modeling, value: f64) -> Option<f64> {
+        let total = (edit.pull_depth + value * edit.direction.dot(edit.unlocked_direction)).abs();
+        (edit.pull_depth.abs() > 1e-9).then_some(total)
+    }
+
     fn push_pull_readout(&self, edit: &Modeling, value: f64) -> String {
         let units = self.doc.display.units;
-        let total = (edit.pull_depth + value * edit.direction.dot(edit.unlocked_direction)).abs();
-        format!("Difference: {} · Total: {}", units.format_length(value), units.format_length(total))
+        let distance = units.format_length(value);
+        match self.push_pull_total(edit, value) {
+            Some(total) => format!("{distance} · {}", tr!("app.push_pull_total", total = units.format_length(total))),
+            None => distance,
+        }
     }
 
     fn selected_modeling_face(&self) -> Option<u64> {
@@ -2345,6 +2365,29 @@ impl BenchUpApp {
 
     fn sidebar_shortcut(&mut self, ctx: &egui::Context) {
         let walking = self.tool == Tool::Walk;
+        // While sizing a rectangle, Tab switches between its width and height.
+        if self.rect_fields_active() {
+            let tab = ctx.input_mut(|i| {
+                let mut tab = false;
+                i.events.retain(|event| {
+                    if let egui::Event::Key { key: Key::Tab, pressed: true, modifiers, .. } = event
+                        && (!modifiers.any() || *modifiers == egui::Modifiers::SHIFT)
+                    {
+                        tab = true;
+                        false
+                    } else { true }
+                });
+                tab
+            });
+            if tab {
+                self.toggle_rect_field();
+                ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+                ctx.request_repaint();
+            }
+            return;
+        }
+        self.rect_height_active = false;
+        self.rect_field_selected = false;
         let consumed = ctx.input_mut(|i| {
             let mut consumed = false;
             if i.focused {
@@ -2516,6 +2559,23 @@ impl BenchUpApp {
             });
             self.prompt_drawn_group_name(ctx, completed_group);
         }
+        // An empty focused precision field still allows Space to cancel the tool.
+        if self.precision_available()
+            && !self.dimension_has_typed_value()
+            && ctx.memory(|m| m.has_focus(egui::Id::unique("precision_input")))
+            && ctx.input(|i| {
+                i.modifiers.is_none()
+                    && (i.key_pressed(Key::Space)
+                        || i.events.iter().any(|event| matches!(event,
+                            egui::Event::Text(text) if text == " ")))
+                    && !i.events.iter().any(|event| matches!(event,
+                        egui::Event::Text(text) if text.chars().any(|c| !c.is_whitespace())))
+            })
+        {
+            ctx.memory_mut(|m| m.surrender_focus(egui::Id::unique("precision_input")));
+            self.set_tool(Tool::Select);
+            return;
+        }
         if ctx.egui_wants_keyboard_input()
             || self.help
             || self.object_creation.is_some()
@@ -2630,8 +2690,8 @@ impl BenchUpApp {
                     // Letter keys belong to an in-progress dimension, including
                     // unit suffixes. Letter shortcuts resume after the dimension is cleared.
                     if self.precision_available()
-                        && !self.length_input.is_empty()
-                        && (Key::A..=Key::Z).contains(&key)
+                        && self.dimension_has_typed_value()
+                        && ((Key::A..=Key::Z).contains(&key) || key == Key::Space)
                     {
                         continue;
                     }
@@ -2642,7 +2702,9 @@ impl BenchUpApp {
                     match key {
                         Key::Delete => self.erase_selected(ctx),
                         Key::Backspace => {
-                            if self.precision_available() {
+                            if self.rect_fields_active() {
+                                self.rect_input_backspace();
+                            } else if self.precision_available() {
                                 self.length_input.pop();
                             } else {
                                 self.erase_selected(ctx);
@@ -2684,6 +2746,12 @@ impl BenchUpApp {
                     }
                 }
                 egui::Event::Text(text) if self.precision_available() => {
+                    // Some backends deliver Space as text before its key event,
+                    // or as text alone. Do not seed an empty dimension with it.
+                    if text == " " && !self.dimension_has_typed_value() {
+                        self.set_tool(Tool::Select);
+                        continue;
+                    }
                     if text.chars().all(|c| {
                         c.is_ascii_alphanumeric()
                             || matches!(
@@ -2692,7 +2760,11 @@ impl BenchUpApp {
                             )
                     }) && self.length_input.len() + text.len() <= precision::MAX_INPUT_LEN
                     {
-                        self.length_input.push_str(&text);
+                        if self.rect_fields_active() {
+                            self.rect_input_text(&text);
+                        } else {
+                            self.length_input.push_str(&text);
+                        }
                     }
                 }
                 _ => {}
@@ -3286,6 +3358,9 @@ impl BenchUpApp {
                     // Reserve the precision controls before fitting the status message.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if self.tool == Tool::Text { return; }
+                        // The floating boxes on the geometry replace this field;
+                        // it returns when they are turned off in View options.
+                        if self.doc.display.dimension_input_overlay && !self.tool.is_measuring() { return; }
                         if self.tool.is_measuring() && !self.measurement_precision_available() {
                             ui.text_label(
                                 RichText::new(
@@ -3333,6 +3408,7 @@ impl BenchUpApp {
                         let field = ui.add_enabled(
                             available,
                             egui::TextEdit::singleline(&mut self.length_input)
+                                .id(egui::Id::unique("precision_input"))
                                 .desired_width(if matches!(self.tool, Tool::Rectangle | Tool::Image) { 300. } else { 212. })
                                 .font(egui::TextStyle::Monospace)
                                 .hint_text(hint)
@@ -3360,19 +3436,7 @@ impl BenchUpApp {
                             field.surrender_focus();
                         }
                         ui.text_label(
-                            RichText::new(match self.tool {
-                                Tool::Scale => tr!("app.factor"),
-                                Tool::Rotate | Tool::Protractor => tr!("app.angle"),
-                                Tool::PushPull => tr!("app.distance"),
-                                Tool::Offset => tr!("app.offset"),
-                                Tool::Move if self.last_move_copy.is_some() => tr!("app.copies"),
-                                Tool::Move => tr!("app.distance"),
-                                Tool::Rectangle | Tool::Image => tr!("app.width_height"),
-                                Tool::Circle | Tool::Polygon => tr!("app.radius"),
-                                Tool::Arc if self.drawing.as_ref().is_some_and(|drawing| drawing.arc_end.is_some()) => tr!("app.arc_height"),
-                                Tool::Arc => tr!("app.arc_chord"),
-                                _ => tr!("app.length"),
-                            })
+                            RichText::new(self.precision_field_label())
                             .size(12.)
                             .color(colors.muted),
                         );
@@ -6459,7 +6523,8 @@ impl BenchUpApp {
                         colors.paper.gamma_multiply(0.95),
                     );
                     p.galley(at, galley, color);
-                    if let Some(start) = self.line_start {
+                    // The floating dimension box replaces this inline length.
+                    if let Some(start) = self.line_start.filter(|_| !display.dimension_input_overlay) {
                         if let Some(a) = screen(start) {
                             // Keep the length clear of the endpoint's inference
                             // tooltip, including short vertical previews.
@@ -6618,6 +6683,7 @@ impl BenchUpApp {
         self.paint_construction_guides(&p, rect);
         self.paint_measurements(&p, rect);
         self.paint_scale_cage(&p, rect);
+        self.paint_dimension_overlay(&p, rect);
         if let Some((notice, until)) = &self.notice {
             if ui.input(|i| i.time) < *until {
                 let galley = p.layout(

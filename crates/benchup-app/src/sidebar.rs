@@ -245,7 +245,7 @@ mod guide_preference_tests {
         assert_eq!(restored.drawing_tool, Tool::Line);
         assert_eq!(restored.images.preferences, app.images.preferences);
         for key in ["reference_image_defaults", "reference_image_appearance"] {
-            let id = egui::Id::new(("test/image-section", key));
+            let id = egui::Id::unique(("test/image-section", key));
             restore_section(&restored_ctx, id, key, true);
             assert!(!egui::collapsing_header::CollapsingState::load_with_default_open(&restored_ctx, id, true).is_open());
         }
@@ -509,6 +509,7 @@ impl Default for SnappingPreferences {
 struct CuttingPlanPreferences {
     layout: crate::cutting_layout::Settings,
     selection: Option<bool>,
+    used_area_cost: bool,
 }
 
 impl Default for CuttingPlanPreferences {
@@ -516,6 +517,7 @@ impl Default for CuttingPlanPreferences {
         Self {
             layout: Default::default(),
             selection: None,
+            used_area_cost: false,
         }
     }
 }
@@ -809,6 +811,7 @@ impl BenchUpApp {
             Default::default()
         };
         self.project.cutting_plan_selection_preference = preferences.cutting_plan.selection;
+        self.project.cutting_plan_used_area_cost = preferences.cutting_plan.used_area_cost;
         if let Some(snapping) = &preferences.snapping {
             self.snap_to_edge = snapping.geometry && snapping.edges;
             self.snap_to_face = snapping.geometry && snapping.faces;
@@ -905,6 +908,7 @@ impl BenchUpApp {
             cutting_plan: CuttingPlanPreferences {
                 layout: self.project.cutting_plan_layout,
                 selection: self.project.cutting_plan_selection_preference,
+                used_area_cost: self.project.cutting_plan_used_area_cost,
             },
             time_estimates: self.time_estimates.clone(),
             joinery_rates: self.joinery_rates.clone(),
@@ -1529,6 +1533,7 @@ mod preference_tests {
         app.persist_inspector_changes(&ctx, Some(&mut storage), false);
         remember_modal_size(&ctx, "general_settings", egui::vec2(820., 560.));
         remember_modal_size(&ctx, "another_dialog", egui::vec2(480., 320.));
+        remember_modal_size(&ctx, "woodworking_cutting_plan", egui::vec2(1280., 820.));
         storage.flushed = false;
         app.persist_inspector_changes(&ctx, Some(&mut storage), false);
         assert!(storage.flushed);
@@ -1544,6 +1549,10 @@ mod preference_tests {
         assert_eq!(
             modal_size(&restored_ctx, "another_dialog"),
             Some(egui::vec2(480., 320.))
+        );
+        assert_eq!(
+            modal_size(&restored_ctx, "woodworking_cutting_plan"),
+            Some(egui::vec2(1280., 820.))
         );
         assert_eq!(modal_size(&restored_ctx, "unknown"), None);
         let old: InspectorPreferences = serde_json::from_str("{}").unwrap();
@@ -2214,6 +2223,27 @@ mod preference_tests {
     }
 
     #[test]
+    fn dimension_input_overlay_restores_without_model_edits_and_defaults_on() {
+        let old: DisplaySettings = serde_json::from_str("{}").unwrap();
+        assert!(old.dimension_input_overlay);
+        let ctx = egui::Context::default();
+        let mut storage = SavedPreferences::default();
+        let mut app = BenchUpApp::with_document(Document::default(), None, true);
+        for enabled in [false, true] {
+            app.doc.display.dimension_input_overlay = enabled;
+            storage.flushed = false;
+            app.persist_inspector_changes(&ctx, Some(&mut storage), false);
+            assert!(storage.flushed);
+            assert!(!app.project.modified);
+            let mut restored = BenchUpApp::with_document(Document::default(), None, true);
+            restored.restore_inspector_preferences(&ctx, Some(&storage));
+            assert_eq!(restored.doc.display.dimension_input_overlay, enabled);
+            restored.new_model(&ctx);
+            assert_eq!(restored.doc.display.dimension_input_overlay, enabled);
+        }
+    }
+
+    #[test]
     fn grain_direction_visibility_and_tool_restore_without_model_edits() {
         let old: DisplaySettings = serde_json::from_str("{}").unwrap();
         assert!(old.grain_direction);
@@ -2460,7 +2490,7 @@ mod preference_tests {
 
     #[test]
     fn each_additional_option_saves_independently_without_a_model_edit() {
-        let options: [(&str, fn(&mut BenchUpApp)); 18] = [
+        let options: [(&str, fn(&mut BenchUpApp)); 21] = [
             ("face center snapping", |app| app.snap_to_face_center = false),
             ("axis snapping", |app| app.doc.snap_to_axes = false),
             ("edge snapping", |app| app.snap_to_edge = false),
@@ -2494,6 +2524,13 @@ mod preference_tests {
             ("saw kerf", |app| {
                 app.project.cutting_plan_layout.kerf_mm = 4.5
             }),
+            ("edge trim", |app| {
+                app.project.cutting_plan_layout.edge_trim_mm = 3.
+            }),
+            ("layout strategy", |app| {
+                app.project.cutting_plan_layout.strategy = crate::cutting_layout::Strategy::LargestOffcut
+            }),
+            ("used-area cost", |app| app.project.cutting_plan_used_area_cost = true),
             ("whole project scope", |app| {
                 app.project.cutting_plan_selection_preference = Some(false)
             }),
@@ -2618,6 +2655,8 @@ mod preference_tests {
             "{}",
             r#"{"cutting_plan":{"layout":{"kerf_mm":5.0}}}"#,
             r#"{"cutting_plan":{"group_stock":false,"layout":{"kerf_mm":4.5}}}"#,
+            r#"{"cutting_plan":{"layout":{"edge_trim_mm":2.0,"strategy":"rip_first"}}}"#,
+            r#"{"cutting_plan":{"used_area_cost":true,"layout":{"used_area_cost":true}}}"#,
         ] {
             let preferences: InspectorPreferences = serde_json::from_str(json).unwrap();
             assert!(preferences.snapping.is_none());
@@ -3046,7 +3085,7 @@ mod preference_tests {
 
     #[test]
     fn first_launch_language_is_saved_without_a_model_edit_and_not_redetected() {
-        for language in ["en", "zh_CN", "pt_BR"] {
+        for language in ["en_US", "zh_CN", "pt_BR", "vi_VN", "es_419"] {
             let ctx = egui::Context::default();
             let mut storage = SavedPreferences::default();
             let mut app = BenchUpApp::with_document(Document::default(), None, true);
@@ -3084,7 +3123,7 @@ mod preference_tests {
                 Some(&storage),
                 || panic!("Existing preferences must not trigger language detection"),
             );
-            assert_eq!(app.general_settings.language, "en");
+            assert_eq!(app.general_settings.language, "en_US");
             assert_eq!(app.general_settings.orbit_speed, 2.0);
         }
     }
@@ -3093,7 +3132,7 @@ mod preference_tests {
     fn language_defaults_and_saves_without_a_model_edit() {
         let mut saved: InspectorPreferences =
             serde_json::from_str(r#"{"general":{"orbit_speed":2.0}}"#).unwrap();
-        assert_eq!(saved.general.language, "en");
+        assert_eq!(saved.general.language, "en_US");
         saved.general.language = "unsupported".into();
 
         let mut storage = SavedPreferences::default();
@@ -3101,7 +3140,7 @@ mod preference_tests {
         let ctx = egui::Context::default();
         let mut app = BenchUpApp::with_document(Document::default(), None, true);
         app.restore_inspector_preferences(&ctx, Some(&storage));
-        assert_eq!(app.general_settings.language, "en");
+        assert_eq!(app.general_settings.language, "en_US");
         assert_eq!(app.general_settings.orbit_speed, 2.);
 
         app.general_settings.language = "zh_CN".into();
@@ -5520,6 +5559,7 @@ impl BenchUpApp {
             (&mut d.group_names, tr!("sidebar.group_names")),
             (&mut d.dimensions, tr!("sidebar.dimensions")),
             (&mut d.face_side_lengths, tr!("sidebar.selected_edge_lengths")),
+            (&mut d.dimension_input_overlay, tr!("sidebar.floating_dimension_input")),
             (&mut d.grain_direction, tr!("grain_direction.show")),
             (&mut d.wood_joinery, tr!("sidebar.wood_joinery")),
         ] {
@@ -5538,6 +5578,7 @@ impl BenchUpApp {
 
         // These application preferences do not modify the project.
         before.face_side_lengths = d.face_side_lengths;
+        before.dimension_input_overlay = d.dimension_input_overlay;
         before.grain_direction = d.grain_direction;
         before.group_emphasis = d.group_emphasis;
         if before != self.doc.display {
