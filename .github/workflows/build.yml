@@ -235,6 +235,11 @@ jobs:
       - name: Test native import and export fixtures
         run: bash scripts/ci_cargo.sh test -p benchup-io -p benchup-skp --profile ci-test --locked --target "${{ matrix.target }}"
 
+      # Includes the replay of the agent evaluation's reference solutions
+      # (crates/benchup-cli/tests/evals.rs); the agent rounds themselves are run on demand.
+      - name: Test the agent tools and command line
+        run: bash scripts/ci_cargo.sh test -p benchup-tools -p benchup-cli --profile ci-test --locked --target "${{ matrix.target }}"
+
   wasm:
     name: Build WebAssembly
     needs: validate

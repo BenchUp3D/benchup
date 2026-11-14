@@ -1,0 +1,17 @@
+{"tool": "create_stock_material", "arguments": {"name": "Solid oak 19 mm", "thickness_mm": 19, "width_mm": 300, "length_mm": 2500}}
+{"tool": "resize_board", "arguments": {"id": 79, "size_mm": [19, 300, 1800], "anchor": "min"}}
+{"tool": "resize_board", "arguments": {"id": 132, "size_mm": [19, 300, 1800], "anchor": ["max", "min", "min"]}}
+{"tool": "resize_board", "arguments": {"id": 185, "size_mm": [19, 300, 1800], "anchor": ["center", "min", "min"]}}
+{"tool": "resize_board", "arguments": {"id": 238, "size_mm": [481, 300, 19], "anchor": ["center", "min", "center"]}}
+{"tool": "resize_board", "arguments": {"id": 291, "size_mm": [481, 300, 19], "anchor": ["center", "min", "center"]}}
+{"tool": "resize_board", "arguments": {"id": 344, "size_mm": [481, 300, 19], "anchor": ["center", "min", "center"]}}
+{"tool": "resize_board", "arguments": {"id": 397, "size_mm": [481, 300, 19], "anchor": ["center", "min", "center"]}}
+{"tool": "resize_board", "arguments": {"id": 450, "size_mm": [481, 300, 19], "anchor": ["center", "min", "center"]}}
+{"tool": "resize_board", "arguments": {"id": 503, "size_mm": [481, 300, 19], "anchor": ["center", "min", "center"]}}
+{"tool": "resize_board", "arguments": {"id": 556, "size_mm": [481, 300, 19], "anchor": ["center", "min", "center"]}}
+{"tool": "resize_board", "arguments": {"id": 609, "size_mm": [481, 300, 19], "anchor": ["center", "min", "center"]}}
+{"tool": "resize_board", "arguments": {"id": 662, "size_mm": [481, 300, 19], "anchor": ["center", "min", "center"]}}
+{"tool": "resize_board", "arguments": {"id": 715, "size_mm": [481, 300, 19], "anchor": ["center", "min", "center"]}}
+{"tool": "set_material", "arguments": {"ids": [79, 132, 185, 238, 291, 344, 397, 450, 503, 556, 609, 662, 715], "material_id": "$1.material_id"}}
+{"tool": "check_model", "arguments": {}}
+{"tool": "get_cut_list", "arguments": {}}
