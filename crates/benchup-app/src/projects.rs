@@ -1,5 +1,6 @@
 use benchup_core::tr;
 use super::*;
+use crate::cutting_layout::Strategy;
 use crate::project_files::{self, Outcome};
 use std::{path::PathBuf, sync::mpsc::TryRecvError};
 
@@ -45,6 +46,8 @@ pub(super) struct Project {
     // Both reports share scope so their marks can be printed for the same parts.
     pub cutting_plan_selection_preference: Option<bool>,
     pub cutting_plan_layout: crate::cutting_layout::Settings,
+    pub cutting_plan_used_area_cost: bool,
+    pub cut_view: super::cutting_view::Cache,
 }
 impl Default for Project {
     fn default() -> Self {
@@ -65,6 +68,8 @@ impl Default for Project {
             cut_report: None,
             cutting_plan_selection_preference: None,
             cutting_plan_layout: crate::cutting_layout::Settings::default(),
+            cutting_plan_used_area_cost: false,
+            cut_view: Default::default(),
         }
     }
 }
@@ -586,6 +591,165 @@ impl BenchUpApp {
         }
     }
 
+    fn cut_report_controls(&mut self, ui: &mut egui::Ui, report: CutReport, selection: &mut bool) {
+        ui.add_enabled_ui(!self.selected.is_empty(), |ui| {
+            ui.radio_value(
+                selection,
+                true,
+                tr!("projects.selected_parts_assemblies_visible_only"),
+            );
+        });
+        ui.radio_value(selection, false, tr!("projects.whole_project_visible_only"));
+        ui.add_space(10.);
+        if report == CutReport::CuttingPlan {
+            ui.horizontal_wrapped(|ui| {
+                ui.text_label(tr!("projects.saw_kerf_cut_width"));
+                ui.add(
+                    egui::DragValue::new(&mut self.project.cutting_plan_layout.kerf_mm)
+                        .speed(0.1)
+                        .range(0. ..=100.)
+                        .suffix(tr!("projects.mm")),
+                );
+            });
+            ui.checkbox(
+                &mut self.project.cutting_plan_layout.allow_rotation,
+                tr!("projects.allow_rotating_pieces_90_degrees"),
+            )
+            .on_hover_text(tr!("projects.leave_off_when_the_length_must_follow_the"));
+            ui.checkbox(
+                &mut self.project.cutting_plan_layout.respect_grain,
+                tr!("projects.respect_wood_grain_direction"),
+            )
+            .on_hover_text(tr!("projects.align_part_grain_with_stock_length"));
+            ui.checkbox(
+                &mut self.project.cutting_plan_layout.show_joinery,
+                tr!("projects.show_wood_joinery"),
+            )
+            .on_hover_text(tr!("projects.show_joinery_as_dashed_outlines"));
+            ui.text_label(tr!("projects.cut_layout_strategy"));
+            egui::ComboBox::from_id_salt("cut_layout_strategy")
+                .width(ui.available_width())
+                .selected_text(self.project.cutting_plan_layout.strategy.label())
+                .show_ui(ui, |ui| {
+                    for strategy in [
+                        Strategy::Fewest,
+                        Strategy::RipFirst,
+                        Strategy::LargestOffcut,
+                    ] {
+                        ui.selectable_value(
+                            &mut self.project.cutting_plan_layout.strategy,
+                            strategy,
+                            strategy.label(),
+                        )
+                        .on_hover_text(strategy.hint());
+                    }
+                })
+                .response
+                .on_hover_text(self.project.cutting_plan_layout.strategy.hint());
+            ui.horizontal_wrapped(|ui| {
+                ui.text_label(tr!("projects.edge_trim"));
+                ui.add(
+                    egui::DragValue::new(&mut self.project.cutting_plan_layout.edge_trim_mm)
+                        .speed(0.1)
+                        .range(0. ..=100.)
+                        .suffix(tr!("projects.mm")),
+                )
+                .on_hover_text(tr!("projects.edge_trim_hint"));
+            });
+            ui.checkbox(
+                &mut self.project.cutting_plan_used_area_cost,
+                tr!("projects.show_used_area_cost"),
+            )
+            .on_hover_text(tr!("projects.used_area_cost_hint"));
+        }
+        ui.text_weak(tr!(
+            "projects.only_visible_parts_with_assigned_stock_materials_are"
+        ));
+        if report == CutReport::CuttingPlan {
+            ui.text_weak(tr!(
+                "projects.layouts_use_assigned_stock_dimensions_and_saw_kerf"
+            ));
+        }
+    }
+
+    fn cutting_plan_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        selection: &mut bool,
+        revision: u64,
+        model: &std::sync::Arc<benchup_core::Model>,
+    ) {
+        let (body, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+        let stacked = body.width() < 760.;
+        let controls = Rect::from_min_size(
+            body.min,
+            if stacked {
+                egui::vec2(body.width(), body.height() * 0.55)
+            } else {
+                egui::vec2((body.width() * 0.35).clamp(300., 420.), body.height())
+            },
+        );
+        let preview = Rect::from_min_max(
+            if stacked {
+                egui::pos2(body.left(), controls.bottom() + 1.)
+            } else {
+                egui::pos2(controls.right() + 1., body.top())
+            },
+            body.max,
+        );
+        for (rect, key, is_preview) in [
+            (controls, "cutting_plan/controls", false),
+            (preview, "cutting_plan/preview", true),
+        ] {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(rect));
+                let scroll = sidebar::restored_scroll_area(
+                    ui,
+                    key,
+                    egui::ScrollArea::vertical()
+                        .id_salt(key)
+                        .max_height(rect.height())
+                        .auto_shrink([false, false]),
+                );
+                let output = scroll.show(ui, |ui| {
+                    egui::Frame::new().inner_margin(20).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.spacing_mut().item_spacing = egui::vec2(8., 8.);
+                        if is_preview {
+                            let empty = BTreeSet::new();
+                            let scope = if *selection { &self.selected } else { &empty };
+                            let view = self.project.cut_view.view(
+                                ctx,
+                                revision,
+                                model,
+                                scope,
+                                self.project.cutting_plan_layout,
+                            );
+                            super::cutting_view::show(
+                                ui,
+                                view,
+                                &self.general_settings.stock,
+                                self.project.cutting_plan_layout.kerf_mm,
+                                self.project.cutting_plan_used_area_cost,
+                            );
+                        } else {
+                            self.cut_report_controls(ui, CutReport::CuttingPlan, selection);
+                        }
+                    });
+                });
+                sidebar::remember_scroll(ui.ctx(), key, output.state.clamped_offset());
+            });
+        }
+        let stroke = Stroke::new(1., Palette::for_ui(ui).border);
+        if stacked {
+            ui.painter()
+                .hline(body.x_range(), controls.bottom(), stroke);
+        } else {
+            ui.painter().vline(controls.right(), body.y_range(), stroke);
+        }
+    }
+
     pub(super) fn project_dialogs(&mut self, ctx: &egui::Context) {
         if let Some((report, mut selection)) = self.project.cut_report {
             let selection_before = selection;
@@ -601,41 +765,29 @@ impl BenchUpApp {
                     tr!("projects.create_one_label_per_piece_with_its_cutting"),
                 ),
             };
-            let response = Modal::new(id, 480.).show(ctx, |modal| {
-                modal.header(|ui| {
-                    ui.text_heading(title);
-                    ui.text_weak(description);
-                });
-                modal.body(|ui| {
-                    ui.add_enabled_ui(!self.selected.is_empty(), |ui| {
-                        ui.radio_value(&mut selection, true, tr!("projects.selected_parts_assemblies_visible_only"));
+            let width = if report == CutReport::CuttingPlan { 1440. } else { 480. };
+            let cut_inputs = (report == CutReport::CuttingPlan)
+                .then(|| (self.document_revision(ctx), self.document_model.shared()));
+            let response = Modal::new(id, width)
+                .resizable(report == CutReport::CuttingPlan)
+                .show(ctx, |modal| {
+                    modal.header(|ui| {
+                        ui.text_heading(title);
+                        ui.text_weak(description);
                     });
-                    ui.radio_value(&mut selection, false, tr!("projects.whole_project_visible_only"));
-                    ui.add_space(10.);
-                    if report == CutReport::CuttingPlan {
-                        ui.horizontal(|ui| {
-                            ui.text_label(tr!("projects.saw_kerf_cut_width"));
-                            ui.add(egui::DragValue::new(&mut self.project.cutting_plan_layout.kerf_mm)
-                                .speed(0.1).range(0. ..=100.).suffix(tr!("projects.mm")));
+                    if let Some((revision, model)) = &cut_inputs {
+                        modal.body_unpadded(700., |ui| {
+                            self.cutting_plan_body(ui, ctx, &mut selection, *revision, model);
                         });
-                        ui.checkbox(&mut self.project.cutting_plan_layout.allow_rotation, tr!("projects.allow_rotating_pieces_90_degrees"))
-                            .on_hover_text(tr!("projects.leave_off_when_the_length_must_follow_the"));
-                        ui.checkbox(&mut self.project.cutting_plan_layout.respect_grain, tr!("projects.respect_wood_grain_direction"))
-                            .on_hover_text(tr!("projects.align_part_grain_with_stock_length"));
-                        ui.checkbox(&mut self.project.cutting_plan_layout.show_joinery, tr!("projects.show_wood_joinery"))
-                            .on_hover_text(tr!("projects.show_joinery_as_dashed_outlines"));
+                    } else {
+                        modal.body(|ui| self.cut_report_controls(ui, report, &mut selection));
                     }
-                    ui.text_weak(tr!("projects.only_visible_parts_with_assigned_stock_materials_are"));
-                    if report == CutReport::CuttingPlan {
-                        ui.text_weak(tr!("projects.layouts_use_assigned_stock_dimensions_and_saw_kerf"));
-                    }
+                    modal.footer(|ui| {
+                        if ui.button(tr!("common.cancel")).clicked() { Some(false) }
+                        else if primary_button(ui, tr!("projects.generate_pdf"), true).clicked() { Some(true) }
+                        else { None }
+                    })
                 });
-                modal.footer(|ui| {
-                    if ui.button(tr!("common.cancel")).clicked() { Some(false) }
-                    else if primary_button(ui, tr!("projects.generate_pdf"), true).clicked() { Some(true) }
-                    else { None }
-                })
-            });
             if selection != selection_before {
                 self.project.cutting_plan_selection_preference = Some(selection);
             }
