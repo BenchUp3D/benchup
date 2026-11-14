@@ -359,6 +359,14 @@ pub fn joint_detail(model: &Model, id: u64) -> Option<Value> {
                 params["taper_degrees"] = json!(s.taper_degrees);
             }
             JointKind::Finger => params["fingers"] = json!(s.fingers),
+            JointKind::Biscuit | JointKind::Domino | JointKind::Groove | JointKind::LooseTongue => {
+                params["pocket_thickness_mm"] = json!(mm(s.pocket_thickness));
+                params["pocket_depth_mm"] = json!(mm(s.pocket_depth));
+                if matches!(s.kind, JointKind::Biscuit | JointKind::Domino) {
+                    params["pocket_width_mm"] = json!(mm(s.pocket_width));
+                    params["pocket_count"] = json!(s.pocket_count);
+                }
+            }
             JointKind::HalfLap => {}
         }
         joint["params"] = params;
@@ -452,6 +460,10 @@ fn joint_geometry(
         JointKind::Rabbet => ch[width] = lo[width] + size[width] * s.width_ratio,
         JointKind::HalfLap => ch[height] = lo[height] + size[height] * 0.5,
         JointKind::Dovetail | JointKind::Finger => {}
+        // Pocket joints cut paired pockets in both boards for a separate
+        // insert; their sizes are in params, and a tenon-style cut does not
+        // describe them.
+        JointKind::Biscuit | JointKind::Domino | JointKind::Groove | JointKind::LooseTongue => return Some(out),
     }
     let cut: Vec<DVec3> = (0..8)
         .map(|i| frame.world(DVec3::new(if i & 1 == 0 { cl.x } else { ch.x }, if i & 2 == 0 { cl.y } else { ch.y }, if i & 4 == 0 { cl.z } else { ch.z })))
@@ -479,7 +491,7 @@ fn joint_geometry(
     Some(out)
 }
 
-/// The joint kind as add_joint names it (mortise_tenon, tongue_groove, ...).
+/// Stable scene names for all joint kinds (mortise_tenon, tongue_groove, ...).
 pub fn joint_kind(connection: &benchup_core::connections::Connection) -> &'static str {
     use benchup_core::joinery::JointKind;
     match &connection.operation {
@@ -490,6 +502,10 @@ pub fn joint_kind(connection: &benchup_core::connections::Connection) -> &'stati
             JointKind::Rabbet => "rabbet",
             JointKind::Dovetail => "dovetail",
             JointKind::Finger => "finger",
+            JointKind::Biscuit => "biscuit",
+            JointKind::Domino => "domino",
+            JointKind::Groove => "groove",
+            JointKind::LooseTongue => "loose_tongue",
         },
         ConnectionOperation::Fasteners(_) => "fasteners",
     }

@@ -1,9 +1,11 @@
 // Shared by the retained world renderer and the clipped/annotation renderer.
 // Coordinates are in metres: part space for wood, face-plane space for glue.
 fn finish_color(rgb: vec3<f32>, alpha: f32, p: vec3<f32>, finish: vec4<f32>) -> vec3<f32> {
-    let dx = dpdx(p.xy);
-    let dy = dpdy(p.xy);
-    let footprint = fwidth(p);
+    return finish_color_with_derivatives(rgb, alpha, p, finish, dpdx(p.xy), dpdy(p.xy), fwidth(p));
+}
+
+fn finish_color_with_derivatives(rgb: vec3<f32>, alpha: f32, p: vec3<f32>, finish: vec4<f32>,
+    dx: vec2<f32>, dy: vec2<f32>, footprint: vec3<f32>) -> vec3<f32> {
     if all(finish == vec4<f32>(0.0)) { return rgb; }
     // Glue marks scale with zoom around fixed surface anchors. Keep a
     // readable minimum size and limit close-up overlap; camera derivatives
