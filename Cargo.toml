@@ -3,6 +3,8 @@ members = [
     "crates/benchup-core",
     "crates/benchup-io",
     "crates/benchup-skp",
+    "crates/benchup-tools",
+    "crates/benchup-cli",
     "crates/benchup-app",
 ]
 default-members = ["crates/benchup-app"]

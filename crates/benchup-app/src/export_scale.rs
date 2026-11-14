@@ -362,10 +362,11 @@ mod tests {
         prefs.presets.push(custom);
         let saved = serde_json::to_string(&prefs).unwrap();
         for (language, mockup) in [
-            ("en", "Woodworking mockup 1:2"),
+            ("en_US", "Woodworking mockup 1:2"),
             ("zh_CN", "木工样机 1:2"),
             ("pt_BR", "Maquete de marcenaria 1:2"),
-            ("en", "Woodworking mockup 1:2"),
+            ("es_419", "Maqueta de carpintería 1:2"),
+            ("en_US", "Woodworking mockup 1:2"),
         ] {
             benchup_core::i18n::set_language(language);
             let output = ctx.run_test_ui(
@@ -401,7 +402,7 @@ mod tests {
         app.project.export_scale_open = true;
         for (language, title, actual, custom, preview, error) in [
             (
-                "en",
+                "en_US",
                 "Export STL",
                 "Actual size (1:1)",
                 "Custom ratio",
@@ -425,7 +426,15 @@ mod tests {
                 "Insira dois números finitos maiores que zero.",
             ),
             (
-                "en",
+                "es_419",
+                "Exportar STL",
+                "Tamaño real (1:1)",
+                "Proporción personalizada",
+                "Escala: 50.000000%",
+                "Introduce dos números finitos mayores que cero.",
+            ),
+            (
+                "en_US",
                 "Export STL",
                 "Actual size (1:1)",
                 "Custom ratio",

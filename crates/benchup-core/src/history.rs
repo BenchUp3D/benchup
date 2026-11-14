@@ -760,7 +760,7 @@ mod tests {
         let _reset = ResetLanguage;
         let key = "wood_glue.contacts_applied";
         for saved_label in [
-            crate::i18n::catalog_message("en", key),
+            crate::i18n::catalog_message("en_US", key),
             crate::i18n::catalog_message("zh_CN", key),
             crate::i18n::catalog_message("pt_BR", key),
             key.to_owned(),
@@ -778,7 +778,7 @@ mod tests {
             entry.signature = Some("preserved-signature".into());
             let saved = serde_json::to_string(&doc.history).unwrap();
             let mut history: History = serde_json::from_str(&saved).unwrap();
-            for language in ["en", "zh_CN", "pt_BR", "zh_CN"] {
+            for language in ["en_US", "zh_CN", "pt_BR", "vi_VN", "es_419", "zh_CN"] {
                 crate::i18n::set_language(language);
                 let translated = crate::i18n::catalog_message(language, key);
                 let label = translated.as_str();
