@@ -4,6 +4,24 @@ use crate::cutting_layout::Strategy;
 use crate::project_files::{self, Outcome};
 use std::{path::PathBuf, sync::mpsc::TryRecvError};
 
+#[cfg(not(target_arch = "wasm32"))]
+const EXTERNAL_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Modification time and size flag a possible external write without reading the file.
+fn file_stamp(path: &std::path::Path) -> Option<(std::time::SystemTime, u64)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
+}
+
+/// A content hash tells a real external edit from a rewrite with the same bytes.
+fn file_hash(path: &std::path::Path) -> Option<u64> {
+    use std::hash::Hasher;
+    let bytes = std::fs::read(path).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write(&bytes);
+    Some(hasher.finish())
+}
+
 #[derive(Clone)]
 pub(super) enum Action {
     New,
@@ -20,6 +38,8 @@ pub(super) enum Action {
 pub(super) enum Operation {
     #[default]
     Open,
+    #[cfg(not(target_arch = "wasm32"))]
+    Reload,
     Save,
     Import,
     Export,
@@ -35,6 +55,14 @@ pub(super) struct Project {
     pub export_stl: bool,
     pub export_scale_open: bool,
     pub modified: bool,
+    // Only the desktop poll reads these; the web build never has a project path.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub disk_stamp: Option<(std::time::SystemTime, u64)>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub disk_hash: Option<u64>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub external_checked: Option<std::time::Instant>,
+    pub external_change: bool,
     pub pending: Option<project_files::Pending>,
     pub preview_save: Option<(super::screenshot_dialog::Capture, Option<PathBuf>, String)>,
     pub operation: Operation,
@@ -58,6 +86,10 @@ impl Default for Project {
             export_stl: false,
             export_scale_open: false,
             modified: false,
+            disk_stamp: None,
+            disk_hash: None,
+            external_checked: None,
+            external_change: false,
             pending: None,
             preview_save: None,
             operation: Operation::default(),
@@ -110,6 +142,7 @@ impl Project {
             || self.confirm.is_some()
             || self.error.is_some()
             || self.cut_report.is_some()
+            || self.external_change
     }
 }
 
@@ -222,6 +255,7 @@ impl BenchUpApp {
         self.paste_face_cache = renderer::FaceCache::default();
         self.changed(ctx);
         self.project.path = path;
+        self.remember_project_file();
         self.sync_stock_materials(ctx);
         self.project.modified = false;
         self.project.confirm = None;
@@ -464,6 +498,63 @@ impl BenchUpApp {
         self.project.pending = Some(project_files::save(ctx, path, self.doc.name.clone(), contents));
     }
 
+    fn remember_project_file(&mut self) {
+        self.project.disk_stamp = self.project.path.as_deref().and_then(file_stamp);
+        self.project.disk_hash = self.project.path.as_deref().and_then(file_hash);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn viewport_interaction_active(&self, ctx: &egui::Context) -> bool {
+        self.gesture.is_some()
+            || self.drawing.is_some()
+            || self.modeling.is_some()
+            || self.paste_preview.is_some()
+            || self.section_drag.is_some()
+            || self.text_editor.is_some()
+            || self.object_creation.is_some()
+            || self.object_rename.is_some()
+            || ctx.egui_wants_keyboard_input()
+            || ctx.input(|input| input.pointer.any_down())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn poll_external_file(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.project.path.clone() else {
+            return;
+        };
+        ctx.request_repaint_after(EXTERNAL_CHECK_INTERVAL);
+        if self.project.external_checked.is_some_and(|checked| checked.elapsed() < EXTERNAL_CHECK_INTERVAL) {
+            return;
+        }
+        self.project.external_checked = Some(std::time::Instant::now());
+        if self.project.blocked() || self.viewport_interaction_active(ctx) {
+            return;
+        }
+        let stamp = file_stamp(&path);
+        if stamp.is_none() || stamp == self.project.disk_stamp {
+            return;
+        }
+        self.project.disk_stamp = stamp;
+        // Touching a file or saving identical bytes must not count as a change. An
+        // unreadable write keeps the document; the next write to the file retries.
+        let hash = file_hash(&path);
+        if hash.is_none() || hash == self.project.disk_hash {
+            return;
+        }
+        self.project.disk_hash = hash;
+        if self.project.modified {
+            self.project.external_change = true;
+        } else {
+            self.reload_project(ctx, path);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn reload_project(&mut self, ctx: &egui::Context, path: PathBuf) {
+        self.project.operation = Operation::Reload;
+        self.project.pending = Some(project_files::open_path(ctx, path));
+    }
+
     pub(super) fn poll_project(&mut self, ctx: &egui::Context) {
         if let Some((mut capture, path, contents)) = self.project.preview_save.take() {
             match capture.poll(ctx) {
@@ -508,10 +599,28 @@ impl BenchUpApp {
             other => (other, None),
         };
         match result {
-            Ok(Outcome::Opened(doc, path)) => {
+            Ok(Outcome::Opened(mut doc, path)) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let reloading = matches!(operation, Operation::Reload);
+                #[cfg(target_arch = "wasm32")]
+                let reloading = false;
+                if reloading {
+                    self.sync_viewport_cameras();
+                    doc.camera = self.doc.camera.clone();
+                    doc.viewport_cameras = self.doc.viewport_cameras.clone();
+                }
                 self.replace_project(*doc, path, ctx);
-                self.remember_recent_project(browser_file);
-                self.say(ctx, tr!("projects.project_opened"));
+                if !reloading {
+                    self.remember_recent_project(browser_file);
+                }
+                self.say(
+                    ctx,
+                    if reloading {
+                        tr!("projects.project_reloaded_from_disk")
+                    } else {
+                        tr!("projects.project_opened")
+                    },
+                );
             }
             Ok(Outcome::Saved(path)) => {
                 let downloaded = cfg!(target_arch = "wasm32") && path.is_none();
@@ -523,6 +632,7 @@ impl BenchUpApp {
                     self.changed(ctx);
                 }
                 self.project.path = path;
+                self.remember_project_file();
                 self.project.modified = modified;
                 self.say(
                     ctx,
@@ -584,6 +694,10 @@ impl BenchUpApp {
             #[cfg(target_arch = "wasm32")]
             Ok(Outcome::BrowserOpened(..)) => unreachable!(),
             Ok(Outcome::Cancelled) => self.project.after_save = None,
+            // A reload can read a file another program is still writing. Keep the
+            // current document; the next change to the file retries.
+            #[cfg(not(target_arch = "wasm32"))]
+            Err(_) if matches!(operation, Operation::Reload) => {}
             Err(error) => {
                 self.project.after_save = None;
                 self.project.error = Some(tr!("projects.could_not_complete_file_operation", error = error));
@@ -814,6 +928,8 @@ impl BenchUpApp {
                             ui.spinner();
                             ui.text_label(match self.project.operation {
                                 Operation::Open => tr!("projects.opening_project"),
+                                #[cfg(not(target_arch = "wasm32"))]
+                                Operation::Reload => tr!("projects.opening_project"),
                                 Operation::Save => tr!("projects.saving_project"),
                                 Operation::Import => tr!("projects.importing_geometry"),
                                 Operation::Export => tr!("projects.exporting_geometry"),
@@ -871,6 +987,34 @@ impl BenchUpApp {
                 }
             } else if response.should_close() {
                 self.project.confirm = None;
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.project.external_change {
+            let response = Modal::new("project_external_change", 480.).show(ctx, |modal| {
+                modal.header(|ui| {
+                    ui.text_heading(tr!("projects.project_changed_on_disk_title"));
+                });
+                modal.body(|ui| {
+                    ui.text_label(tr!("projects.project_changed_on_disk", name = self.doc.name));
+                });
+                modal.footer(|ui| {
+                    if primary_button(ui, tr!("projects.keep_my_changes"), true).clicked() {
+                        Some(false)
+                    } else if ui.button(tr!("projects.reload_from_disk")).clicked() {
+                        Some(true)
+                    } else {
+                        None
+                    }
+                })
+            });
+            if let Some(reload) = response.inner {
+                self.project.external_change = false;
+                if let (true, Some(path)) = (reload, self.project.path.clone()) {
+                    self.reload_project(ctx, path);
+                }
+            } else if response.should_close() {
+                self.project.external_change = false;
             }
         }
         if let Some(error) = &self.project.error {
