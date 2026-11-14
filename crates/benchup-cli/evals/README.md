@@ -5,7 +5,7 @@ The CLI and MCP tools are meant to be used by coding agents that have never seen
 There are two layers:
 
 1. **Regression, on every change** — `cargo test -p benchup-cli --test evals`. Replays the reference solution of each case (`reference/<case>/*.jsonl`, batches that agents or maintainers got right) with the real binary and checks the result with `check_model`. It needs no agent and takes a few seconds. When a tool changes on purpose, update the reference batch.
-2. **Agent rounds, on demand** — before a release, or after changing tools, descriptions or the [agent guide](../../../docs/agent-guide.md). One agent per case, run in parallel; each one reports what it did, how many commands it needed and where it got stuck. Not in CI: it costs tokens and the results vary from run to run. To run one:
+2. **Agent rounds, on demand** — before a release, or after changing tools, descriptions or the [agent guide](../../../docs/agent-guide.md). One agent per case, run in parallel; each one reports what it did, how many commands it needed and where it got stuck. Not in CI: it costs tokens and the results vary from run to run. With Claude Code or Codex, the `benchup-agent-eval` skill in [`.agents/skills`](../../../.agents/skills/benchup-agent-eval/SKILL.md) runs a round (`.claude/skills` links to it); by hand:
 
    ```sh
    cargo build --release -p benchup-cli
